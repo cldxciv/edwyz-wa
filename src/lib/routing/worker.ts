@@ -1,0 +1,37 @@
+import { prisma } from "@/lib/db";
+import type { WorkerModule } from "@/worker/registry";
+import { assignConversation } from "./index";
+import { sweepNoResponse } from "./reassign";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const PER_TENANT_LIMIT = 50;
+const STOP_REASONS = new Set(["no_agent_available", "outside_hours"]);
+const ASSIGNED_REASONS = new Set(["assigned", "fallback", "last_assignee", "contact_owner"]);
+
+/** Assigns unassigned open conversations from the last day for tenants with auto-assign on, e.g. after agents come back online. */
+export async function sweepUnassigned(now = new Date()): Promise<number> {
+  const configs = await prisma.routingConfig.findMany({ where: { autoAssign: true }, select: { tenantId: true } });
+  let assigned = 0;
+  for (const { tenantId } of configs) {
+    const waiting = await prisma.conversation.findMany({
+      where: { tenantId, assignedToId: null, status: "open", createdAt: { gte: new Date(now.getTime() - DAY_MS) } },
+      orderBy: { createdAt: "asc" },
+      take: PER_TENANT_LIMIT,
+      select: { id: true },
+    });
+    for (const { id } of waiting) {
+      const result = await assignConversation(tenantId, id, { at: now });
+      if (ASSIGNED_REASONS.has(result.reason)) assigned += 1;
+      else if (STOP_REASONS.has(result.reason)) break;
+    }
+  }
+  return assigned;
+}
+
+export const worker: WorkerModule = {
+  queues: {},
+  periodic: [
+    { name: "routing-sweep", everyMs: 60_000, run: () => sweepUnassigned() },
+    { name: "routing-auto-reassign", everyMs: 60_000, run: () => sweepNoResponse() },
+  ],
+};

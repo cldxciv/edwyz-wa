@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "about": "Scripted replies for EDDY_FAKE_MODEL=scripted (never in production; docs/EDDY-SPEC.md 9.4). src/lib/eddy/model-binding.ts loads every *.json here, in name order. A member message picks the first scenario whose `match` it contains (case-insensitive), else `default`; the round within the turn picks the step. Tool calls name real v1 actions and go through the real action layer. The e2e/eddy.spec.ts panel scenarios ('e2e-eddy hinglish', 'tag vip', 'send reply', 'delete template') live in panel-e2e.json; a `match` must appear in only one file (tests/eddy-integration-seams.test.ts), because the file that sorts first would silently win.",
+  "scenarios": [
+    {
+      "id": "hindi-templates",
+      "match": "मेरे टेम्पलेट",
+      "rounds": [
+        {
+          "content": [{ "type": "text", "text": "आपके तीन टेम्पलेट अप्रूव हैं।\n\n- `diwali_offer`\n- `order_update`\n- `welcome`\n\nकिसी एक को ब्रॉडकास्ट में भेजना हो तो बताइए।" }],
+          "stop_reason": "end_turn",
+          "usage": { "input_tokens": 1300, "output_tokens": 70 }
+        }
+      ]
+    },
+    {
+      "id": "slow",
+      "match": "e2e-eddy slow",
+      "rounds": [
+        {
+          "content": [{ "type": "text", "text": "This reply streams slowly, so Stop can be tapped while it is still arriving. It keeps going for a while, one short piece at a time." }],
+          "stop_reason": "end_turn",
+          "delayMs": 400,
+          "usage": { "input_tokens": 1300, "output_tokens": 60 }
+        }
+      ]
+    },
+    {
+      "id": "refusal",
+      "match": "e2e-eddy refuse",
+      "rounds": [
+        {
+          "content": [{ "type": "text", "text": "partial" }],
+          "stop_reason": "refusal",
+          "stop_details": { "category": "cyber" },
+          "usage": { "input_tokens": 1300, "output_tokens": 5 }
+        }
+      ]
+    },
+    {
+      "id": "fallback",
+      "match": "e2e-eddy fallback",
+      "rounds": [
+        {
+          "content": [{ "type": "text", "text": "This answer came from the **fallback** model." }],
+          "stop_reason": "end_turn",
+          "fallback": true,
+          "model": "claude-opus-5",
+          "usage": {
+            "input_tokens": 2600,
+            "output_tokens": 40,
+            "iterations": [
+              { "type": "message", "model": "claude-sonnet-5-5", "input_tokens": 1300, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "cache_creation": null },
+              { "type": "fallback_message", "model": "claude-opus-5", "input_tokens": 1300, "output_tokens": 40, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "cache_creation": null }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "default",
+      "match": "*",
+      "rounds": [
+        {
+          "content": [
+            { "type": "thinking", "thinking": "Looking at what needs attention", "signature": "sig_e2e_default_0" },
+            { "type": "text", "text": "### Today\n\n**2 chats** are waiting for a reply, and **1 template** is still in review.\n\n1. Reply to the waiting chats in the Inbox.\n2. Check the template status on the Templates page.\n\nWhat would you like to do first?" }
+          ],
+          "stop_reason": "end_turn",
+          "usage": { "input_tokens": 1300, "output_tokens": 80 }
+        }
+      ]
+    }
+  ]
+}

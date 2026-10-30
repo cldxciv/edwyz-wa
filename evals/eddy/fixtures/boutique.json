@@ -1,0 +1,217 @@
+{
+  "name": "boutique",
+  "description": "A clothing boutique with team visibility on and two teams (Store and Online), so members see only their team's chats.",
+  "tenant": {
+    "id": "t_boutique",
+    "name": "Kavita's Boutique",
+    "timezone": "Asia/Kolkata",
+    "currency": "INR"
+  },
+  "members": [
+    {
+      "userId": "u_owner",
+      "name": "Kavita Rao",
+      "role": "owner"
+    },
+    {
+      "userId": "u_admin",
+      "name": "Sameer Khan",
+      "role": "admin"
+    },
+    {
+      "userId": "u_agent",
+      "name": "Pooja Singh",
+      "role": "agent",
+      "team": "Store team"
+    },
+    {
+      "userId": "u_agent2",
+      "name": "Imran Shaikh",
+      "role": "agent",
+      "team": "Online team"
+    }
+  ],
+  "teams": [
+    {
+      "id": "tm_store",
+      "name": "Store team"
+    },
+    {
+      "id": "tm_online",
+      "name": "Online team"
+    }
+  ],
+  "whatsapp": "connected",
+  "demo": false,
+  "rules": [],
+  "optionalRules": {},
+  "untrusted": [
+    "Nisha Gupta",
+    "Lehenga size"
+  ],
+  "tools": {
+    "list_team": {
+      "result": {
+        "teams": [
+          {
+            "name": {
+              "$untrusted": "workspace_text",
+              "text": "Store team"
+            },
+            "members": "2"
+          },
+          {
+            "name": {
+              "$untrusted": "workspace_text",
+              "text": "Online team"
+            },
+            "members": "2"
+          }
+        ],
+        "members": [
+          {
+            "name": {
+              "$untrusted": "teammate_note",
+              "text": "Kavita Rao"
+            },
+            "role": "owner",
+            "available": true
+          },
+          {
+            "name": {
+              "$untrusted": "teammate_note",
+              "text": "Sameer Khan"
+            },
+            "role": "admin",
+            "available": true
+          },
+          {
+            "name": {
+              "$untrusted": "teammate_note",
+              "text": "Pooja Singh"
+            },
+            "role": "agent",
+            "team": "Store team",
+            "available": true
+          },
+          {
+            "name": {
+              "$untrusted": "teammate_note",
+              "text": "Imran Shaikh"
+            },
+            "role": "agent",
+            "team": "Online team",
+            "available": false
+          }
+        ],
+        "admins": [
+          {
+            "$untrusted": "teammate_note",
+            "text": "Kavita Rao"
+          },
+          {
+            "$untrusted": "teammate_note",
+            "text": "Sameer Khan"
+          }
+        ]
+      }
+    },
+    "list_conversations": {
+      "result": {
+        "unreadTotal": 5,
+        "unassigned": 2,
+        "items": [
+          {
+            "id": "c_nisha",
+            "contact": {
+              "$untrusted": "contact_name",
+              "text": "Nisha Gupta"
+            },
+            "unread": true,
+            "team": "Store team",
+            "lastMessage": {
+              "$untrusted": "customer_message",
+              "text": "Lehenga size M available?"
+            }
+          }
+        ]
+      }
+    },
+    "get_conversation": {
+      "byArg": "conversationId",
+      "results": {
+        "c_nisha": {
+          "id": "c_nisha",
+          "contact": {
+            "id": "k_nisha",
+            "name": {
+              "$untrusted": "contact_name",
+              "text": "Nisha Gupta"
+            },
+            "phone": "+91 90xxx x1212"
+          },
+          "windowOpen": true,
+          "customerLanguage": "hinglish",
+          "messages": [
+            {
+              "direction": "inbound",
+              "at": "Today, 11:00 am",
+              "text": {
+                "$untrusted": "customer_message",
+                "text": "Lehenga size M available?"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "list_leads": {
+      "result": {
+        "items": [
+          {
+            "id": "l_b1",
+            "name": {
+              "$untrusted": "contact_name",
+              "text": "Nisha Gupta"
+            },
+            "status": "new",
+            "source": "Instagram ad"
+          }
+        ],
+        "newThisWeek": 1
+      }
+    },
+    "get_workspace_status": {
+      "result": {
+        "workspace": "Kavita's Boutique",
+        "sampleData": false,
+        "setup": {
+          "percent": 100,
+          "done": 9,
+          "total": 9,
+          "nextStepId": null
+        },
+        "whatsapp": {
+          "token": "ok",
+          "numbers": [
+            {
+              "id": "pn_b",
+              "display": "+91 90xxx x9090",
+              "quality": "GREEN"
+            }
+          ]
+        },
+        "ai": {
+          "usedMonth": "310",
+          "limitMonth": "1,500",
+          "leftMonth": "1,190",
+          "resetsOn": "1 Nov"
+        },
+        "spending": {
+          "freeze": "none"
+        }
+      }
+    }
+  },
+  "variants": {}
+}

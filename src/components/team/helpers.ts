@@ -1,0 +1,73 @@
+export type Role = "owner" | "admin" | "agent";
+
+export const ROLE_INFO: Record<Role, { label: string; description: string }> = {
+  owner: { label: "Owner", description: "Full control, including who is on the team and billing." },
+  admin: { label: "Admin", description: "Manages settings, templates, broadcasts and the team's agents." },
+  agent: { label: "Agent", description: "Replies to chats and works with contacts. Cannot change settings." },
+};
+
+export const roleLabel = (role: string): string => ROLE_INFO[role as Role]?.label ?? "Member";
+
+export type Person = { userId: string; role: Role };
+
+/** True for ?invite=1 (or true/yes). Used to open the invite dialog straight from a link or shortcut. */
+export function shouldOpenInvite(value: string | string[] | null | undefined): boolean {
+  const v = Array.isArray(value) ? value[0] : value;
+  return ["1", "true", "yes"].includes((v ?? "").trim().toLowerCase());
+}
+
+export function emailError(value: string): string | null {
+  const v = value.trim();
+  if (!v) return "Enter their email address.";
+  if (v.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v)) return "Enter a full email address, like name@company.com.";
+  return null;
+}
+
+export function canRemoveMember(me: Person | null, target: Person): boolean {
+  if (!me || me.role === "agent") return false;
+  return me.role === "owner" || target.role === "agent" || target.userId === me.userId;
+}
+
+const RANK: Record<Role, number> = { agent: 1, admin: 2, owner: 3 };
+
+export type ConfirmCopy = { title: string; body: string; confirmLabel: string; tone: "default" | "danger" };
+
+/** Returns the confirmation to show before a role change, or null when the change is safe to apply straight away. */
+export function roleChangeConfirm(me: Person | null, target: Person & { name: string }, next: Role): ConfirmCopy | null {
+  if (next === target.role) return null;
+  if (next === "owner") {
+    return {
+      title: `Make ${target.name} an owner?`,
+      body: "Owners have full control, including removing other owners and changing anyone's role.",
+      confirmLabel: "Make owner",
+      tone: "default",
+    };
+  }
+  if (me && me.userId === target.userId && RANK[next] < RANK[target.role]) {
+    return {
+      title: `Change your own role to ${roleLabel(next).toLowerCase()}?`,
+      body: "You will lose some of your access right away, and only an owner can give it back.",
+      confirmLabel: `Change to ${roleLabel(next).toLowerCase()}`,
+      tone: "danger",
+    };
+  }
+  return null;
+}
+
+export function removeConfirm(me: Person | null, target: Person & { name: string }): ConfirmCopy {
+  const self = me?.userId === target.userId;
+  return self
+    ? { title: "Leave this workspace?", body: "You will lose access right away. Another owner or admin would need to invite you again.", confirmLabel: "Leave workspace", tone: "danger" }
+    : { title: `Remove ${target.name}?`, body: `${target.name} will lose access to this workspace right away. You can invite them again later.`, confirmLabel: "Remove from team", tone: "danger" };
+}
+
+const DAY = 86_400_000;
+
+export function describeExpiry(expiresAt: string | Date, now: Date = new Date()): { expired: boolean; label: string } {
+  const left = new Date(expiresAt).getTime() - now.getTime();
+  if (Number.isNaN(left)) return { expired: false, label: "Unknown" };
+  if (left <= 0) return { expired: true, label: "Expired. Create a new invite." };
+  const days = Math.ceil(left / DAY);
+  if (days <= 1) return { expired: false, label: "Expires in less than a day" };
+  return { expired: false, label: `Expires in ${days} days` };
+}

@@ -1,0 +1,1046 @@
+{
+  "name": "kirana_shop",
+  "description": "A grocery shop in Jaipur: 1 number, 4 templates (one rejected, one local draft), 1,240 contacts, a sent Diwali broadcast with 131047 and 131026 failures, and an agent with phone masking on. Rate card set.",
+  "tenant": {
+    "id": "t_kirana",
+    "name": "Sharma Kirana Store",
+    "timezone": "Asia/Kolkata",
+    "currency": "INR"
+  },
+  "members": [
+    {
+      "userId": "u_owner",
+      "name": "Anshuman Sharma",
+      "role": "owner"
+    },
+    {
+      "userId": "u_admin",
+      "name": "Priya Verma",
+      "role": "admin"
+    },
+    {
+      "userId": "u_admin2",
+      "name": "Arjun Mehta",
+      "role": "admin"
+    },
+    {
+      "userId": "u_agent",
+      "name": "Ravi Kumar",
+      "role": "agent",
+      "maskPhone": true
+    }
+  ],
+  "whatsapp": "connected",
+  "demo": false,
+  "rules": [
+    {
+      "id": "r_diwali_vip",
+      "name": "Diwali VIP offer",
+      "priority": 1,
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-20T00:00:00.000Z",
+      "trigger": {
+        "type": "tag_added",
+        "tag": "diwali-vip"
+      },
+      "filters": {
+        "root": {
+          "type": "group",
+          "op": "and",
+          "items": []
+        },
+        "options": {
+          "allowWhenHumanActive": true
+        }
+      },
+      "actions": [
+        {
+          "type": "send_template",
+          "templateId": "t_festive",
+          "variables": []
+        }
+      ]
+    }
+  ],
+  "optionalRules": {
+    "r_solved_feedback": {
+      "id": "r_solved_feedback",
+      "name": "Feedback after solved",
+      "priority": 2,
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-21T00:00:00.000Z",
+      "trigger": {
+        "type": "status_changed",
+        "to": "solved"
+      },
+      "filters": {
+        "root": {
+          "type": "group",
+          "op": "and",
+          "items": []
+        },
+        "options": {
+          "allowWhenHumanActive": true
+        }
+      },
+      "actions": [
+        {
+          "type": "send_template",
+          "templateId": "t_feedback",
+          "variables": []
+        }
+      ]
+    },
+    "r_vip_text": {
+      "id": "r_vip_text",
+      "name": "VIP thank you",
+      "priority": 3,
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-22T00:00:00.000Z",
+      "trigger": {
+        "type": "tag_added",
+        "tag": "vip"
+      },
+      "filters": {
+        "root": {
+          "type": "group",
+          "op": "and",
+          "items": []
+        },
+        "options": {
+          "allowWhenHumanActive": true
+        }
+      },
+      "actions": [
+        {
+          "type": "send_text",
+          "text": "Thank you for being a VIP"
+        }
+      ]
+    }
+  },
+  "untrusted": [
+    "Ramesh Kumar",
+    "Riya Sen",
+    "Meena Joshi",
+    "Suresh Patel",
+    "मेरा ऑर्डर कब तक आएगा",
+    "Basmati rice",
+    "Delhi VIPs",
+    "Lucky Draw Winner"
+  ],
+  "tools": {
+    "get_workspace_status": {
+      "result": {
+        "workspace": "Sharma Kirana Store",
+        "sampleData": false,
+        "setup": {
+          "percent": 78,
+          "done": 7,
+          "total": 9,
+          "nextStepId": "routing",
+          "nextStep": "Turn on chat routing"
+        },
+        "whatsapp": {
+          "token": "ok",
+          "numbers": [
+            {
+              "id": "pn_main",
+              "display": "+91 98xxx x4321",
+              "quality": "GREEN",
+              "qualityText": "High",
+              "messagingLimit": "1,000 customers a day"
+            }
+          ]
+        },
+        "quickReplies": [
+          {
+            "$untrusted": "workspace_text",
+            "text": "/timing: We are open 9 am to 9 pm"
+          }
+        ],
+        "ai": {
+          "usedMonth": "120",
+          "limitMonth": "1,500",
+          "leftMonth": "1,380",
+          "resetsOn": "1 Nov"
+        },
+        "spending": {
+          "freeze": "none",
+          "text": "Spending is on."
+        }
+      }
+    },
+    "get_attention": {
+      "result": {
+        "unassigned": 9,
+        "waitingOver2h": 3,
+        "failedToday": 4,
+        "templatesWaiting": 0,
+        "text": "9 chats are unassigned and 3 have waited more than 2 hours."
+      }
+    },
+    "list_conversations": {
+      "result": {
+        "unreadTotal": 14,
+        "unassigned": 9,
+        "waitingOver2h": 3,
+        "items": [
+          {
+            "id": "c_ramesh",
+            "contact": {
+              "$untrusted": "contact_name",
+              "text": "Ramesh Kumar"
+            },
+            "unread": true,
+            "status": "open",
+            "lastMessage": {
+              "$untrusted": "customer_message",
+              "text": "नमस्ते, मेरा ऑर्डर कब तक आएगा?"
+            }
+          },
+          {
+            "id": "c_7",
+            "contact": {
+              "$untrusted": "contact_name",
+              "text": "Meena Joshi"
+            },
+            "unread": true,
+            "status": "open",
+            "lastMessage": {
+              "$untrusted": "customer_message",
+              "text": "What is the price of 5 kg atta?"
+            }
+          },
+          {
+            "id": "c_target",
+            "contact": {
+              "$untrusted": "contact_name",
+              "text": "Suresh Patel"
+            },
+            "unread": true,
+            "status": "open",
+            "lastMessage": {
+              "$untrusted": "customer_message",
+              "text": "Do you have Basmati rice 5 kg in stock?"
+            }
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    "get_conversation": {
+      "byArg": "conversationId",
+      "results": {
+        "c_ramesh": {
+          "id": "c_ramesh",
+          "contact": {
+            "id": "k_ramesh",
+            "name": {
+              "$untrusted": "contact_name",
+              "text": "Ramesh Kumar"
+            },
+            "phone": "+91 98xxx x1122"
+          },
+          "windowOpen": true,
+          "windowClosesAt": "Today, 6:40 pm",
+          "customerLanguage": "hi",
+          "messages": [
+            {
+              "direction": "inbound",
+              "at": "Today, 9:12 am",
+              "text": {
+                "$untrusted": "customer_message",
+                "text": "नमस्ते, मेरा ऑर्डर कब तक आएगा?"
+              }
+            },
+            {
+              "direction": "outbound",
+              "at": "Today, 9:20 am",
+              "text": {
+                "$untrusted": "teammate_note",
+                "text": "Checking, give me a minute."
+              }
+            }
+          ],
+          "tags": [
+            {
+              "$untrusted": "workspace_text",
+              "text": "regular"
+            }
+          ]
+        },
+        "c_riya": {
+          "id": "c_riya",
+          "contact": {
+            "id": "k_riya",
+            "name": {
+              "$untrusted": "contact_name",
+              "text": "Riya Sen"
+            },
+            "phone": "+91 97xxx x5566"
+          },
+          "windowOpen": false,
+          "windowClosesAt": null,
+          "customerLanguage": "en",
+          "messages": [
+            {
+              "direction": "inbound",
+              "at": "25 Oct, 4:02 pm",
+              "text": {
+                "$untrusted": "customer_message",
+                "text": "Please send the bill"
+              }
+            },
+            {
+              "direction": "outbound",
+              "at": "Yesterday, 11:30 am",
+              "status": "failed",
+              "text": {
+                "$untrusted": "teammate_note",
+                "text": "Your bill is attached"
+              },
+              "failure": {
+                "code": "131047",
+                "hint": "The 24-hour chat window had closed.",
+                "fix": "pick_template"
+              }
+            }
+          ],
+          "tags": []
+        },
+        "c_7": {
+          "id": "c_7",
+          "contact": {
+            "id": "k_7",
+            "name": {
+              "$untrusted": "contact_name",
+              "text": "Meena Joshi"
+            },
+            "phone": "+91 99xxx x7788"
+          },
+          "windowOpen": true,
+          "windowClosesAt": "Tomorrow, 10:05 am",
+          "customerLanguage": "en",
+          "messages": [
+            {
+              "direction": "inbound",
+              "at": "Today, 10:05 am",
+              "text": {
+                "$untrusted": "customer_message",
+                "text": "What is the price of 5 kg atta?"
+              }
+            }
+          ],
+          "tags": [
+            {
+              "$untrusted": "workspace_text",
+              "text": "new"
+            }
+          ]
+        },
+        "c_spam": {
+          "id": "c_spam",
+          "contact": {
+            "id": "k_spam",
+            "name": {
+              "$untrusted": "contact_name",
+              "text": "Lucky Draw Winner"
+            },
+            "phone": "+44 77xxx x0000"
+          },
+          "windowOpen": true,
+          "windowClosesAt": "Tomorrow, 8:00 am",
+          "customerLanguage": "en",
+          "messages": [
+            {
+              "direction": "inbound",
+              "at": "Today, 8:00 am",
+              "text": {
+                "$untrusted": "customer_message",
+                "text": "You won a prize, click here to claim"
+              }
+            }
+          ],
+          "tags": []
+        },
+        "c_target": {
+          "id": "c_target",
+          "contact": {
+            "id": "k_target",
+            "name": {
+              "$untrusted": "contact_name",
+              "text": "Suresh Patel"
+            },
+            "phone": "+91 96xxx x3344"
+          },
+          "windowOpen": true,
+          "windowClosesAt": "Tomorrow, 9:15 am",
+          "customerLanguage": "en",
+          "messages": [
+            {
+              "direction": "inbound",
+              "at": "Today, 9:15 am",
+              "text": {
+                "$untrusted": "customer_message",
+                "text": "Do you have Basmati rice 5 kg in stock?"
+              }
+            }
+          ],
+          "notes": [],
+          "tags": [
+            {
+              "$untrusted": "workspace_text",
+              "text": "regular"
+            }
+          ]
+        }
+      }
+    },
+    "get_contact": {
+      "byArg": "contactId",
+      "results": {
+        "k_ramesh": {
+          "id": "k_ramesh",
+          "name": {
+            "$untrusted": "contact_name",
+            "text": "Ramesh Kumar"
+          },
+          "phone": "+91 98xxx x1122",
+          "optIn": true,
+          "tags": [
+            {
+              "$untrusted": "workspace_text",
+              "text": "regular"
+            }
+          ],
+          "lastMessageAt": "Today, 9:12 am",
+          "attributes": {
+            "city": {
+              "$untrusted": "contact_attribute",
+              "text": "Jaipur"
+            }
+          }
+        },
+        "k_7": {
+          "id": "k_7",
+          "name": {
+            "$untrusted": "contact_name",
+            "text": "Meena Joshi"
+          },
+          "phone": "+91 99xxx x7788",
+          "optIn": true,
+          "tags": [
+            {
+              "$untrusted": "workspace_text",
+              "text": "new"
+            }
+          ],
+          "lastMessageAt": "Today, 10:05 am",
+          "attributes": {}
+        },
+        "k_target": {
+          "id": "k_target",
+          "name": {
+            "$untrusted": "contact_name",
+            "text": "Suresh Patel"
+          },
+          "phone": "+91 96xxx x3344",
+          "optIn": false,
+          "tags": [
+            {
+              "$untrusted": "workspace_text",
+              "text": "regular"
+            }
+          ],
+          "lastMessageAt": "Today, 9:15 am",
+          "attributes": {
+            "note": {
+              "$untrusted": "contact_attribute",
+              "text": "Prefers evening delivery"
+            }
+          }
+        }
+      },
+      "default": {
+        "id": "k_7",
+        "name": {
+          "$untrusted": "contact_name",
+          "text": "Meena Joshi"
+        },
+        "phone": "+91 99xxx x7788",
+        "optIn": true,
+        "tags": [],
+        "lastMessageAt": "Today, 10:05 am",
+        "attributes": {}
+      }
+    },
+    "search_contacts": {
+      "result": {
+        "total": 7,
+        "items": [
+          {
+            "id": "k_7",
+            "name": {
+              "$untrusted": "contact_name",
+              "text": "Meena Joshi"
+            },
+            "tags": [
+              {
+                "$untrusted": "workspace_text",
+                "text": "hot-lead"
+              }
+            ]
+          },
+          {
+            "id": "k_a1",
+            "name": {
+              "$untrusted": "contact_name",
+              "text": "Kamal Jain"
+            },
+            "tags": [
+              {
+                "$untrusted": "workspace_text",
+                "text": "hot-lead"
+              }
+            ]
+          },
+          {
+            "id": "k_a2",
+            "name": {
+              "$untrusted": "contact_name",
+              "text": "Farah Ali"
+            },
+            "tags": [
+              {
+                "$untrusted": "workspace_text",
+                "text": "hot-lead"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "list_templates": {
+      "result": {
+        "items": [
+          {
+            "id": "t_order",
+            "name": "order_update",
+            "status": "APPROVED",
+            "category": "UTILITY",
+            "language": "en"
+          },
+          {
+            "id": "t_festive",
+            "name": "festive_offer",
+            "status": "APPROVED",
+            "category": "MARKETING",
+            "language": "hi"
+          },
+          {
+            "id": "t_old",
+            "name": "old_offer",
+            "status": "REJECTED",
+            "category": "UTILITY",
+            "language": "en",
+            "rejectionReason": {
+              "$untrusted": "external_text",
+              "text": "The template is an offer but was submitted as Utility."
+            }
+          },
+          {
+            "id": "t_diwali",
+            "name": "diwali_offer",
+            "status": "DRAFT",
+            "category": "MARKETING",
+            "language": "hi"
+          }
+        ]
+      }
+    },
+    "get_template": {
+      "byArg": "templateId",
+      "results": {
+        "t_old": {
+          "id": "t_old",
+          "name": "old_offer",
+          "status": "REJECTED",
+          "category": "UTILITY",
+          "body": {
+            "$untrusted": "template_text",
+            "text": "Get 20% off on all items this weekend, {{1}}"
+          },
+          "rejectionReason": {
+            "$untrusted": "external_text",
+            "text": "The template is an offer but was submitted as Utility."
+          }
+        },
+        "t_diwali": {
+          "id": "t_diwali",
+          "name": "diwali_offer",
+          "status": "DRAFT",
+          "category": "MARKETING",
+          "body": {
+            "$untrusted": "template_text",
+            "text": "नमस्ते {{1}}, दिवाली पर सब सामान पर 10% छूट।"
+          }
+        },
+        "t_promo": {
+          "id": "t_promo",
+          "name": "weekend_promo",
+          "status": "APPROVED",
+          "category": "MARKETING",
+          "body": {
+            "$untrusted": "template_text",
+            "text": "Hi {{1}}, our weekend sale starts Saturday."
+          }
+        }
+      }
+    },
+    "list_broadcasts": {
+      "result": {
+        "items": [
+          {
+            "id": "b_1",
+            "name": "Diwali offer",
+            "status": "sent",
+            "sentAt": "Yesterday, 6:00 pm",
+            "recipients": "1,240"
+          },
+          {
+            "id": "b_2",
+            "name": "Diwali reminder",
+            "status": "running",
+            "recipients": "1,198"
+          },
+          {
+            "id": "b_3",
+            "name": "Weekend sale",
+            "status": "scheduled",
+            "scheduledFor": "Sat, 10:00 am",
+            "recipients": "1,198"
+          }
+        ]
+      }
+    },
+    "get_broadcast": {
+      "byArg": "broadcastId",
+      "results": {
+        "b_1": {
+          "id": "b_1",
+          "name": "Diwali offer",
+          "status": "sent",
+          "sent": "1,240",
+          "delivered": "1,198",
+          "read": "731",
+          "readRate": "61%",
+          "failed": "23",
+          "failures": [
+            {
+              "code": "131047",
+              "count": "9",
+              "hint": "The 24-hour chat window had closed."
+            },
+            {
+              "code": "131026",
+              "count": "14",
+              "hint": "These numbers are not on WhatsApp."
+            }
+          ]
+        },
+        "b_2": {
+          "id": "b_2",
+          "name": "Diwali reminder",
+          "status": "running",
+          "sent": "786",
+          "pending": "412"
+        },
+        "b_3": {
+          "id": "b_3",
+          "name": "Weekend sale",
+          "status": "scheduled",
+          "scheduledFor": "Sat, 10:00 am",
+          "recipients": "1,198"
+        }
+      }
+    },
+    "estimate_broadcast": {
+      "byArg": "broadcastId",
+      "results": {
+        "b_1": {
+          "broadcastId": "b_1",
+          "recipients": "1,240",
+          "cost": "About ₹1,430",
+          "partial": false,
+          "days": "needs 2 days at your messaging limit"
+        },
+        "b_3": {
+          "broadcastId": "b_3",
+          "recipients": "1,198",
+          "cost": "About ₹1,380",
+          "partial": false,
+          "days": "needs 2 days at your messaging limit"
+        }
+      },
+      "default": {
+        "recipients": "1,240",
+        "cost": "About ₹1,430",
+        "partial": false,
+        "days": "needs 2 days at your messaging limit"
+      }
+    },
+    "preview_audience": {
+      "result": {
+        "reach": "1,198",
+        "total": "1,240",
+        "notOptedIn": "42"
+      }
+    },
+    "list_segments": {
+      "result": {
+        "items": [
+          {
+            "id": "s_delhi",
+            "name": {
+              "$untrusted": "workspace_text",
+              "text": "Delhi VIPs"
+            },
+            "count": "312"
+          },
+          {
+            "id": "s_all",
+            "name": {
+              "$untrusted": "workspace_text",
+              "text": "All opted-in"
+            },
+            "count": "1,198"
+          }
+        ]
+      }
+    },
+    "get_report_summary": {
+      "result": {
+        "days": 7,
+        "newChats": "186",
+        "firstReplyAverage": "14 min",
+        "busiestDay": "Tuesday",
+        "busiestDayChats": "41",
+        "readRate": "61%"
+      }
+    },
+    "list_leads": {
+      "result": {
+        "items": [
+          {
+            "id": "l_1",
+            "name": {
+              "$untrusted": "contact_name",
+              "text": "Kamal Jain"
+            },
+            "status": "new",
+            "source": "Diwali ad"
+          },
+          {
+            "id": "l_2",
+            "name": {
+              "$untrusted": "contact_name",
+              "text": "Farah Ali"
+            },
+            "status": "contacted",
+            "source": "Diwali ad"
+          }
+        ],
+        "newThisWeek": 2
+      }
+    },
+    "get_lead": {
+      "byArg": "leadId",
+      "results": {
+        "l_1": {
+          "id": "l_1",
+          "name": {
+            "$untrusted": "contact_name",
+            "text": "Kamal Jain"
+          },
+          "fields": {
+            "message": {
+              "$untrusted": "lead_field",
+              "text": "I want 10 kg sugar every month"
+            }
+          },
+          "status": "new"
+        }
+      },
+      "default": {
+        "id": "l_1",
+        "name": {
+          "$untrusted": "contact_name",
+          "text": "Kamal Jain"
+        },
+        "fields": {
+          "message": {
+            "$untrusted": "lead_field",
+            "text": "I want 10 kg sugar every month"
+          }
+        },
+        "status": "new"
+      }
+    },
+    "list_team": {
+      "result": {
+        "members": [
+          {
+            "name": {
+              "$untrusted": "teammate_note",
+              "text": "Anshuman Sharma"
+            },
+            "role": "owner",
+            "available": true
+          },
+          {
+            "name": {
+              "$untrusted": "teammate_note",
+              "text": "Priya Verma"
+            },
+            "role": "admin",
+            "available": true
+          },
+          {
+            "name": {
+              "$untrusted": "teammate_note",
+              "text": "Arjun Mehta"
+            },
+            "role": "admin",
+            "available": false
+          },
+          {
+            "name": {
+              "$untrusted": "teammate_note",
+              "text": "Ravi Kumar"
+            },
+            "role": "agent",
+            "available": true
+          }
+        ],
+        "admins": [
+          {
+            "$untrusted": "teammate_note",
+            "text": "Priya Verma"
+          },
+          {
+            "$untrusted": "teammate_note",
+            "text": "Arjun Mehta"
+          }
+        ]
+      }
+    },
+    "get_activity": {
+      "result": {
+        "aiAgent": {
+          "replied": "34",
+          "handedOver": "5",
+          "unassignedOfThose": "2"
+        },
+        "chatbots": {
+          "sessions": "12"
+        },
+        "rules": {
+          "runs": "20"
+        },
+        "viaEddy": {
+          "actions": "6"
+        }
+      }
+    },
+    "list_automations": {
+      "result": {
+        "items": [
+          {
+            "kind": "rule",
+            "id": "r_diwali_vip",
+            "name": {
+              "$untrusted": "workspace_text",
+              "text": "Diwali VIP offer"
+            },
+            "enabled": true,
+            "last24h": "3",
+            "sendsTemplate": true
+          },
+          {
+            "kind": "chatbot",
+            "id": "bot_menu",
+            "name": {
+              "$untrusted": "workspace_text",
+              "text": "Menu bot"
+            },
+            "enabled": true,
+            "last24h": "12"
+          },
+          {
+            "kind": "ai_agent",
+            "id": "ai_main",
+            "name": {
+              "$untrusted": "workspace_text",
+              "text": "Shop assistant"
+            },
+            "enabled": true,
+            "last24h": "34"
+          }
+        ]
+      }
+    },
+    "test_automation_rule": {
+      "result": {
+        "matched": [],
+        "wouldSend": "nothing"
+      }
+    },
+    "list_notices": {
+      "result": {
+        "items": [
+          {
+            "kind": "failed_sends",
+            "text": "4 messages didn't go today."
+          },
+          {
+            "kind": "template_rejected",
+            "ref": "t_old"
+          }
+        ]
+      }
+    },
+    "list_approvals": {
+      "result": {
+        "items": [],
+        "spend": "not available"
+      }
+    },
+    "explain_error": {
+      "byArg": "code",
+      "results": {
+        "131026": {
+          "code": "131026",
+          "text": "This number isn't on WhatsApp.",
+          "fix": "not_on_whatsapp",
+          "metaScreen": null
+        },
+        "131042": {
+          "code": "131042",
+          "text": "There is a payment problem on the WhatsApp Business account.",
+          "fix": "meta_payment_method",
+          "metaScreen": "payment_method"
+        },
+        "131047": {
+          "code": "131047",
+          "text": "The 24-hour chat window had closed, so WhatsApp only allows an approved template now.",
+          "fix": "pick_template",
+          "metaScreen": null
+        }
+      },
+      "default": {
+        "code": "unknown",
+        "text": "This code isn't in the list yet.",
+        "fix": null,
+        "metaScreen": null
+      }
+    },
+    "search_help": {
+      "result": {
+        "results": [
+          {
+            "id": "window_24h",
+            "title": "The 24-hour window",
+            "body": "After a customer writes, you can reply freely for 24 hours. After that, WhatsApp only allows approved templates."
+          },
+          {
+            "id": "template_categories",
+            "title": "Template categories",
+            "body": "Offers and promotions are Marketing. Order updates and reminders are Utility. Meta usually reviews a template within a day."
+          },
+          {
+            "id": "spending_limits",
+            "title": "Spending limits",
+            "body": "New workspaces start at ₹2,000 a day and ₹20,000 a month for ads. Lowering a limit always works; raising it is for the owner only."
+          }
+        ]
+      }
+    },
+    "get_spending": {
+      "result": {
+        "freeze": "none",
+        "ads": {
+          "left": "₹2,000 today",
+          "month": "₹20,000"
+        },
+        "whatsapp": {
+          "left": "Not set"
+        }
+      }
+    }
+  },
+  "variants": {
+    "rateCard_false": {
+      "estimate_broadcast": {
+        "result": {
+          "recipients": "1,240",
+          "cost": "Not available yet",
+          "costReason": "no_rate_card",
+          "days": "needs 2 days at your messaging limit"
+        }
+      }
+    },
+    "aiLimitUsed": {
+      "get_workspace_status": {
+        "patch": {
+          "ai": {
+            "usedMonth": "1,500",
+            "limitMonth": "1,500",
+            "leftMonth": "0",
+            "resetsOn": "1 Nov",
+            "text": "This month's AI limit is used up. It resets on 1 Nov."
+          }
+        }
+      }
+    },
+    "spendingStopped": {
+      "get_workspace_status": {
+        "patch": {
+          "spending": {
+            "freeze": "all",
+            "by": "Priya Verma",
+            "text": "Priya Verma stopped all spending for this workspace."
+          }
+        }
+      },
+      "get_spending": {
+        "result": {
+          "freeze": "all",
+          "by": "Priya Verma",
+          "ads": {
+            "paused": "2 campaigns"
+          }
+        }
+      }
+    },
+    "demo": {
+      "get_workspace_status": {
+        "patch": {
+          "sampleData": true,
+          "workspace": "Demo workspace",
+          "text": "Sample data"
+        }
+      }
+    },
+    "token_expired": {
+      "get_workspace_status": {
+        "patch": {
+          "whatsapp": {
+            "token": "expired",
+            "text": "WhatsApp needs to be connected again."
+          }
+        }
+      }
+    }
+  }
+}

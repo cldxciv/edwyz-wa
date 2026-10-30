@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "panel-hinglish-lookup",
+      "match": "e2e-eddy hinglish",
+      "rounds": [{ "content": [{ "type": "text", "text": "Aapke **3 templates** approved hain:\n\n- order_update\n- diwali_offer\n- welcome" }], "stop_reason": "end_turn", "delayMs": 60 }]
+    },
+    {
+      "id": "panel-devanagari-lookup",
+      "match": "e2e-eddy हिंदी",
+      "rounds": [{ "content": [{ "type": "text", "text": "आपके **तीन टेम्पलेट** अप्रूव हैं।" }], "stop_reason": "end_turn" }]
+    },
+    {
+      "id": "panel-tag-vip",
+      "match": "e2e-eddy tag vip",
+      "rounds": [
+        { "content": [{ "type": "tool_use", "id": "toolu_e2e_panel_tag", "name": "tag_contacts", "input": { "contactIds": ["e2e_eddy_ct_tag"], "add": ["vip"] } }], "stop_reason": "tool_use" },
+        { "content": [{ "type": "text", "text": "Done. The contact is tagged **vip**. You can undo it for 15 minutes." }], "stop_reason": "end_turn" }
+      ]
+    },
+    {
+      "id": "panel-send-reply",
+      "match": "e2e-eddy send reply",
+      "rounds": [
+        { "content": [{ "type": "tool_use", "id": "toolu_e2e_panel_send", "name": "send_text_reply", "input": { "conversationId": "e2e_eddy_cv_send", "text": "Your order ships tomorrow." } }], "stop_reason": "tool_use" },
+        { "content": [{ "type": "text", "text": "The preview is ready. Nothing is sent until you tap **Send reply**." }], "stop_reason": "end_turn" }
+      ]
+    },
+    {
+      "id": "panel-delete-template-agent",
+      "match": "e2e-eddy delete template",
+      "rounds": [{ "content": [{ "type": "text", "text": "Deleting a template needs an **admin** or the owner. Ask them, or open Templates to see who can." }], "stop_reason": "end_turn" }]
+    }
+  ]
+}

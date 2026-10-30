@@ -1,0 +1,5 @@
+# /etc/cron.d/edwyz-wa-backup  (root:root, mode 644, no dots in the file name)
+# Nightly logical backup of the edwyz_wa database at 02:30 server time. Output is a size line only, never a secret.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+30 2 * * * root /usr/local/sbin/backup-wa.sh >> /var/log/edwyz-wa-backup.log 2>&1

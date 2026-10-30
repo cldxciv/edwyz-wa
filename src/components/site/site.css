@@ -1,0 +1,121 @@
+/*
+  Public pages (landing, pricing, auth). Dark mode applies only while a page renders a .pub marker, so the signed-in app,
+  docs and legal pages keep their current look. Colours below were chosen for WCAG AA: body text 4.5:1, large text and
+  interface outlines 3:1, in both schemes.
+*/
+:root:has(.pub) {
+  color-scheme: light dark;
+  --accent-ink: #047857;
+  --field-border: #64748b;
+  --bad-ink: #b91c1c;
+  --hero-glow: 14%;
+}
+
+/*
+  The theme chosen in the app (<html data-theme="light|dark">, key "wa-theme", applied before first paint by the root layout) wins
+  over the operating system here too, so /login and the home page look the same as the workspace the person just left.
+*/
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):has(.pub) {
+    --background: #0b1220;
+    --foreground: #e8edf5;
+    --muted: #a8b4c7;
+    --border: #2a3850;
+    --surface: #111b2e;
+    --accent: #047857;
+    --accent-strong: #065f46;
+    --accent-ink: #34d399;
+    --field-border: #7c8ba3;
+    --bad-ink: #fca5a5;
+    --hero-glow: 22%;
+  }
+}
+
+:root[data-theme="dark"]:has(.pub) {
+  color-scheme: dark;
+  --background: #0b1220;
+  --foreground: #e8edf5;
+  --muted: #a8b4c7;
+  --border: #2a3850;
+  --surface: #111b2e;
+  --accent: #047857;
+  --accent-strong: #065f46;
+  --accent-ink: #34d399;
+  --field-border: #7c8ba3;
+  --bad-ink: #fca5a5;
+  --hero-glow: 22%;
+}
+
+:root[data-theme="light"]:has(.pub) {
+  color-scheme: light;
+}
+
+:root:has(.pub) a:focus-visible,
+:root:has(.pub) button:focus-visible,
+:root:has(.pub) summary:focus-visible,
+:root:has(.pub) input:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+}
+
+.pub-ink {
+  color: var(--accent-ink);
+}
+
+.pub-hero {
+  background: radial-gradient(60rem 28rem at 75% -8%, color-mix(in srgb, var(--accent) var(--hero-glow), transparent), transparent);
+}
+
+.pub-field {
+  width: 100%;
+  border-radius: 0.625rem;
+  border: 1px solid var(--field-border);
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0.6rem 0.75rem;
+  font-size: 1rem;
+  line-height: 1.4;
+}
+.pub-field::placeholder {
+  color: var(--muted);
+}
+.pub-field[aria-invalid="true"] {
+  border-color: var(--bad-ink);
+  box-shadow: 0 0 0 1px var(--bad-ink);
+}
+
+.pub-bad {
+  color: var(--bad-ink);
+}
+
+.pub-flow {
+  stroke-dasharray: 6 8;
+  animation: pub-dash 1.6s linear infinite;
+}
+@keyframes pub-dash {
+  to {
+    stroke-dashoffset: -28;
+  }
+}
+
+.pub-meter > span {
+  transition: width 200ms ease, background-color 200ms ease;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :root:has(.pub) {
+    scroll-behavior: smooth;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pub-flow {
+    animation: none;
+  }
+  :root:has(.pub) *,
+  :root:has(.pub) *::before,
+  :root:has(.pub) *::after {
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

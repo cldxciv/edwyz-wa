@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "note": "Eddy's help knowledge (docs/EDDY-SPEC.md 4.6 search_help, 12.2 risk 18). Display fields are title, keywords and body. `source` is where the facts were checked; it is never shown to people or the model. Update lastReviewed whenever an entry is checked again.",
+  "entries": [
+    {
+      "id": "window_24h",
+      "title": "The 24-hour customer service window",
+      "keywords": ["24 hour", "24-hour", "window", "service window", "closed", "free reply", "131047", "reply", "khidki", "window band"],
+      "body": "When a customer messages you, a 24-hour customer service window opens. Inside it your team can send any reply, and replies inside the window have no WhatsApp charge. Each new message from the customer restarts the 24 hours. After the window closes, WhatsApp only lets you send an approved template, so pick a template in the chat to start talking again (error 131047 means the window had closed).",
+      "source": "https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-messages#customer-service-windows",
+      "lastReviewed": "2026-10-29"
+    },
+    {
+      "id": "template_categories",
+      "title": "Template categories: Marketing, Utility and Authentication",
+      "keywords": ["template", "category", "marketing", "utility", "authentication", "otp", "offer", "order update", "reminder", "categories"],
+      "body": "Every template has one category. Marketing is for offers, announcements and anything that promotes. Utility is for updates about something the customer already asked for or bought, such as an order or a booking. Authentication is for one-time login codes. Meta checks the category during review and can change it, so choose the one that matches the message. An offer is always Marketing, even when it is short.",
+      "source": "https://developers.facebook.com/docs/whatsapp/business-management-api/message-templates/template-categorization",
+      "lastReviewed": "2026-10-29"
+    },
+    {
+      "id": "opt_in",
+      "title": "Marketing opt-in and opt-out",
+      "keywords": ["opt in", "opt-in", "optin", "consent", "permission", "opt out", "opt-out", "stop", "unsubscribe", "marketing permission"],
+      "body": "Before you send marketing templates to someone, they must have agreed to get WhatsApp messages from you, and Edwyz records when and how they agreed. Owners and admins can record an opt-in on the contact page with where it came from. If a customer sends STOP, or someone records an opt-out, marketing templates are not sent to them any more. A contact who opted out can only opt in again by messaging you.",
+      "source": "https://developers.facebook.com/docs/whatsapp/overview/getting-opt-in",
+      "lastReviewed": "2026-10-29"
+    },
+    {
+      "id": "quality_rating",
+      "title": "Number quality rating",
+      "keywords": ["quality", "quality rating", "low quality", "medium", "high", "green", "yellow", "red", "blocked", "reports", "spam"],
+      "body": "Meta rates each WhatsApp number High, Medium or Low from how customers react to your messages over the last few days, for example blocks and reports. A Low rating can limit how many people you can message. When a number drops, Edwyz pauses marketing broadcasts on it to protect it, and tells you. To recover, send fewer marketing messages, send them only to people who opted in, and make each message clearly useful.",
+      "source": "https://developers.facebook.com/docs/whatsapp/messaging-limits#quality-rating",
+      "lastReviewed": "2026-10-29"
+    },
+    {
+      "id": "messaging_limits",
+      "title": "Messaging limits",
+      "keywords": ["messaging limit", "limit", "tier", "250", "1000", "2000", "10000", "100000", "unlimited", "how many", "per day", "scale"],
+      "body": "A messaging limit is how many different customers your business can start conversations with in 24 hours using templates. It applies to all numbers in your business portfolio together. New accounts start low and the limit goes up step by step when you keep sending good quality messages and your business is verified. Replies inside the 24-hour window do not count. Edwyz shows, for a broadcast, how many days it needs at your current limit.",
+      "source": "https://developers.facebook.com/docs/whatsapp/messaging-limits",
+      "lastReviewed": "2026-10-29"
+    },
+    {
+      "id": "pricing_basics",
+      "title": "WhatsApp pricing basics",
+      "keywords": ["price", "pricing", "cost", "charge", "kitna", "kharcha", "per message", "how much", "rate", "bill", "paise", "rupees"],
+      "body": "WhatsApp charges per delivered template message. The price depends on the template category and the customer's country. Replies inside the 24-hour customer service window have no WhatsApp charge, and Utility templates sent inside an open window are free too. Edwyz estimates the cost of a broadcast from the workspace's rate card before you start it; when no rate card is set up, the estimate shows Not available yet instead of a guess.",
+      "source": "https://developers.facebook.com/docs/whatsapp/pricing",
+      "lastReviewed": "2026-10-29"
+    },
+    {
+      "id": "coexistence",
+      "title": "Using the WhatsApp Business app and Edwyz on one number (coexistence)",
+      "keywords": ["coexistence", "business app", "same number", "existing number", "phone app", "both", "migrate", "already on whatsapp"],
+      "body": "If your number is already on the WhatsApp Business app, choose coexistence while connecting. You keep using the app on your phone, and Edwyz gets the same number for the team inbox, templates and broadcasts. Chats from the last six months can be brought in. Some features of the app, such as broadcast lists, stop working once the number is shared, so plan broadcasts in Edwyz.",
+      "source": "https://developers.facebook.com/docs/whatsapp/embedded-signup/custom-flows/onboarding-business-app-users",
+      "lastReviewed": "2026-10-29"
+    },
+    {
+      "id": "spending_limits",
+      "title": "Spending limits and how Eddy handles money",
+      "keywords": ["spending", "spending limit", "limit", "budget", "stop spending", "daily limit", "monthly limit", "ads", "money", "kharch", "safety stop", "approval"],
+      "body": "Every workspace has daily and monthly spending limits for WhatsApp messages, ads and AI, set in Settings > Spending limits and checked by the platform admin too. New workspaces start at ₹2,000 a day and ₹20,000 a month until their first invoices are paid or the business is verified. Ad budgets count at their worst case: Meta can spend up to 1.75 times a daily budget in one day and 7 times it in a week. Lowering spending (pause, stop, cut a budget) always works, even while spending is stopped. Raising a limit or turning spending back on is for the owner only. Eddy never raises spending by itself: anything that would spend money waits for a person's tap on a preview.",
+      "source": "docs/SPEND-CONTROLS-SPEC.md",
+      "lastReviewed": "2026-10-29"
+    },
+    {
+      "id": "template_review",
+      "title": "Why a template is rejected",
+      "keywords": ["rejected", "rejection", "review", "approved", "pending", "template rejected", "why rejected", "paused template"],
+      "body": "Meta reviews every new template, usually within minutes and sometimes up to a day. Common reasons for rejection: the category does not match the message, variables such as {{1}} are at the very start or end or next to each other, the sample values are missing or unclear, the text asks for card or account numbers, or it looks like spam. Fix the reason, then submit a copy of the template. Templates that get poor reactions can be paused by Meta later.",
+      "source": "https://developers.facebook.com/docs/whatsapp/message-templates/guidelines",
+      "lastReviewed": "2026-10-29"
+    },
+    {
+      "id": "meta_only_steps",
+      "title": "Steps that are done in Meta's own settings",
+      "keywords": ["payment method", "131042", "billing", "business verification", "verify business", "display name", "131037", "name review"],
+      "body": "A few fixes can only be made inside Meta, because Meta offers no way to do them from Edwyz: adding or fixing a payment method on the WhatsApp Business account (error 131042), business verification, and the display name review (error 131037). Eddy explains the step and shows a link labelled Opens Meta for exactly these screens. Everything else, including connecting WhatsApp, is done in Edwyz.",
+      "source": "https://developers.facebook.com/docs/whatsapp/overview/business-accounts",
+      "lastReviewed": "2026-10-29"
+    },
+    {
+      "id": "eddy_previews",
+      "title": "How Eddy asks before it acts",
+      "keywords": ["eddy", "preview", "confirm", "undo", "card", "safe", "ask before", "approve", "tap"],
+      "body": "Eddy looks things up and makes small changes, such as tags or assignments, straight away, and each of those has Undo for 15 minutes. Anything that messages customers, spends money, deletes something or goes to Meta shows a preview card first, and nothing happens until someone taps its button. Eddy acts as the person using it, with that person's role, so it can never do more than they could do themselves.",
+      "source": "docs/EDDY-SPEC.md",
+      "lastReviewed": "2026-10-29"
+    }
+  ]
+}

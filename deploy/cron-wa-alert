@@ -1,0 +1,6 @@
+# /etc/cron.d/edwyz-wa-alert  (root:root, mode 644, no dots in the file name)
+# Checks health, queue age, failed jobs, backup age, TLS expiry and disk every 5 minutes. Problems go to the log;
+# mail is sent through the local `mail` command only when ALERT_EMAIL is set in /etc/edwyz-wa-alert.conf.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+*/5 * * * * root /usr/local/sbin/alert-wa.sh >> /var/log/edwyz-wa-alert.cron.log 2>&1

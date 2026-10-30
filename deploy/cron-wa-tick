@@ -1,0 +1,6 @@
+# /etc/cron.d/edwyz-wa  (root:root, mode 644, no dots in the file name)
+# FALLBACK worker. The pm2 app edwyz-wa-worker polls every 2 seconds; this once-a-minute call keeps work moving if that
+# process is stopped or crashing. Running both together is safe. The secret is read from the env file, never typed here.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+* * * * * root S=$(grep -E '^WORKER_SECRET=' /var/www/edwyz-wa/.env | tail -n 1 | cut -d= -f2- | tr -d '"\r'); [ -n "$S" ] && printf 'header = "x-worker-secret: %s"\n' "$S" | curl -fsS --max-time 55 -X POST -K - http://127.0.0.1:3500/api/internal/tick >/dev/null 2>>/var/log/edwyz-wa-tick.log

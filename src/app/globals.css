@@ -1,0 +1,510 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens. Single source of truth for colour, surface, radius, shadow, motion and layering.
+ * Theme selection: <html data-theme="light|dark"> (set by src/components/app/theme.ts, key "wa-theme") forces a theme;
+ * with no attribute the OS preference (prefers-color-scheme) applies. The dark values appear twice (forced and system); tests/ui-system-tokens.test.ts
+ * keeps the two blocks identical and checks WCAG AA contrast for every text pairing.
+ */
+
+:root {
+  color-scheme: light;
+
+  --background: #ffffff;
+  --foreground: #0f172a;
+  --muted: #475569;
+  --surface: #f8fafc;
+  --surface-2: #f1f5f9;
+  --raised: #ffffff;
+  --border: #e2e8f0;
+  --border-strong: #8190a5;
+  --overlay: rgb(15 23 42 / 0.5);
+
+  --accent: #047857;
+  --accent-strong: #065f46;
+  --accent-soft: #ecfdf5;
+  --accent-ink: #047857;
+  --on-accent: #ffffff;
+
+  --danger: #b91c1c;
+  --danger-strong: #991b1b;
+
+  --good: #059669;
+  --good-soft: #ecfdf5;
+  --good-fg: #065f46;
+  --good-line: #a7f3d0;
+  --warn: #d97706;
+  --warn-soft: #fffbeb;
+  --warn-fg: #78350f;
+  --warn-line: #fde68a;
+  --bad: #dc2626;
+  --bad-soft: #fef2f2;
+  --bad-fg: #991b1b;
+  --bad-line: #fecaca;
+  --info: #2563eb;
+  --info-soft: #eff6ff;
+  --info-fg: #1e40af;
+  --info-line: #bfdbfe;
+
+  --ring: #2563eb;
+
+  --elev-1: 0 1px 2px rgb(15 23 42 / 0.06), 0 1px 1px rgb(15 23 42 / 0.04);
+  --elev-2: 0 4px 12px rgb(15 23 42 / 0.08), 0 1px 3px rgb(15 23 42 / 0.06);
+  --elev-3: 0 20px 40px rgb(15 23 42 / 0.18), 0 4px 12px rgb(15 23 42 / 0.1);
+
+  --r-control: 0.5rem;
+  --r-card: 1rem;
+  --r-pop: 0.75rem;
+
+  --control-h-sm: 2rem;
+  --control-h-md: 2.5rem;
+  --control-h-lg: 2.75rem;
+  --content-max: 72rem;
+
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+
+  --z-sticky: 10;
+  --z-dropdown: 20;
+  --z-overlay: 40;
+  --z-modal: 50;
+  --z-popover: 60;
+  --z-toast: 70;
+  --z-tooltip: 80;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --background: #0b1220;
+  --foreground: #e8eef8;
+  --muted: #a5b4cb;
+  --surface: #111a2c;
+  --surface-2: #18233a;
+  --raised: #141e33;
+  --border: #243049;
+  --border-strong: #64748f;
+  --overlay: rgb(2 6 14 / 0.7);
+
+  --accent: #047857;
+  --accent-strong: #065f46;
+  --accent-soft: #072b21;
+  --accent-ink: #34d399;
+  --on-accent: #ffffff;
+
+  --danger: #b91c1c;
+  --danger-strong: #991b1b;
+
+  --good: #34d399;
+  --good-soft: #052e22;
+  --good-fg: #6ee7b7;
+  --good-line: #0b5a43;
+  --warn: #fbbf24;
+  --warn-soft: #2a1d07;
+  --warn-fg: #fcd34d;
+  --warn-line: #6b4a0e;
+  --bad: #f87171;
+  --bad-soft: #2d1215;
+  --bad-fg: #fca5a5;
+  --bad-line: #6e2229;
+  --info: #60a5fa;
+  --info-soft: #0d1f3d;
+  --info-fg: #93c5fd;
+  --info-line: #1e4380;
+
+  --ring: #60a5fa;
+
+  --elev-1: 0 1px 2px rgb(0 0 0 / 0.5);
+  --elev-2: 0 4px 12px rgb(0 0 0 / 0.5), 0 1px 3px rgb(0 0 0 / 0.4);
+  --elev-3: 0 20px 40px rgb(0 0 0 / 0.6), 0 4px 12px rgb(0 0 0 / 0.5);
+
+  --color-red-50: #2d1215;
+  --color-red-100: #3b161a;
+  --color-red-200: #6e2229;
+  --color-red-300: #8c2c35;
+  --color-red-600: #ef4444;
+  --color-red-700: #f87171;
+  --color-red-800: #fca5a5;
+  --color-red-900: #fecaca;
+  --color-amber-50: #2a1d07;
+  --color-amber-100: #3a2a0a;
+  --color-amber-200: #6b4a0e;
+  --color-amber-300: #8a6212;
+  --color-amber-800: #fcd34d;
+  --color-amber-900: #fde68a;
+  --color-amber-950: #fef3c7;
+  --color-emerald-50: #052e22;
+  --color-emerald-100: #073d2e;
+  --color-emerald-200: #0b5a43;
+  --color-emerald-300: #12775a;
+  --color-emerald-700: #34d399;
+  --color-emerald-800: #6ee7b7;
+  --color-emerald-900: #a7f3d0;
+  --color-sky-100: #0d2a47;
+  --color-sky-300: #1e5a93;
+  --color-sky-600: #38bdf8;
+  --color-sky-900: #bae6fd;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --background: #0b1220;
+    --foreground: #e8eef8;
+    --muted: #a5b4cb;
+    --surface: #111a2c;
+    --surface-2: #18233a;
+    --raised: #141e33;
+    --border: #243049;
+    --border-strong: #64748f;
+    --overlay: rgb(2 6 14 / 0.7);
+
+    --accent: #047857;
+    --accent-strong: #065f46;
+    --accent-soft: #072b21;
+    --accent-ink: #34d399;
+    --on-accent: #ffffff;
+
+    --danger: #b91c1c;
+    --danger-strong: #991b1b;
+
+    --good: #34d399;
+    --good-soft: #052e22;
+    --good-fg: #6ee7b7;
+    --good-line: #0b5a43;
+    --warn: #fbbf24;
+    --warn-soft: #2a1d07;
+    --warn-fg: #fcd34d;
+    --warn-line: #6b4a0e;
+    --bad: #f87171;
+    --bad-soft: #2d1215;
+    --bad-fg: #fca5a5;
+    --bad-line: #6e2229;
+    --info: #60a5fa;
+    --info-soft: #0d1f3d;
+    --info-fg: #93c5fd;
+    --info-line: #1e4380;
+
+    --ring: #60a5fa;
+
+    --elev-1: 0 1px 2px rgb(0 0 0 / 0.5);
+    --elev-2: 0 4px 12px rgb(0 0 0 / 0.5), 0 1px 3px rgb(0 0 0 / 0.4);
+    --elev-3: 0 20px 40px rgb(0 0 0 / 0.6), 0 4px 12px rgb(0 0 0 / 0.5);
+
+    --color-red-50: #2d1215;
+    --color-red-100: #3b161a;
+    --color-red-200: #6e2229;
+    --color-red-300: #8c2c35;
+    --color-red-600: #ef4444;
+    --color-red-700: #f87171;
+    --color-red-800: #fca5a5;
+    --color-red-900: #fecaca;
+    --color-amber-50: #2a1d07;
+    --color-amber-100: #3a2a0a;
+    --color-amber-200: #6b4a0e;
+    --color-amber-300: #8a6212;
+    --color-amber-800: #fcd34d;
+    --color-amber-900: #fde68a;
+    --color-amber-950: #fef3c7;
+    --color-emerald-50: #052e22;
+    --color-emerald-100: #073d2e;
+    --color-emerald-200: #0b5a43;
+    --color-emerald-300: #12775a;
+    --color-emerald-700: #34d399;
+    --color-emerald-800: #6ee7b7;
+    --color-emerald-900: #a7f3d0;
+    --color-sky-100: #0d2a47;
+    --color-sky-300: #1e5a93;
+    --color-sky-600: #38bdf8;
+    --color-sky-900: #bae6fd;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-raised: var(--raised);
+  --color-overlay: var(--overlay);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ink: var(--accent-ink);
+  --color-on-accent: var(--on-accent);
+  --color-danger: var(--danger);
+  --color-danger-strong: var(--danger-strong);
+  --color-good: var(--good);
+  --color-good-soft: var(--good-soft);
+  --color-good-fg: var(--good-fg);
+  --color-good-line: var(--good-line);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-warn-fg: var(--warn-fg);
+  --color-warn-line: var(--warn-line);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --color-bad-fg: var(--bad-fg);
+  --color-bad-line: var(--bad-line);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-info-fg: var(--info-fg);
+  --color-info-line: var(--info-line);
+  --color-ring: var(--ring);
+
+  --shadow-raised: var(--elev-1);
+  --shadow-pop: var(--elev-2);
+  --shadow-modal: var(--elev-3);
+
+  --radius-control: var(--r-control);
+  --radius-card: var(--r-card);
+  --radius-pop: var(--r-pop);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+/* Accent used as text must stay readable on dark surfaces; fills keep --accent with white text. */
+.text-accent {
+  color: var(--accent-ink);
+}
+
+html {
+  scroll-padding-top: 5rem;
+}
+
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+:where(input, select, textarea, [role="switch"]):focus-visible {
+  outline-offset: 1px;
+}
+
+@layer components {
+  .ui-spinner {
+    animation: ui-spin 0.7s linear infinite;
+  }
+
+  .ui-skeleton {
+    background: linear-gradient(90deg, var(--surface-2) 25%, color-mix(in srgb, var(--surface-2) 55%, var(--border)) 50%, var(--surface-2) 75%);
+    background-size: 200% 100%;
+    animation: ui-shimmer 1.4s var(--ease-in-out) infinite;
+  }
+
+  .ui-toast-in {
+    animation: ui-slide-up var(--dur-base) var(--ease-out) both;
+  }
+
+  .ui-pop-in {
+    animation: ui-pop var(--dur-base) var(--ease-out) both;
+  }
+
+  .ui-fade-in {
+    animation: ui-fade var(--dur-base) var(--ease-out) both;
+  }
+
+  .ui-kbd {
+    display: inline-flex;
+    min-width: 1.5rem;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-strong);
+    border-bottom-width: 2px;
+    border-radius: 0.375rem;
+    background: var(--surface);
+    padding: 0.05rem 0.4rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.75rem;
+    line-height: 1.25rem;
+    color: var(--foreground);
+  }
+
+  .ui-dt {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    text-align: left;
+    font-size: 0.875rem;
+  }
+  .ui-dt th {
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    padding: 0.625rem 1rem;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .ui-dt td {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  .ui-dt tbody tr:last-child td {
+    border-bottom: 0;
+  }
+  .ui-dt-sticky th {
+    position: sticky;
+    top: 0;
+    z-index: var(--z-sticky);
+    box-shadow: 0 1px 0 var(--border);
+  }
+  .ui-dt-row-action {
+    cursor: pointer;
+  }
+  .ui-dt-row-action:hover td {
+    background: var(--surface);
+  }
+
+  @media (max-width: 639px) {
+    .ui-dt-cards,
+    .ui-dt-cards tbody,
+    .ui-dt-cards tr,
+    .ui-dt-cards td {
+      display: block;
+    }
+    .ui-dt-cards thead {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+    }
+    .ui-dt-cards tbody tr {
+      margin-bottom: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: var(--r-card);
+      background: var(--raised);
+      padding: 0.25rem 0;
+    }
+    .ui-dt-cards td {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 1rem;
+      border-bottom: 0;
+      padding: 0.5rem 1rem;
+      text-align: right;
+    }
+    .ui-dt-cards td::before {
+      content: attr(data-label);
+      flex: none;
+      color: var(--muted);
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-align: left;
+    }
+    .ui-dt-cards td[data-label=""]::before {
+      display: none;
+    }
+    .ui-dt-cards td[data-primary] {
+      justify-content: flex-start;
+      font-weight: 600;
+      text-align: left;
+    }
+  }
+}
+
+@keyframes ui-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes ui-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes ui-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+@keyframes ui-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+}
+/* Fade and translate only (docs/ui-guidelines.md): a scale would shrink a dialog's 44 px targets while it opens. */
+@keyframes ui-pop {
+  from {
+    opacity: 0;
+    transform: translateY(0.25rem);
+  }
+}
+@keyframes ui-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0.01ms;
+    --dur-base: 0.01ms;
+    --dur-slow: 0.01ms;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .ui-spinner {
+    animation: ui-pulse 1.6s ease-in-out infinite !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .ui-skeleton {
+    background: Canvas;
+    border: 1px solid CanvasText;
+  }
+}
+
+.prose-legal h2 {
+  margin-top: 2rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+.prose-legal p,
+.prose-legal li {
+  margin-top: 0.75rem;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.prose-legal ul {
+  margin-top: 0.5rem;
+  list-style: disc;
+  padding-left: 1.25rem;
+}
+.prose-legal a {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

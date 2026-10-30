@@ -1,0 +1,13 @@
+# /etc/edwyz-wa-alert.conf  (root:root, mode 600). Copy from this example. Every line is optional.
+# Mail is sent only when ALERT_EMAIL is set and the local `mail` command exists. Without it problems are only logged
+# to /var/log/edwyz-wa-alert.log.
+# ALERT_EMAIL=ops@edwyz.com
+# ALERT_REPEAT_MIN=360
+# ALERT_DISK_MAX_PCT=85
+# ALERT_TLS_MIN_DAYS=14
+# ALERT_BACKUP_MAX_HOURS=26
+# ALERT_WORKER_MAX_AGE=300
+# ALERT_EXPECT_DAEMON=1      set 0 on a host that only runs the cron tick (no edwyz-wa-worker daemon)
+# ALERT_DAEMON_MAX_AGE=120   seconds without a daemon heartbeat before it is reported
+# ALERT_QUEUE_MAX_AGE=120
+# CERT_FILE=/etc/letsencrypt/live/wa.edwyz.com/fullchain.pem

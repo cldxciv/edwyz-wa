@@ -1,0 +1,147 @@
+{
+  "name": "clinic",
+  "description": "A dental clinic that has not connected WhatsApp yet, for the setup flows. No number, no templates, no contacts.",
+  "tenant": {
+    "id": "t_clinic",
+    "name": "Smile Dental Clinic",
+    "timezone": "Asia/Kolkata",
+    "currency": "INR"
+  },
+  "members": [
+    {
+      "userId": "u_owner",
+      "name": "Dr. Neha Kapoor",
+      "role": "owner"
+    },
+    {
+      "userId": "u_agent",
+      "name": "Meena Rao",
+      "role": "agent"
+    }
+  ],
+  "whatsapp": "none",
+  "demo": false,
+  "rules": [],
+  "optionalRules": {},
+  "untrusted": [
+    "Smile patient"
+  ],
+  "tools": {
+    "get_workspace_status": {
+      "result": {
+        "workspace": "Smile Dental Clinic",
+        "sampleData": false,
+        "setup": {
+          "percent": 0,
+          "done": 0,
+          "total": 9,
+          "nextStepId": "connect",
+          "nextStep": "Connect WhatsApp"
+        },
+        "whatsapp": {
+          "token": "none",
+          "numbers": [],
+          "text": "WhatsApp isn't connected yet."
+        },
+        "ai": {
+          "usedMonth": "4",
+          "limitMonth": "500",
+          "leftMonth": "496",
+          "resetsOn": "1 Nov"
+        },
+        "spending": {
+          "freeze": "none"
+        }
+      }
+    },
+    "get_attention": {
+      "result": {
+        "text": "Connect WhatsApp to start.",
+        "nextStepId": "connect"
+      }
+    },
+    "list_templates": {
+      "result": {
+        "items": []
+      }
+    },
+    "list_team": {
+      "result": {
+        "members": [
+          {
+            "name": {
+              "$untrusted": "teammate_note",
+              "text": "Dr. Neha Kapoor"
+            },
+            "role": "owner",
+            "available": true
+          },
+          {
+            "name": {
+              "$untrusted": "teammate_note",
+              "text": "Meena Rao"
+            },
+            "role": "agent",
+            "available": true
+          }
+        ],
+        "admins": [
+          {
+            "$untrusted": "teammate_note",
+            "text": "Dr. Neha Kapoor"
+          }
+        ]
+      }
+    },
+    "search_help": {
+      "result": {
+        "results": [
+          {
+            "id": "coexistence",
+            "title": "Keeping the WhatsApp Business app",
+            "body": "With coexistence, the number stays on the WhatsApp Business app and also works in Edwyz."
+          },
+          {
+            "id": "template_categories",
+            "title": "Template categories",
+            "body": "Appointment reminders are Utility. Offers are Marketing."
+          }
+        ]
+      }
+    },
+    "list_conversations": {
+      "result": {
+        "items": [],
+        "unreadTotal": 0
+      }
+    },
+    "get_conversation": {
+      "byArg": "conversationId",
+      "results": {
+        "c_patient": {
+          "id": "c_patient",
+          "contact": {
+            "id": "k_patient",
+            "name": {
+              "$untrusted": "contact_name",
+              "text": "Smile patient"
+            }
+          },
+          "windowOpen": true,
+          "customerLanguage": "en",
+          "messages": [
+            {
+              "direction": "inbound",
+              "at": "Today, 9:00 am",
+              "text": {
+                "$untrusted": "customer_message",
+                "text": "What time do you open?"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "variants": {}
+}

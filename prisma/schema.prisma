@@ -1,0 +1,1972 @@
+// Edwyz WA data model. Every tenant-owned table carries tenantId; queries must always filter by it.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  owner
+  admin
+  agent
+}
+
+enum OnboardingStatus {
+  not_started
+  in_progress
+  live
+  failed
+}
+
+enum MessageDirection {
+  inbound
+  outbound
+}
+
+enum MessageStatus {
+  received
+  queued
+  sent
+  delivered
+  read
+  failed
+}
+
+enum TemplateStatus {
+  draft
+  pending
+  approved
+  rejected
+  paused
+  disabled
+  // Meta flagged it for low quality (migration 0011, docs/SPEND-CONTROLS-SPEC.md 6.3): marketing broadcasts and assistants may not use it.
+  flagged
+}
+
+enum BroadcastStatus {
+  draft
+  scheduled
+  sending
+  completed
+  paused
+  canceled
+  failed
+}
+
+enum RecipientStatus {
+  pending
+  queued
+  sent
+  delivered
+  read
+  failed
+  skipped
+}
+
+enum TenantStatus {
+  active
+  suspended
+}
+
+enum SubscriptionStatus {
+  active
+  past_due
+  canceled
+  expired
+}
+
+enum InvoiceStatus {
+  issued
+  paid
+  void
+}
+
+enum AutomationType {
+  welcome
+  away
+  keyword
+}
+
+enum JobStatus {
+  queued
+  running
+  done
+  failed
+}
+
+model Tenant {
+  id               String           @id @default(cuid())
+  name             String
+  slug             String           @unique
+  onboardingStatus OnboardingStatus @default(not_started)
+  walletPaise      Int              @default(0)
+  status           TenantStatus     @default(active)
+  suspendedReason  String?
+  deletedAt        DateTime?
+  trialEndsAt      DateTime?
+  // Comped accounts (staff, partners) skip the paywall. Set only by a platform admin.
+  billingExempt    Boolean          @default(false)
+  createdAt        DateTime         @default(now())
+
+  memberships    Membership[]
+  invites        Invite[]
+  wabas          Waba[]
+  subscription   Subscription?
+  billingProfile BillingProfile?
+}
+
+model User {
+  id                 String    @id @default(cuid())
+  email              String    @unique
+  name               String
+  passwordHash       String
+  disabledAt         DateTime?
+  emailVerifiedAt    DateTime?
+  totpCiphertext     String?
+  totpIv             String?
+  totpTag            String?
+  totpEnabledAt      DateTime?
+  totpRecoveryHashes String[]
+  createdAt          DateTime  @default(now())
+
+  memberships Membership[]
+  sessions    Session[]
+  emailTokens EmailToken[]
+}
+
+model Membership {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  role      Role
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([userId])
+}
+
+model Invite {
+  id         String    @id @default(cuid())
+  tenantId   String
+  email      String
+  role       Role
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  acceptedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+model Session {
+  id               String    @id @default(cuid())
+  userId           String
+  tenantId         String?
+  refreshTokenHash String    @unique
+  userAgent        String?
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Waba {
+  id         String   @id @default(cuid())
+  tenantId   String
+  wabaId     String   @unique
+  name       String?
+  businessId String?
+  createdAt  DateTime @default(now())
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  phoneNumbers PhoneNumber[]
+  templates    Template[]
+
+  @@index([tenantId])
+}
+
+model PhoneNumber {
+  id                 String    @id @default(cuid())
+  tenantId           String
+  wabaRefId          String
+  phoneNumberId      String    @unique
+  displayPhone       String
+  verifiedName       String?
+  qualityRating      String?
+  messagingLimitTier String?
+  nameStatus         String?
+  status             String    @default("pending")
+  registeredAt       DateTime?
+  createdAt          DateTime  @default(now())
+
+  waba          Waba           @relation(fields: [wabaRefId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+  broadcasts    Broadcast[]
+
+  @@index([tenantId])
+}
+
+model AccessToken {
+  id              String    @id @default(cuid())
+  tenantId        String
+  wabaRefId       String?
+  tokenCiphertext String
+  iv              String
+  authTag         String
+  keyVersion      Int       @default(1)
+  expiresAt       DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([tenantId])
+}
+
+model OnboardingLog {
+  id        String   @id @default(cuid())
+  tenantId  String
+  step      String
+  status    String
+  detail    Json?
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, step])
+}
+
+model Contact {
+  id          String    @id @default(cuid())
+  tenantId    String
+  phone       String?
+  name        String?
+  attributes  Json      @default("{}")
+  tags        String[]
+  optIn       Boolean   @default(false)
+  optInSource String?
+  optInAt     DateTime?
+  optedOutAt  DateTime?
+  bsuid       String?
+  username    String?
+  waId        String?
+  ownerUserId String?
+  leadStage   String?
+  createdAt   DateTime  @default(now())
+
+  conversations       Conversation[]
+  broadcastRecipients BroadcastRecipient[]
+
+  @@unique([tenantId, phone])
+  @@unique([tenantId, bsuid])
+  @@index([tenantId])
+}
+
+model Conversation {
+  id                String    @id @default(cuid())
+  tenantId          String
+  phoneNumberId     String
+  contactId         String
+  assignedToId      String?
+  status            String    @default("open")
+  tags              String[]
+  unreadCount       Int       @default(0)
+  lastMessageAt     DateTime  @default(now())
+  lastInboundAt     DateTime?
+  // Click-to-WhatsApp referral from the first inbound message: { sourceType, sourceId, sourceUrl, headline, ctwaClid }
+  referral          Json?
+  assignedAt        DateTime?
+  statusChangedAt   DateTime?
+  teamId            String?
+  lastAgentReplyAt  DateTime?
+  firstAgentReplyAt DateTime?
+  createdAt         DateTime  @default(now())
+
+  phoneNumber PhoneNumber @relation(fields: [phoneNumberId], references: [id], onDelete: Cascade)
+  contact     Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  messages    Message[]
+  notes       Note[]
+
+  @@unique([phoneNumberId, contactId])
+  @@index([tenantId, lastMessageAt])
+  @@index([tenantId, status])
+  @@index([tenantId, assignedToId])
+}
+
+model Message {
+  id             String           @id @default(cuid())
+  tenantId       String
+  conversationId String
+  wamid          String?          @unique
+  direction      MessageDirection
+  type           String           @default("text")
+  body           String?
+  mediaUrl       String?
+  mediaMime      String?
+  templateName   String?
+  status         MessageStatus
+  statusTimeline Json             @default("[]")
+  errorCode      String?
+  sentByUserId   String?
+  createdAt      DateTime         @default(now())
+
+  // Spend controls (migration 0009, docs/SPEND-CONTROLS-SPEC.md 3.3 and 4.9). Money is integer minor units of the rate card currency.
+  // origin: human | api | mcp | assistant | broadcast | automation | chatbot | ai_reply | lead_sequence | commerce | consent | approval | admin_test | system_notify | eddy | unknown
+  origin           String?
+  pricingCategory  String?
+  estCostMinor     BigInt?
+  costMinor        BigInt?
+  billable         Boolean?
+  pricingType      String?
+  spendDay         DateTime? @db.Date
+  // reserved | settled | released (CHECK in SQL only, added NOT VALID in 0009 and validated in 0010)
+  spendState       String?
+  reservationId    String?
+  pricingSettledAt DateTime?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, conversationId, createdAt])
+  // SQL only (0010, CREATE INDEX CONCURRENTLY): partial indexes Message_spend_open_idx and Message_pricing_unsettled_idx.
+}
+
+model Note {
+  id             String   @id @default(cuid())
+  tenantId       String
+  conversationId String
+  authorId       String
+  body           String
+  createdAt      DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, conversationId])
+}
+
+model QuickReply {
+  id       String @id @default(cuid())
+  tenantId String
+  shortcut String
+  body     String
+
+  @@unique([tenantId, shortcut])
+}
+
+model Template {
+  id              String         @id @default(cuid())
+  tenantId        String
+  wabaRefId       String
+  name            String
+  language        String
+  category        String
+  status          TemplateStatus @default(draft)
+  components      Json
+  metaTemplateId  String?
+  rejectionReason String?
+  // Header media uploaded to Meta for the template: { type, handle, key, mime }
+  headerMedia     Json?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  waba       Waba        @relation(fields: [wabaRefId], references: [id], onDelete: Cascade)
+  broadcasts Broadcast[]
+
+  @@unique([tenantId, wabaRefId, name, language])
+  @@index([tenantId])
+}
+
+model Broadcast {
+  id                 String          @id @default(cuid())
+  tenantId           String
+  phoneNumberId      String
+  templateId         String
+  name               String
+  status             BroadcastStatus @default(draft)
+  segmentTags        String[]
+  scheduledAt        DateTime?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  estimatedCostPaise Int?
+  // Days to keep retrying recipients whose send failed on Meta's per-user marketing cap (0 = never retry).
+  retryDays          Int             @default(0)
+  // { segmentId?, filter? } audience stack; variableMap: { "1": { source: "attribute"|"field"|"static", key, fallback? } }
+  audienceFilter     Json?
+  variableMap        Json?
+  missingValuePolicy String          @default("skip")
+  createdByUserId    String?
+  createdAt          DateTime        @default(now())
+
+  phoneNumber PhoneNumber          @relation(fields: [phoneNumberId], references: [id], onDelete: Cascade)
+  template    Template             @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  recipients  BroadcastRecipient[]
+
+  @@index([tenantId, status])
+}
+
+model BroadcastRecipient {
+  id          String          @id @default(cuid())
+  tenantId    String
+  broadcastId String
+  contactId   String
+  status      RecipientStatus @default(pending)
+  wamid       String?
+  messageId   String?         @unique
+  errorCode   String?
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  readAt      DateTime?
+  attempts    Int             @default(0)
+  retryAfter  DateTime?
+
+  broadcast Broadcast @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  contact   Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([broadcastId, contactId])
+  @@index([tenantId, broadcastId, status])
+}
+
+model WebhookEvent {
+  id             String    @id @default(cuid())
+  tenantId       String?
+  wabaId         String?
+  phoneNumberId  String?
+  payload        Json
+  signatureValid Boolean   @default(true)
+  processedAt    DateTime?
+  error          String?
+  receivedAt     DateTime  @default(now())
+
+  @@index([processedAt, receivedAt])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  userId    String?
+  action    String
+  target    String?
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+}
+
+model WalletTransaction {
+  id          String   @id @default(cuid())
+  tenantId    String
+  amountPaise Int
+  kind        String
+  reference   String?
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+}
+
+// Postgres-backed job queue (FOR UPDATE SKIP LOCKED). The interface in src/lib/queue.ts is shaped so BullMQ can replace it later.
+model Job {
+  id          String    @id @default(cuid())
+  queue       String
+  payload     Json
+  status      JobStatus @default(queued)
+  runAt       DateTime  @default(now())
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  lockedAt    DateTime?
+  lastError   String?
+  createdAt   DateTime  @default(now())
+
+  @@index([queue, status, runAt])
+}
+
+// ---------- Billing and paywall (Razorpay) ----------
+
+model Plan {
+  id                    String   @id @default(cuid())
+  code                  String   @unique
+  name                  String
+  description           String?
+  // Prices are set by the platform admin. There are no built-in prices.
+  pricePaise            Int
+  currency              String   @default("INR")
+  intervalMonths        Int      @default(1)
+  seatLimit             Int?
+  contactLimit          Int?
+  monthlyBroadcastLimit Int?
+  aiCreditsMonthly      Int?
+  adAccountLimit        Int?
+  scheduledPostLimit    Int?
+  connectedChannelLimit Int?
+  features              Json     @default("{}")
+  razorpayPlanId        String?
+  active                Boolean  @default(true)
+  sortOrder             Int      @default(0)
+  createdAt             DateTime @default(now())
+
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id                     String             @id @default(cuid())
+  tenantId               String             @unique
+  planId                 String
+  status                 SubscriptionStatus
+  razorpaySubscriptionId String?            @unique
+  currentPeriodStart     DateTime?
+  currentPeriodEnd       DateTime?
+  cancelAtPeriodEnd      Boolean            @default(false)
+  pastDueSince           DateTime?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan   Plan   @relation(fields: [planId], references: [id])
+}
+
+model BillingProfile {
+  tenantId     String   @id
+  legalName    String
+  gstin        String?
+  addressLine  String
+  state        String
+  pincode      String?
+  billingEmail String
+  updatedAt    DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model Invoice {
+  id                String        @id @default(cuid())
+  tenantId          String
+  number            String        @unique
+  status            InvoiceStatus @default(issued)
+  planName          String
+  amountPaise       Int
+  gstRateBps        Int
+  gstPaise          Int
+  totalPaise        Int
+  currency          String        @default("INR")
+  customerName      String?
+  customerGstin     String?
+  customerAddress   String?
+  razorpayPaymentId String?       @unique
+  periodStart       DateTime?
+  periodEnd         DateTime?
+  issuedAt          DateTime      @default(now())
+  paidAt            DateTime?
+
+  @@index([tenantId, issuedAt])
+}
+
+// Gateway webhook log. eventId makes processing idempotent.
+model PaymentEvent {
+  id          String    @id @default(cuid())
+  provider    String    @default("razorpay")
+  eventId     String    @unique
+  type        String
+  payload     Json
+  processedAt DateTime?
+  error       String?
+  receivedAt  DateTime  @default(now())
+}
+
+// Editable platform configuration (trial length, GST rate, seller details, grace days). Values are JSON.
+model PlatformSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+// ---------- Automation, API access and outbound webhooks ----------
+
+model AutomationRule {
+  id              String         @id @default(cuid())
+  tenantId        String
+  phoneNumberId   String?
+  type            AutomationType
+  name            String
+  enabled         Boolean        @default(true)
+  keywords        String[]
+  matchMode       String         @default("contains")
+  replyText       String
+  // Away hours: { timezone, days: [0-6], start: "HH:MM", end: "HH:MM" }
+  schedule        Json?
+  cooldownMinutes Int            @default(720)
+  // Rules v2: version 2 rows use trigger, filters and actions below instead of keywords and replyText.
+  version         Int            @default(1)
+  priority        Int            @default(0)
+  trigger         Json?
+  filters         Json?
+  actions         Json?
+  stopAfterMatch  Boolean        @default(false)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([tenantId, enabled])
+}
+
+// One row per automatic reply, used to enforce cooldowns and stop loops.
+model AutomationRun {
+  id             String   @id @default(cuid())
+  tenantId       String
+  ruleId         String
+  conversationId String
+  createdAt      DateTime @default(now())
+
+  @@index([ruleId, conversationId, createdAt])
+}
+
+model ApiKey {
+  id              String    @id @default(cuid())
+  tenantId        String
+  name            String
+  prefix          String    @unique
+  keyHash         String    @unique
+  scopes          String[]
+  lastUsedAt      DateTime?
+  revokedAt       DateTime?
+  createdByUserId String
+  createdAt       DateTime  @default(now())
+
+  @@index([tenantId])
+}
+
+model WebhookEndpoint {
+  id               String   @id @default(cuid())
+  tenantId         String
+  url              String
+  secretCiphertext String
+  iv               String
+  authTag          String
+  events           String[]
+  enabled          Boolean  @default(true)
+  failureCount     Int      @default(0)
+  createdAt        DateTime @default(now())
+
+  @@index([tenantId])
+}
+
+model WebhookDelivery {
+  id         String   @id @default(cuid())
+  tenantId   String
+  endpointId String
+  event      String
+  payload    Json
+  status     String   @default("pending")
+  attempts   Int      @default(0)
+  lastStatus Int?
+  lastError  String?
+  createdAt  DateTime @default(now())
+
+  @@index([tenantId, endpointId, createdAt])
+}
+
+// Daily counters for reports and the platform dashboard. scope is a tenantId or "platform"; day is YYYY-MM-DD.
+model DailyMetric {
+  id    String @id @default(cuid())
+  scope String
+  day   String
+  key   String
+  value Int
+
+  @@unique([scope, day, key])
+}
+
+// One-time tokens sent by email: address verification and password reset. Only the hash is stored.
+model EmailToken {
+  id        String    @id @default(cuid())
+  userId    String
+  kind      String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, kind])
+}
+
+enum ChatbotStatus {
+  draft
+  published
+  archived
+}
+
+enum ChatbotSessionStatus {
+  active
+  waiting
+  completed
+  handed_off
+  expired
+}
+
+// A conversation flow built in the UI. `flow` is the editable draft, `publishedFlow` is what runs.
+// Shape of both: see docs/phase2-contracts.md (nodes + edges, validated by src/lib/chatbots/flow.ts).
+model Chatbot {
+  id              String        @id @default(cuid())
+  tenantId        String
+  phoneNumberId   String?
+  name            String
+  status          ChatbotStatus @default(draft)
+  // keyword | first_message | any_message | manual
+  triggerType     String        @default("keyword")
+  triggerKeywords String[]
+  flow            Json
+  publishedFlow   Json?
+  version         Int           @default(1)
+  createdByUserId String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  sessions ChatbotSession[]
+
+  @@index([tenantId, status])
+}
+
+model ChatbotSession {
+  id             String               @id @default(cuid())
+  tenantId       String
+  chatbotId      String
+  conversationId String
+  contactId      String
+  status         ChatbotSessionStatus @default(active)
+  currentNodeId  String?
+  // Set while the bot waits for the customer's answer to an ask node.
+  waitingNodeId  String?
+  // Set while a delay node is pending; the worker resumes sessions whose wakeAt has passed.
+  wakeAt         DateTime?
+  variables      Json                 @default("{}")
+  startedAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  endedAt        DateTime?
+
+  chatbot Chatbot @relation(fields: [chatbotId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, conversationId, status])
+  @@index([status, wakeAt])
+}
+
+// Per-workspace assignment settings (one row per tenant).
+model RoutingConfig {
+  id              String   @id @default(cuid())
+  tenantId        String   @unique
+  autoAssign      Boolean  @default(false)
+  // round_robin | least_busy
+  mode            String   @default("round_robin")
+  timezone        String   @default("Asia/Kolkata")
+  // { days: [0-6], start: "HH:MM", end: "HH:MM" } or null for always on
+  workingHours    Json?
+  maxOpenPerAgent Int?
+  fallbackUserId  String?
+  updatedAt       DateTime @updatedAt
+}
+
+model AgentAvailability {
+  id             String    @id @default(cuid())
+  tenantId       String
+  userId         String
+  available      Boolean   @default(true)
+  maxOpen        Int?
+  lastAssignedAt DateTime?
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([tenantId, userId])
+  @@index([tenantId, available])
+}
+
+// ---------------------------------------------------------------------------
+// Growth platform and Phase 3 (see docs/PRODUCT-SPEC-GROWTH.md, docs/phase3-contracts.md)
+// Statuses are plain strings validated in code. Money is integer minor units (paise).
+// ---------------------------------------------------------------------------
+
+model MetaConnection {
+  id                String    @id @default(cuid())
+  tenantId          String
+  metaUserId        String
+  businessId        String?
+  scopes            String[]
+  // Encrypted with src/lib/crypto. Never returned by any API.
+  tokenEnc          String
+  tokenExpiresAt    DateTime?
+  // active | expiring | expired | revoked | error
+  status            String    @default("active")
+  connectedByUserId String
+  lastCheckedAt     DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  assets MetaAsset[]
+
+  @@unique([tenantId, metaUserId])
+  @@index([tenantId, status])
+}
+
+model MetaAsset {
+  id           String   @id @default(cuid())
+  tenantId     String
+  connectionId String
+  // page | instagram | ad_account | dataset | catalog | threads
+  type         String
+  externalId   String
+  name         String?
+  // Page access tokens etc., encrypted.
+  tokenEnc     String?
+  status       String   @default("active")
+  meta         Json     @default("{}")
+  // Spend controls (0009): a Meta sandbox ad account. Wall (a) is skipped and its ledger rows are flagged.
+  sandbox      Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  connection MetaConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, type, externalId])
+  @@index([tenantId, type])
+}
+
+model Brand {
+  id                String   @id @default(cuid())
+  tenantId          String
+  name              String
+  websiteUrl        String?
+  logoUrl           String?
+  colors            String[]
+  fonts             String[]
+  tone              String?
+  bannedWords       String[]
+  industry          String?
+  // none | housing | employment | credit | social_issues
+  specialAdCategory String   @default("none")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  briefs CreativeBrief[]
+
+  @@index([tenantId])
+}
+
+model CreativeBrief {
+  id              String   @id @default(cuid())
+  tenantId        String
+  brandId         String
+  // leads | messages | traffic | awareness
+  goal            String
+  offer           String
+  // draft | researching | angles_ready | generating | ready | approved | archived
+  status          String   @default("draft")
+  researchSummary Json?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  brand  Brand           @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  angles CreativeAngle[]
+  assets CreativeAsset[]
+
+  @@index([tenantId, status])
+}
+
+model CreativeAngle {
+  id        String  @id @default(cuid())
+  tenantId  String
+  briefId   String
+  hook      String
+  audience  String
+  cta       String
+  rationale String?
+  selected  Boolean @default(false)
+
+  brief  CreativeBrief   @relation(fields: [briefId], references: [id], onDelete: Cascade)
+  assets CreativeAsset[]
+
+  @@index([tenantId, briefId])
+}
+
+model CreativeAsset {
+  id          String   @id @default(cuid())
+  tenantId    String
+  briefId     String
+  angleId     String?
+  // image | video | copy
+  kind        String
+  // feed | story | reel | square | none
+  placement   String   @default("feed")
+  headline    String?
+  body        String?
+  storageKey  String?
+  provider    String?
+  aiGenerated Boolean  @default(true)
+  creditCost  Int      @default(0)
+  // pending | ready | failed | approved | rejected
+  status      String   @default("pending")
+  // { result: pass|warn|block, findings: [...] }
+  policyCheck Json?
+  createdAt   DateTime @default(now())
+
+  brief CreativeBrief  @relation(fields: [briefId], references: [id], onDelete: Cascade)
+  angle CreativeAngle? @relation(fields: [angleId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, briefId])
+}
+
+model ApprovalRequest {
+  id          String    @id @default(cuid())
+  tenantId    String
+  // creative_asset | creative_brief | ad_campaign | scheduled_post | optimizer_proposal
+  subjectType String
+  subjectId   String
+  tokenHash   String    @unique
+  // pending | approved | changes_requested | rejected | expired
+  status      String    @default("pending")
+  comment     String?
+  expiresAt   DateTime
+  decidedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([tenantId, status])
+}
+
+model AdCampaign {
+  id                String    @id @default(cuid())
+  tenantId          String
+  adAccountAssetId  String
+  metaCampaignId    String?
+  name              String
+  // lead_generation | click_to_whatsapp | traffic | boost_post
+  template          String
+  objective         String
+  // draft | paused | active | archived | error
+  status            String    @default("draft")
+  dailyBudgetMinor  Int
+  currency          String    @default("INR")
+  startsAt          DateTime?
+  endsAt            DateTime?
+  specialAdCategory String    @default("none")
+  createdByUserId   String?
+  launchedAt        DateTime?
+  lastError         String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Spend controls (0009). origin: human | assistant | api. CHECKs in SQL only: an assistant campaign needs endsAt or a lifetime budget.
+  origin                   String   @default("human")
+  assistantKey             String?
+  lifetimeBudgetMinor      BigInt?
+  targetCostPerResultMinor BigInt?
+  sandbox                  Boolean  @default(false)
+
+  adSets AdSet[]
+
+  @@index([tenantId, status])
+}
+
+model AdSet {
+  id               String   @id @default(cuid())
+  tenantId         String
+  campaignId       String
+  metaAdSetId      String?
+  name             String
+  status           String   @default("draft")
+  // { geo, ageMin, ageMax, genders, interests, placements } validated in src/lib/ads/targeting.ts
+  targeting        Json
+  dailyBudgetMinor Int?
+  createdAt        DateTime @default(now())
+  // Spend controls (0009)
+  lifetimeBudgetMinor BigInt?
+
+  campaign AdCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  ads      Ad[]
+
+  @@index([tenantId, campaignId])
+}
+
+model Ad {
+  id              String   @id @default(cuid())
+  tenantId        String
+  adSetId         String
+  metaAdId        String?
+  creativeAssetId String?
+  name            String
+  status          String   @default("draft")
+  // { pageId, instagramId, message, headline, link, cta, leadFormId, whatsappNumberId }
+  creative        Json
+  createdAt       DateTime @default(now())
+
+  adSet AdSet @relation(fields: [adSetId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, adSetId])
+}
+
+model InsightSnapshot {
+  id             String   @id @default(cuid())
+  tenantId       String
+  // campaign | adset | ad
+  entityType     String
+  entityMetaId   String
+  date           DateTime @db.Date
+  spendMinor     Int      @default(0)
+  impressions    Int      @default(0)
+  clicks         Int      @default(0)
+  results        Int      @default(0)
+  frequency      Float?
+  qualityRanking String?
+  raw            Json?
+  createdAt      DateTime @default(now())
+
+  @@unique([tenantId, entityType, entityMetaId, date])
+  @@index([tenantId, date])
+}
+
+model OptimizerProposal {
+  id              String    @id @default(cuid())
+  tenantId        String
+  // pause_ad | shift_budget | rotate_creative | new_angle
+  kind            String
+  targetType      String
+  targetMetaId    String
+  rationale       String
+  payload         Json
+  revertPayload   Json?
+  // proposed | approved | applied | rejected | expired | failed
+  status          String    @default("proposed")
+  decidedByUserId String?
+  appliedAt       DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([tenantId, status])
+}
+
+model LeadForm {
+  id          String   @id @default(cuid())
+  tenantId    String
+  pageAssetId String
+  metaFormId  String
+  name        String?
+  consentText String?
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+
+  leads Lead[]
+
+  @@unique([tenantId, metaFormId])
+}
+
+model Lead {
+  id              String    @id @default(cuid())
+  tenantId        String
+  leadFormId      String?
+  leadgenId       String
+  contactId       String?
+  fields          Json
+  campaignMetaId  String?
+  adMetaId        String?
+  consentText     String?
+  consentAt       DateTime?
+  // new | contacted | qualified | won | lost | invalid
+  status          String    @default("new")
+  assignedToId    String?
+  firstResponseAt DateTime?
+  createdAt       DateTime  @default(now())
+
+  leadForm LeadForm?         @relation(fields: [leadFormId], references: [id], onDelete: SetNull)
+  runs     LeadSequenceRun[]
+
+  @@unique([tenantId, leadgenId])
+  @@index([tenantId, status])
+}
+
+model LeadSequence {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  enabled   Boolean  @default(true)
+  // [{ delayMinutes, templateId?, chatbotId?, stopOnReply }]
+  steps     Json
+  // optional filter: { leadFormId?, campaignMetaId? }
+  appliesTo Json?
+  createdAt DateTime @default(now())
+
+  runs LeadSequenceRun[]
+
+  @@index([tenantId, enabled])
+}
+
+model LeadSequenceRun {
+  id         String    @id @default(cuid())
+  tenantId   String
+  sequenceId String
+  leadId     String
+  stepIndex  Int       @default(0)
+  nextRunAt  DateTime?
+  // active | completed | stopped
+  status     String    @default("active")
+  createdAt  DateTime  @default(now())
+
+  sequence LeadSequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  lead     Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@unique([sequenceId, leadId])
+  @@index([status, nextRunAt])
+}
+
+model ScheduledPost {
+  id              String   @id @default(cuid())
+  tenantId        String
+  body            String
+  mediaKeys       String[]
+  scheduledAt     DateTime
+  // draft | scheduled | publishing | published | partial | failed | canceled
+  status          String   @default("draft")
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  targets PostTarget[]
+
+  @@index([tenantId, scheduledAt])
+  @@index([status, scheduledAt])
+}
+
+model PostTarget {
+  id          String    @id @default(cuid())
+  tenantId    String
+  postId      String
+  assetId     String
+  // facebook | instagram | threads
+  channel     String
+  status      String    @default("pending")
+  externalId  String?
+  error       String?
+  publishedAt DateTime?
+
+  post ScheduledPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, postId])
+}
+
+model ConversionEvent {
+  id        String   @id @default(cuid())
+  tenantId  String
+  leadId    String?
+  contactId String?
+  datasetId String
+  eventName String
+  eventTime DateTime
+  // pending | sent | failed | skipped
+  status    String   @default("pending")
+  attempts  Int      @default(0)
+  response  Json?
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, status])
+}
+
+model UsageLedger {
+  id        String   @id @default(cuid())
+  tenantId  String
+  // ai_credits | ad_accounts | posts
+  meter     String
+  amount    Int
+  refType   String?
+  refId     String?
+  createdAt DateTime @default(now())
+  // Spend controls (0009): token counts and model of an AI call, stored by the AI gateway.
+  inputTokens  Int?
+  outputTokens Int?
+  model        String?
+
+  @@index([tenantId, meter, createdAt])
+}
+
+model AiAgent {
+  id                        String   @id @default(cuid())
+  tenantId                  String
+  name                      String
+  enabled                   Boolean  @default(false)
+  phoneNumberId             String?
+  instructions              String
+  tone                      String?
+  language                  String   @default("auto")
+  // always | outside_hours | no_human_reply_minutes
+  activation                String   @default("always")
+  handoffKeywords           String[]
+  maxRepliesPerConversation Int      @default(10)
+  model                     String?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  sources AiKnowledgeSource[]
+
+  @@index([tenantId, enabled])
+}
+
+model AiKnowledgeSource {
+  id        String   @id @default(cuid())
+  tenantId  String
+  agentId   String
+  // text | url | faq
+  kind      String
+  title     String
+  content   String
+  sourceUrl String?
+  status    String   @default("ready")
+  createdAt DateTime @default(now())
+
+  agent AiAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, agentId])
+}
+
+model McpConnection {
+  id           String   @id @default(cuid())
+  tenantId     String
+  name         String
+  url          String
+  // Encrypted bearer token for the customer's own MCP server.
+  authEnc      String?
+  // Tool names the customer allowed the agent to call; empty means none.
+  allowedTools String[]
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  @@index([tenantId, enabled])
+}
+
+model ShopifyStore {
+  id               String   @id @default(cuid())
+  tenantId         String
+  shopDomain       String
+  tokenEnc         String
+  webhookSecretEnc String?
+  status           String   @default("active")
+  createdAt        DateTime @default(now())
+
+  carts AbandonedCart[]
+
+  @@unique([tenantId, shopDomain])
+}
+
+model AbandonedCart {
+  id             String    @id @default(cuid())
+  tenantId       String
+  storeId        String
+  externalId     String
+  contactId      String?
+  phone          String?
+  items          Json
+  totalMinor     Int?
+  currency       String?
+  checkoutUrl    String?
+  // cart | checkout
+  stage          String    @default("checkout")
+  // open | recovered | expired | opted_out
+  status         String    @default("open")
+  // reminders already sent, 0..3
+  remindersSent  Int       @default(0)
+  nextReminderAt DateTime?
+  createdAt      DateTime  @default(now())
+
+  store ShopifyStore @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, externalId])
+  @@index([status, nextReminderAt])
+}
+
+// ---------------------------------------------------------------------------
+// Gap-closure additions (migration 0006): additive only. See docs/GAP-CLOSURE-PLAN.md.
+// ---------------------------------------------------------------------------
+
+model Team {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  members TeamMember[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model TeamMember {
+  id       String @id @default(cuid())
+  tenantId String
+  teamId   String
+  userId   String
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+  @@index([tenantId, userId])
+}
+
+// Saved audience definitions used by broadcasts, rules and the contacts list.
+// filter: { all?: Condition[], any?: Condition[] } with Condition = { field, op, value } (see src/lib/segments).
+model Segment {
+  id              String   @id @default(cuid())
+  tenantId        String
+  name            String
+  filter          Json
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+// Per-conversation personal markers (favourites, unread line) for one agent.
+model ConversationMark {
+  id             String   @id @default(cuid())
+  tenantId       String
+  conversationId String
+  userId         String
+  // favorite | unread
+  kind           String
+  createdAt      DateTime @default(now())
+
+  @@unique([conversationId, userId, kind])
+  @@index([tenantId, userId, kind])
+}
+
+model SavedInboxFilter {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  name      String
+  query     Json
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, userId])
+}
+
+// Reply materials: reusable text, media and canned answers shared by rules, chatbots and agents.
+model ReplyMaterial {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  // text | media | document
+  kind      String   @default("text")
+  body      String?
+  mediaKey  String?
+  mediaMime String?
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, name])
+}
+
+// Execution log of rules v2 (one row per rule per conversation firing), also feeds trigger metering.
+model RuleExecution {
+  id             String   @id @default(cuid())
+  tenantId       String
+  ruleId         String
+  conversationId String?
+  contactId      String?
+  // ok | skipped | failed
+  outcome        String
+  detail         String?
+  createdAt      DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([ruleId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Spend controls, Phase 0 (migration 0009_spend_controls, docs/SPEND-CONTROLS-SPEC.md 3.3)
+// Money is BigInt in minor units of an explicit currency; AI uses the pseudo-currency CRD (credits, exponent 0).
+// No FK relations to Tenant, like AuditLog and InsightSnapshot: erasure goes through PERSONAL_DATA.
+// NOTE: the partial indexes, CHECK constraints and append-only triggers in 0009 exist only in SQL.
+// ---------------------------------------------------------------------------
+
+model SpendControl {
+  tenantId                       String    @id
+  freeze                         String    @default("none") // none | assistants | all
+  frozenByKind                   String?
+  frozenByUserId                 String?
+  frozenReason                   String?
+  frozenAt                       DateTime?
+  probation                      String    @default("auto") // auto | lifted | forced
+  probationReason                String?
+  probationChangedByUserId       String?
+  verifiedAt                     DateTime?
+  spendingAdAccountAssetId       String?
+  timezone                       String    @default("Asia/Kolkata")
+  approverUserIds                String[]  @default([])
+  approvalTtlHours               Int       @default(12)
+  targetCostPerLeadMinor         BigInt?
+  breakersMayPauseHumanCampaigns Boolean   @default(false)
+  digestEnabled                  Boolean   @default(true)
+  version                        Int       @default(1)
+  updatedAt                      DateTime  @updatedAt
+}
+
+model SpendAllowance {
+  id                   String   @id @default(cuid())
+  tenantId             String
+  pot                  String   // ads | messaging | ai
+  currency             String
+  dailyLimitMinor      BigInt?
+  monthlyLimitMinor    BigInt?
+  migratedFromCapMinor BigInt?
+  version              Int      @default(1)
+  updatedByUserId      String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@unique([tenantId, pot])
+}
+
+model SpendCeiling {
+  id           String    @id @default(cuid())
+  scope        String    // platform | probation | plan | tenant
+  scopeId      String    // '*' | Plan.id | Tenant.id
+  pot          String
+  currency     String
+  dailyMinor   BigInt?
+  monthlyMinor BigInt?
+  reason       String?
+  setByUserId  String?
+  expiresAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([scope, scopeId, pot, currency])
+}
+
+model SpendCommitment {
+  id                       String    @id @default(cuid())
+  tenantId                 String
+  adAccountAssetId         String
+  campaignId               String
+  adSetId                  String?
+  metaObjectId             String
+  objectLevel              String    // campaign | adset
+  origin                   String    // human | assistant | api
+  assistantKey             String?
+  currency                 String
+  timezone                 String
+  dailyBudgetMinor         BigInt?
+  lifetimeBudgetMinor      BigInt?
+  pendingFromMinor         BigInt?
+  dayKey                   DateTime? @db.Date
+  dayStartBudgetMinor      BigInt?
+  peakDailyBudgetMinor     BigInt    @default(0)
+  weekStart                DateTime? @db.Date
+  weekPeakDailyBudgetMinor BigInt    @default(0)
+  startsAt                 DateTime?
+  endsAt                   DateTime?
+  status                   String    // reserved | live | unconfirmed | stopped
+  reservedUntil            DateTime?
+  correlationId            String?
+  sandbox                  Boolean   @default(false)
+  version                  Int       @default(1)
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  @@index([tenantId, status])
+  @@index([status, reservedUntil])
+  // SQL only: partial unique SpendCommitment_open_object_key (tenantId, metaObjectId) WHERE status <> 'stopped'
+}
+
+model SpendCounter {
+  tenantId      String
+  pot           String    // messaging | ai
+  periodKind    String    // day | month
+  periodKey     String    // YYYY-MM-DD | YYYY-MM (workspace time zone)
+  currency      String
+  reservedMinor BigInt    @default(0)
+  spentMinor    BigInt    @default(0)
+  reconciledAt  DateTime?
+  updatedAt     DateTime  @updatedAt
+
+  @@id([tenantId, pot, periodKind, periodKey])
+}
+
+model SpendReservation {
+  id            String    @id @default(cuid())
+  tenantId      String
+  pot           String
+  currency      String
+  subjectType   String    // broadcast | automation_run | api_batch | ai_call
+  subjectId     String
+  amountMinor   BigInt
+  consumedMinor BigInt    @default(0)
+  status        String    @default("held") // held | settled | released | expired
+  dayKey        String
+  monthKey      String
+  expiresAt     DateTime
+  correlationId String
+  createdAt     DateTime  @default(now())
+  closedAt      DateTime?
+
+  @@index([status, expiresAt])
+  // SQL only: partial unique SpendReservation_open_subject_key (tenantId, subjectType, subjectId) WHERE status = 'held'
+}
+
+model SpendDaily {
+  tenantId    String
+  pot         String
+  scopeType   String   // account | campaign | adset | phone
+  scopeId     String
+  day         DateTime @db.Date
+  currency    String
+  amountMinor BigInt   @default(0)
+  origin      String   // platform | external | all
+  results     Int?
+  impressions BigInt?
+  clicks      BigInt?
+  source      String   // fast_sync | insights | pricing | sim
+  syncedAt    DateTime
+
+  @@id([tenantId, pot, scopeType, scopeId, day, origin]) // (critic) origin in the key
+  @@index([tenantId, pot, day])
+}
+
+model IntradaySpendSample {
+  id               String   @id @default(cuid())
+  tenantId         String
+  adAccountAssetId String
+  entityType       String   // account | adset
+  entityMetaId     String
+  accountDate      DateTime @db.Date
+  sampledAt        DateTime
+  spendMinor       BigInt
+  impressions      BigInt
+  clicks           BigInt
+  results          Int
+
+  @@index([tenantId, entityMetaId, sampledAt])
+}
+
+model SpendLedger {
+  id                 String   @id @default(cuid())
+  seq                BigInt   @unique @default(autoincrement())
+  tenantId           String
+  pot                String   // ads | messaging | ai | none
+  action             String
+  phase              String   // requested | applied | failed | unconfirmed | refused | shadow | reconciled | info
+  actorType          String   // user | assistant | system | breaker | platform_admin | api | external (critic)
+  actorId            String?
+  assistantKey       String?
+  autonomyLevel      Int?     @db.SmallInt
+  targetType         String?
+  targetId           String?
+  metaObjectId       String?
+  currency           String?
+  amountMinor        BigInt?
+  forecastTodayMinor BigInt?
+  forecastMonthMinor BigInt?
+  before             Json?
+  after              Json?
+  snapshot           Json?
+  reason             String
+  reasonCodes        String[] @default([])
+  approvalId         String?
+  undo               Json?
+  correlationId      String
+  idempotencyKey     String?
+  observe            Boolean  @default(false)
+  sandbox            Boolean  @default(false)
+  createdAt          DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, seq])
+  @@index([targetId, action, createdAt])
+  @@index([correlationId])
+  // SQL only: append-only triggers (UPDATE, DELETE and TRUNCATE refused; erasure purges one workspace with the edwyz.purge
+  // GUC set to '<table>:<tenantId>') and the partial uniques SpendLedger_idem_key (tenantId, idempotencyKey, phase) WHERE
+  // idempotencyKey IS NOT NULL, SpendLedger_one_outcome_key (tenantId, correlationId) WHERE phase IN (applied, failed,
+  // unconfirmed, refused) and SpendLedger_one_reconciled_key (tenantId, correlationId) WHERE phase = 'reconciled'.
+}
+
+model MetaSpendLimit {
+  adAccountAssetId                  String    @id
+  tenantId                          String
+  accountExternalId                 String    // (critic) act_ id; partial unique "one manager" index in SQL only
+  spentAtLastWriteMinor             BigInt?   // (critic)
+  mode                              String    @default("off") // off | pending_owner | managed | withdrawn | unavailable_prepaid | no_permission | currency_mismatch | sandbox | error | other_workspace (critic)
+  consentId                         String?
+  unitMode                          String    @default("unverified")
+  semantics                         String    @default("unverified")
+  customerCapAtConsentMinor         BigInt?
+  customerAmountSpentAtConsentMinor BigInt?
+  managedCapMinor                   BigInt?
+  targetCapMinor                    BigInt?
+  pendingTargetMinor                BigInt?
+  lastReadCapMinor                  BigInt?
+  lastReadAmountSpentMinor          BigInt?
+  lastReadAt                        DateTime?
+  monthKey                          String?
+  monthStartAmountSpentMinor        BigInt?
+  loosenessMinor                    BigInt?
+  deferredUntil                     DateTime?
+  writesBlockedUntil                DateTime?
+  lastWriteAt                       DateTime?
+  lastError                         String?
+  currency                          String?
+  timezone                          String?
+  accountStatus                     Int?
+  isPrepay                          Boolean?
+  version                           Int       @default(1)
+  updatedAt                         DateTime  @updatedAt
+
+  @@index([tenantId])
+}
+
+model SpendConsent {
+  id          String   @id @default(cuid())
+  tenantId    String
+  userId      String
+  kind        String   // meta_spend_cap | owner_whatsapp
+  subjectId   String?
+  granted     Boolean
+  textVersion String
+  textSha256  String
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, kind, subjectId, createdAt])
+  // SQL only: append-only triggers, like SpendLedger.
+}
+
+model AssistantMandate {
+  id                     String    @id @default(cuid())
+  tenantId               String
+  assistantKey           String
+  enabled                Boolean   @default(false)
+  level                  Int       @default(0) @db.SmallInt
+  allowedOps             String[]  @default([])
+  maxDailyMinor          BigInt?
+  maxMonthlyMinor        BigInt?
+  currency               String?
+  targetCostPerLeadMinor BigInt?
+  raiseStepPct           Int       @default(20)
+  approvalSharePct       Int       @default(25)
+  shadowStartedAt        DateTime?
+  shadowUntil            DateTime?
+  sandboxOnly            Boolean   @default(false)
+  updatedByUserId        String?
+  version                Int       @default(1)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  @@unique([tenantId, assistantKey])
+}
+
+model SpendApproval {
+  id                 String    @id @default(cuid())
+  tenantId           String
+  assistantKey       String
+  pot                String
+  actionKind         String
+  direction          String    // raise | lower
+  intent             Json
+  fingerprint        String
+  summary            String
+  reason             String
+  forecastTodayMinor BigInt?
+  forecastMonthMinor BigInt?
+  currency           String?
+  status             String    @default("pending") // pending | approved | declined | expired | applied | failed | superseded
+  tokenHash          String    @unique
+  expiresAt          DateTime
+  decidedByUserId    String?
+  decidedVia         String?   // app | link | whatsapp | system
+  decidedAt          DateTime?
+  appliedAt          DateTime?
+  failureReason      String?
+  proposalId         String?
+  notifiedAt         DateTime?
+  correlationId      String
+  createdAt          DateTime  @default(now())
+
+  @@index([tenantId, status, expiresAt])
+}
+
+model SpendBreaker {
+  id              String    @id @default(cuid())
+  tenantId        String
+  kind            String
+  scopeType       String    // workspace | ad_account | campaign | adset | phone | template | waba | assistant
+  scopeId         String
+  state           String    @default("tripped") // tripped | cleared
+  effect          String    // pause_scope | block_raises | block_marketing | block_automated | block_all_outbound | notify_only
+  reason          String
+  details         Json?
+  trippedAt       DateTime  @default(now())
+  clearedAt       DateTime?
+  clearedByUserId String?
+  autoClearAt     DateTime?
+  notifiedAt      DateTime?
+
+  @@index([tenantId, state])
+  // SQL only: partial unique SpendBreaker_open_key (tenantId, kind, scopeType, scopeId) WHERE state = 'tripped'
+}
+
+model AssistantShadowRecord {
+  id                 String    @id @default(cuid())
+  tenantId           String
+  assistantKey       String
+  actionKind         String
+  intent             Json
+  wouldDecision      String    // auto | needs_approval | refuse
+  forecastMonthMinor BigInt?
+  currency           String?
+  reason             String
+  baseline           Json?
+  outcome            Json?     // { h24: {...}, h72: {...}, verdict: would_have_helped | would_have_hurt | neutral | unknown }
+  evaluatedAt        DateTime?
+  createdAt          DateTime  @default(now())
+
+  @@index([tenantId, assistantKey, createdAt])
+}
+
+model OwnerNotifyChannel {
+  id                String    @id @default(cuid())
+  tenantId          String
+  userId            String
+  phoneE164         String
+  optInAt           DateTime?
+  optInTextVersion  String?
+  verifiedAt        DateTime?
+  optOutAt          DateTime?
+  notifierContactId String?
+  lastSentAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@unique([tenantId, userId])
+  @@index([phoneE164])
+}
+
+// ---------- Eddy, action layer and in-app notices (migration 0009_spend_controls; docs/EDDY-SPEC.md 8.2, formerly 0011_eddy) ----------
+// Partial unique indexes, GIN indexes, CHECK constraints and the append-only triggers exist only in SQL.
+model EddyWorkspaceSetting {
+  tenantId         String    @id
+  enabled          Boolean   @default(false)
+  enabledById      String?
+  enabledAt        DateTime?
+  consentVersion   String?
+  proactiveNotices Boolean   @default(true)
+  dailyTurnCap     Int?
+  updatedAt        DateTime  @default(now()) @updatedAt
+}
+
+model EddyUserPref {
+  tenantId         String
+  userId           String
+  language         String    @default("auto")
+  proactive        Boolean   @default(true)
+  mutedNoticeKinds String[]  @default([])
+  firstUseAckAt    DateTime? // (critic)
+  firstUseVersion  String?   // (critic)
+  updatedAt        DateTime  @default(now()) @updatedAt
+
+  @@id([tenantId, userId])
+}
+
+model EddyConversation {
+  id              String    @id @default(cuid())
+  tenantId        String
+  userId          String
+  roleAtStart     Role
+  roleClass       String
+  model           String
+  toolsetVersion  String
+  promptVersion   String
+  visibilityHash  String    // (critic) 5.8
+  language        String    @default("en")
+  title           String?
+  status          String    @default("active")
+  closedReason    String?
+  turnCount       Int       @default(0)
+  nextSeq         Int       @default(0)
+  lastInputTokens Int       @default(0)
+  lastCallAt      DateTime?
+  createdAt       DateTime  @default(now())
+  lastMessageAt   DateTime  @default(now())
+  messages        EddyMessage[]
+  turns           EddyTurn[]
+  actions         ActionRecord[]
+
+  @@index([tenantId, userId, lastMessageAt])
+  @@index([lastMessageAt])
+  // SQL only: partial unique EddyConversation_one_active_key (tenantId, userId) WHERE status = 'active'
+}
+
+model EddyMessage {
+  id              String   @id @default(cuid())
+  conversationId  String
+  tenantId        String
+  turnId          String?
+  seq             Int
+  role            String
+  kind            String
+  content         Json     @db.Json // JSON, not JSONB: keeps the blocks byte-exact for the append-only replay (EDDY 5.8)
+  display         Json?
+  contactIds      String[] @default([])
+  conversationIds String[] @default([])
+  createdAt       DateTime @default(now())
+  conversation    EddyConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, seq])
+  @@index([tenantId, createdAt])
+  // SQL only: GIN index on contactIds and the UPDATE trigger (edwyz_append_only): rows are never edited, only deleted.
+}
+
+model EddyTurn {
+  id               String    @id @default(cuid())
+  conversationId   String?
+  tenantId         String
+  userId           String?
+  status           String    @default("running")
+  model            String
+  language         String
+  rounds           Int       @default(0)
+  toolCalls        Int       @default(0)
+  cardsCreated     Int       @default(0)
+  inputTokens      Int       @default(0)
+  cacheWriteTokens Int       @default(0)
+  cacheReadTokens  Int       @default(0)
+  outputTokens     Int       @default(0)
+  costMicroUsd     BigInt    @default(0)
+  platformMicroUsd BigInt    @default(0) // (critic) 5.10
+  creditsCharged   Int       @default(0)
+  stopReason       String?
+  refusalCategory  String?
+  errorCode        String?
+  requestIds       String[]  @default([])
+  firstTokenMs     Int?
+  durationMs       Int?
+  startedAt        DateTime  @default(now())
+  endedAt          DateTime?
+  conversation     EddyConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, startedAt])
+  @@index([tenantId, userId, startedAt])
+  // SQL only: partial unique EddyTurn_one_running_key (conversationId) WHERE status = 'running'
+}
+
+model ActionRecord {
+  id                 String    @id @default(cuid())
+  tenantId           String
+  userId             String
+  via                String
+  principalId        String
+  conversationId     String?
+  turnId             String?
+  toolUseId          String?
+  action             String
+  risk               String
+  status             String
+  args               Json
+  argsHash           String
+  preview            Json?
+  previewHash        String?
+  nonceHash          String?
+  expiresAt          DateTime?
+  decidedAt          DateTime?
+  result             Json?
+  error              String?
+  undo               Json?
+  undoUntil          DateTime?
+  undoneAt           DateTime?
+  spendPot           String?
+  spendCorrelationId String?
+  spendApprovalId    String?
+  supersededById     String?
+  contactIds         String[]  @default([])
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @default(now()) @updatedAt
+  conversation       EddyConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, userId, status])
+  @@index([conversationId, createdAt])
+  @@index([status, expiresAt])
+  @@index([tenantId, decidedAt])
+  @@index([spendApprovalId])
+  // SQL only: GIN index on contactIds.
+}
+
+model ActionInvocation {
+  id                 String   @id @default(cuid())
+  tenantId           String
+  userId             String?
+  via                String
+  principalId        String
+  opId               String
+  action             String
+  risk               String
+  stage              String
+  outcome            String
+  code               String?
+  argsHash           String
+  argsRedacted       Json     @default("{}")
+  resultRef          String?
+  conversationId     String?
+  turnId             String?
+  actionRecordId     String?
+  spendCorrelationId String?
+  piiItems           Int?
+  durationMs         Int?
+  createdAt          DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, action, createdAt])
+  @@index([opId])
+  // SQL only: append-only guard; the one allowed UPDATE sets userId to NULL (anonymisation) and changes nothing else.
+}
+
+model Notice {
+  id              String    @id @default(cuid())
+  tenantId        String
+  kind            String
+  severity        String
+  audienceUserId  String?
+  audienceMinRole Role      @default(agent)
+  dedupeKey       String
+  subjectType     String?
+  subjectId       String?
+  payload         Json      @default("{}")
+  actions         Json      @default("[]")
+  count           Int       @default(1)
+  source          String    @default("eddy")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @default(now()) @updatedAt
+  expiresAt       DateTime
+  resolvedAt      DateTime?
+  receipts        NoticeReceipt[]
+
+  @@unique([tenantId, dedupeKey])
+  @@index([tenantId, resolvedAt, createdAt])
+  @@index([expiresAt])
+}
+
+model NoticeReceipt {
+  noticeId    String
+  userId      String
+  tenantId    String
+  seenAt      DateTime?
+  dismissedAt DateTime?
+  toastedAt   DateTime?
+  notice      Notice    @relation(fields: [noticeId], references: [id], onDelete: Cascade)
+
+  @@id([noticeId, userId])
+  @@index([tenantId, userId])
+}
+
+model NoticeScanState {
+  tenantId  String
+  scanner   String
+  cursor    Json
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@id([tenantId, scanner])
+}
