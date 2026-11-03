@@ -36,6 +36,12 @@ test.describe("Ad insights", () => {
     // Either the browser clamps it or the page explains the problem; it must not show numbers for a nonsense range.
     const msg = page.getByText(/Choose a valid date range|after|before|earlier/i);
     await expect(msg.first()).toBeVisible();
+    // A range ending after today is refused too: those days have no numbers yet. Two days ahead is past today in any zone.
+    const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
+    await page.getByLabel("From", { exact: true }).fill(day(-5));
+    await page.getByLabel("To", { exact: true }).fill(day(2));
+    await expect(page.getByText(/Choose an end date on or before today/).first()).toBeVisible();
+    await expect(page.getByLabel("To", { exact: true })).toHaveAttribute("max", /^\d{4}-\d{2}-\d{2}$/);
   });
 
   test("connected with no data: says so and offers an update; update degrades gracefully", async ({ page, context }) => {

@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import type { APIRequestContext, BrowserContext, Page } from "@playwright/test";
+import { type APIRequestContext, type BrowserContext, expect, type Page } from "@playwright/test";
 import pg from "pg";
 
 process.loadEnvFile?.(".env");
@@ -40,6 +40,15 @@ export async function signupUser(context: BrowserContext, label = "uat"): Promis
 
 export async function login(page: Page, email: string, password = PASSWORD) {
   await page.goto("/login");
+  // Still signed in (a mocked 401 leaves the real session): /login shows only the notice until "Sign in as someone else" reveals
+  // the form. Retried in case the first click lands before hydration.
+  const other = page.getByRole("button", { name: "Sign in as someone else" });
+  if (await other.isVisible()) {
+    await expect(async () => {
+      if (await other.isVisible()) await other.click({ timeout: 1000 });
+      await expect(page.getByLabel(/email/i)).toBeVisible({ timeout: 1000 });
+    }).toPass();
+  }
   await page.getByLabel(/email/i).fill(email);
   await page.getByLabel(/^password/i).fill(password);
   await page.getByRole("button", { name: /sign in|log in/i }).click();

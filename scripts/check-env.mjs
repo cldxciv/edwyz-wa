@@ -21,7 +21,8 @@ if (file) {
 
 const { errors, warnings, disabled } = checkEnv(env);
 
-// In-memory rate limiters and replay guards are per process: more than one pm2 instance of the web app multiplies every limit.
+// Rate limits are shared through Postgres, but replay guards, the live inbox connection count and the AI reply guard are still per
+// process (docs/ops.md section 2): the web app must stay one pm2 instance.
 function pm2Instances() {
   try {
     const list = JSON.parse(execFileSync("pm2", ["jlist"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 }));
@@ -33,7 +34,7 @@ function pm2Instances() {
   }
 }
 for (const [name, n] of pm2Instances()) {
-  warnings.push(`pm2 app ${name} runs ${n} instances; the web app must run as a single instance until the shared rate limiter exists (docs/ops.md)`);
+  warnings.push(`pm2 app ${name} runs ${n} instances; run the web app as a single instance, because replay guards, the live inbox connection count and the AI reply guard are kept per process (docs/ops.md section 2)`);
 }
 for (const line of errors) console.log(`ERROR  ${line}`);
 for (const line of warnings) console.log(`WARN   ${line}`);

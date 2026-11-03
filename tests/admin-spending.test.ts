@@ -45,6 +45,7 @@ import { GET as settingsGet, PUT as settingsPut } from "@/app/api/admin/spending
 import { parsePlanCeilings, planCeilingValuesOf, savePlanCeilings, updatePlan } from "@/lib/admin/plans";
 import {
   ADMIN_SPEND_AUDIT_ACTIONS,
+  adminVoice,
   amountField,
   ceilingCells,
   compareByRisk,
@@ -894,5 +895,28 @@ describe("small parsers", () => {
   it("names every audit action these pages write", () => {
     expect(ADMIN_SPEND_AUDIT_ACTIONS).toEqual(expect.arrayContaining(TENANT_SPEND_ACTIONS.map((a) => `admin.tenant.${a}`)));
     expect(ADMIN_SPEND_AUDIT_ACTIONS).toEqual(expect.arrayContaining(["admin.spend.stop_all", "admin.spend.stop_assistants", "admin.spend.resume", "admin.spend.fx", "admin.spend.notifier", "admin.spend.defaults", "admin.plan.ceilings"]));
+  });
+});
+
+describe("adminVoice (QA 2026-10-30: the admin's workspace page spoke to the owner)", () => {
+  it("says the owner's notes about the workspace and its owner", () => {
+    expect(adminVoice("Your workspace is new, so lower limits apply for now. They go up after your first two payments, or ask support.")).toBe(
+      "This workspace is new, so lower limits apply for now. They go up after its first two payments, or when you mark it verified.",
+    );
+    expect(adminVoice("Not set. Ads can't start until you set a daily limit.")).toBe("Not set. Ads can't start until the owner sets a daily limit.");
+    expect(adminVoice("Not set. Your team and automations send as usual; assistants can't send until you set a limit.")).toBe(
+      "Not set. The team and automations send as usual; assistants can't send until the owner sets a limit.",
+    );
+    expect(adminVoice("Not set. Your plan's monthly credits apply; assistants can't use AI until you set a limit.")).toBe(
+      "Not set. The plan's monthly credits apply; assistants can't use AI until the owner sets a limit.",
+    );
+    expect(adminVoice("Choose which ad account Edwyz can spend from. Until you do, new ads can't start.")).toBe(
+      "The owner chooses which ad account Edwyz can spend from. Until the owner does, new ads can't start.",
+    );
+  });
+
+  it("leaves other text alone, including words that only start like a phrase", () => {
+    expect(adminVoice("Ask the owner to choose a spending ad account.")).toBe("Ask the owner to choose a spending ad account.");
+    expect(adminVoice("Your planned budget")).toBe("Your planned budget");
   });
 });

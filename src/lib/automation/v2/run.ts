@@ -235,7 +235,9 @@ export async function fireRules(event: TriggerEvent, preloaded?: RuleRow[]): Pro
   if (!(await tenantMayRunBackground(tenantId))) return result;
 
   const loaded = await load(event);
-  if (!loaded || loaded.contact.optedOutAt) return result;
+  // An opt-out stops marketing only (lib/contacts/opt-out.ts): rules still run for the contact, and a step that sends a marketing
+  // template is skipped for them (actions.ts sendTemplateAction, then the central gate in inbox/service.ts).
+  if (!loaded) return result;
   if (loaded.conversation?.status === "blocked") return result;
 
   const lineOk = (rule: RuleRow) => !rule.phoneNumberId || !loaded.conversation || loaded.conversation.phoneNumberId === rule.phoneNumberId;

@@ -1,15 +1,21 @@
 import { getActor } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { bodyVariableCount, MAX_TEMPLATE_VARIABLES } from "@/lib/commerce/settings";
+import { reminderSupportReason } from "@/lib/commerce/settings";
 import { errorResponse } from "@/lib/tenancy";
 
 export const dynamic = "force-dynamic";
 
-/** GET -> { templates: [{ id, name, language, category }], phoneNumbers: [{ id, displayPhone }] }. Approved templates usable for reminders only. */
+const HIDDEN_SHOWN = 20;
+
+/**
+ * GET -> { templates: [{ id, name, language, category }], hidden: [{ id, name, language, reason }], phoneNumbers: [{ id, displayPhone }] }.
+ * templates are the approved ones a reminder can fill in; hidden are approved ones it cannot, with the reason, so the merchant knows
+ * why a template is missing. One unusual template never breaks the list.
+ */
 export async function GET(request: Request) {
   try {
     const actor = await getActor(request);
-    const [templates, phoneNumbers] = await Promise.all([
+    const [rows, phoneNumbers] = await Promise.all([
       prisma.template.findMany({
         where: { tenantId: actor.tenantId, status: "approved" },
         orderBy: { name: "asc" },
@@ -18,12 +24,14 @@ export async function GET(request: Request) {
       }),
       prisma.phoneNumber.findMany({ where: { tenantId: actor.tenantId }, select: { id: true, displayPhone: true }, take: 50 }),
     ]);
-    return Response.json({
-      templates: templates
-        .filter((t) => bodyVariableCount(t.components) <= MAX_TEMPLATE_VARIABLES)
-        .map(({ components: _components, ...t }) => t),
-      phoneNumbers,
-    });
+    const templates: { id: string; name: string; language: string; category: string }[] = [];
+    const hidden: { id: string; name: string; language: string; reason: string }[] = [];
+    for (const { components, ...t } of rows) {
+      const reason = reminderSupportReason(components);
+      if (!reason) templates.push(t);
+      else if (hidden.length < HIDDEN_SHOWN) hidden.push({ id: t.id, name: t.name, language: t.language, reason });
+    }
+    return Response.json({ templates, hidden, phoneNumbers });
   } catch (e) {
     return errorResponse(e);
   }

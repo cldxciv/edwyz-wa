@@ -111,6 +111,8 @@ describe("lead ingestion routes the new lead", () => {
 
   it("a failing chat lookup does not stop the lead.created event or the sequence start", async () => {
     db.conversation.findFirst.mockRejectedValue(new Error("db down"));
+    // Only a lead with WhatsApp consent starts a sequence (IG-PAGE-ADS-SPEC 3.11, D35), so this lead ticks the consent question.
+    mocks.graph.mockResolvedValue({ id: "L1", created_time: "2026-10-01T10:00:00+0000", form_id: "f1", campaign_id: "camp", field_data: [{ name: "phone_number", values: ["+91 98765 43210"] }, { name: "consent_whatsapp", values: ["Yes"] }] });
     await expect(run()).resolves.toBeUndefined();
     expect(db.lead.create).toHaveBeenCalledTimes(1);
     expect(db.leadSequence.findMany).toHaveBeenCalled();

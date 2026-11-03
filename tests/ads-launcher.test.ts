@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type Row = Record<string, any>;
-const store = vi.hoisted(() => ({ campaigns: [] as Row[], adSets: [] as Row[], ads: [] as Row[], settings: {} as Record<string, unknown>, seq: 0, audits: [] as Row[], auditFails: false, brandIndustry: null as string | null, creativeAssets: [] as Row[], allowance: null as Row | null }));
+const store = vi.hoisted(() => ({ campaigns: [] as Row[], adSets: [] as Row[], ads: [] as Row[], settings: {} as Record<string, unknown>, seq: 0, audits: [] as Row[], auditFails: false, brandIndustry: null as string | null, creativeAssets: [] as Row[], allowance: null as Row | null, media: [] as Row[], audiences: [] as Row[], tests: [] as Row[] }));
 const graph = vi.hoisted(() => ({ graphFetchAs: vi.fn() }));
 const connect = vi.hoisted(() => ({ getAssetAccess: vi.fn(), listAssets: vi.fn() }));
 const auditMock = vi.hoisted(() => ({ audit: vi.fn(async () => undefined) }));
@@ -14,7 +14,7 @@ const auditMock = vi.hoisted(() => ({ audit: vi.fn(async () => undefined) }));
 const book = vi.hoisted(() => {
   const state = { refuse: null as Error | null, createRefuse: null as Error | null, today: null as bigint | null, month: null as bigint | null, daily: 10_000_000n as bigint | null, monthly: null as bigint | null, dailyBinding: "owner", monthlyBinding: "owner", calls: [] as string[] };
   // An ads permit that covers every object: the fake book does not model which objects an intent touches.
-  const everything = new Proxy({} as Record<string, unknown>, { get: (_t, k) => (typeof k === "string" ? { status: "ACTIVE", maxDailyMinor: 10n ** 15n } : undefined) });
+  const everything = new Proxy({} as Record<string, unknown>, { get: (_t, k) => (typeof k === "string" ? { status: "ACTIVE", maxDailyMinor: 10n ** 15n, endsAt: new Date(8.64e15) } : undefined) });
   let seq = 0;
   const later = () => new Date(Date.now() + 600_000);
   return {
@@ -35,10 +35,10 @@ const book = vi.hoisted(() => {
       state.calls.push(`settleAds:${outcome}`);
       return { updated: 1 };
     }),
-    recordLowering: vi.fn(async (_t: string, intent: { kind: string; metaObjectId: string; toMinor?: bigint }, _a: unknown, _r: string, run: (p: unknown) => Promise<void>, _o?: unknown) => {
+    recordLowering: vi.fn(async (_t: string, intent: { kind: string; metaObjectId: string; toMinor?: bigint; endsAt?: Date }, _a: unknown, _r: string, run: (p: unknown) => Promise<void>, _o?: unknown) => {
       state.calls.push(`recordLowering:${intent.kind}:${intent.metaObjectId}`);
       // Like the real book, a cut's permit carries the value it was minted for.
-      await run({ type: "lowering", kind: intent.kind, metaObjectIds: [intent.metaObjectId], ...(intent.toMinor !== undefined ? { maxBudgetMinor: intent.toMinor } : {}) });
+      await run({ type: "lowering", kind: intent.kind, metaObjectIds: [intent.metaObjectId], ...(intent.toMinor !== undefined ? { maxBudgetMinor: intent.toMinor } : {}), ...(intent.endsAt ? { endsAt: intent.endsAt } : {}) });
       return { correlationId: `low_${++seq}`, bookkeeping: "done" };
     }),
     noteBudgetWriteError: vi.fn(async () => false),
@@ -55,6 +55,7 @@ vi.mock("@/lib/spend/book", () => book);
 function matches(row: Row, where: Row): boolean {
   return Object.entries(where).every(([key, cond]) => {
     if (key === "OR") return (cond as Row[]).some((c) => matches(row, c));
+    if (cond === null) return row[key] === null || row[key] === undefined;
     if (cond && typeof cond === "object" && !(cond instanceof Date)) {
       const c = cond as Row;
       if ("in" in c) return c.in.includes(row[key]);
@@ -109,7 +110,7 @@ Object.assign(db, {
     findFirst: async ({ where }: Row) => {
       const c = store.campaigns.find((r) => matches(r, where));
       if (!c) return null;
-      return { ...c, adSets: store.adSets.filter((s) => s.campaignId === c.id).map((s) => ({ ...s, ads: store.ads.filter((a) => a.adSetId === s.id) })) };
+      return { ...c, adSets: store.adSets.filter((s) => s.campaignId === c.id).map((s) => ({ ...s, ads: store.ads.filter((a) => a.adSetId === s.id) })), adTest: store.tests.find((t) => t.campaignId === c.id) ?? null };
     },
     updateMany: async ({ where, data }: Row) => {
       const rows = store.campaigns.filter((r) => matches(r, where));
@@ -124,6 +125,12 @@ Object.assign(db, {
       return row;
     },
     findMany: async ({ where }: Row) => store.adSets.filter((r) => matches(r, where)),
+    deleteMany: async ({ where }: Row) => {
+      const gone = store.adSets.filter((r) => matches(r, where));
+      store.adSets = store.adSets.filter((r) => !gone.includes(r));
+      store.ads = store.ads.filter((a) => !gone.some((g) => g.id === a.adSetId));
+      return { count: gone.length };
+    },
     findFirst: async ({ where }: Row) => {
       const s = store.adSets.find((r) => matches(r, where));
       if (!s) return null;
@@ -153,6 +160,38 @@ Object.assign(db, {
       rows.forEach((r) => Object.assign(r, data));
       return { count: rows.length };
     },
+    deleteMany: async ({ where }: Row) => {
+      const gone = store.ads.filter((r) => adMatches(r, where));
+      store.ads = store.ads.filter((r) => !gone.includes(r));
+      return { count: gone.length };
+    },
+  },
+  // The ad media library and audiences (IG-PAGE-ADS-SPEC 5.1), read only by the launcher.
+  adMedia: {
+    findMany: async ({ where }: Row) => store.media.filter((r) => matches(r, where)),
+    updateMany: async ({ where, data }: Row) => {
+      const rows = store.media.filter((r) => matches(r, where));
+      rows.forEach((r) => Object.assign(r, data));
+      return { count: rows.length };
+    },
+  },
+  adAudience: { findMany: async ({ where }: Row) => store.audiences.filter((r) => matches(r, where)) },
+  adTest: {
+    create: async ({ data }: Row) => {
+      const row = { id: `t${++store.seq}`, winnerAdSetId: null, ...data };
+      store.tests.push(row);
+      return row;
+    },
+    updateMany: async ({ where, data }: Row) => {
+      const rows = store.tests.filter((r) => matches(r, where));
+      rows.forEach((r) => Object.assign(r, data));
+      return { count: rows.length };
+    },
+    deleteMany: async ({ where }: Row) => {
+      const gone = store.tests.filter((r) => matches(r, where));
+      store.tests = store.tests.filter((r) => !gone.includes(r));
+      return { count: gone.length };
+    },
   },
 });
 
@@ -161,20 +200,29 @@ vi.mock("@/lib/db", () => ({ prisma: db }));
 vi.mock("@/lib/graph", () => graph);
 vi.mock("@/lib/meta-connect", () => connect);
 vi.mock("@/lib/auth/audit", () => auditMock);
-const approvals = vi.hoisted(() => ({ listApprovals: vi.fn(async () => [] as unknown[]), isCampaignClientApproved: vi.fn(async () => false) }));
+const approvals = vi.hoisted(() => ({ listApprovals: vi.fn(async () => [] as unknown[]), isCampaignClientApproved: vi.fn(async () => false), expireDecidedApprovals: vi.fn(async () => 0) }));
+/** The media library, faked: a picture exists unless listed in `missing`; every signed link is new. */
+const media = vi.hoisted(() => ({ missing: new Set<string>(), signed: 0 }));
+vi.mock("@/lib/content/media", () => ({
+  mediaExists: async (_t: string, key: string) => !media.missing.has(key),
+  mediaPublicUrl: (tenantId: string, key: string) => `https://wa.edwyz.com/api/content/media-public/${tenantId}/${key}?exp=${++media.signed}&sig=x`,
+}));
 vi.mock("@/lib/approvals", () => approvals);
 const authMock = vi.hoisted(() => ({ getActor: vi.fn() }));
 vi.mock("@/lib/auth", () => authMock);
 
 import { pauseAd, pauseAdSet, resumeAd, setAdSetBudget } from "@/lib/ads/actions";
-import { buildAdSet, buildCampaign, buildCreative } from "@/lib/ads/builders";
+import { buildAdSet, buildCampaign, buildCreative, creativeProblems, OPTED_OUT_FEATURES, optOutSpec } from "@/lib/ads/builders";
+import { assetImageProblem, isAdPictureKey, usableAssetImage } from "@/lib/ads/asset-image";
 import { adsClient } from "@/lib/ads/client";
 import { assertWithinCap, assertWithinWorkspaceCap, setCaps, workspaceActiveBudget } from "@/lib/ads/caps";
 import { detectSpecialCategoryTerms, urlWords } from "@/lib/ads/category-terms";
-import { activateCampaign, archiveCampaign, ASSISTANT_MAX_END_DAYS, createCampaignDraft, LAUNCH_LEASE_MS, launchCampaign, parseDraftInput, pauseCampaign, previewCampaign } from "@/lib/ads/service";
+import { activateCampaign, AdsMediaNotReadyError, archiveCampaign, ASSISTANT_MAX_END_DAYS, changeCampaignBudget, changeCampaignEnd, createCampaignDraft, getCampaign, getCampaignView, isEditableDraft, LAUNCH_LEASE_MS, launchCampaign, parseDraftInput, parseNewEnd, pauseCampaign, previewCampaign, updateCampaignDraft } from "@/lib/ads/service";
+import { NEW_FLOW_SURFACES, type DraftParseOptions } from "@/lib/ads/draft-input";
+import { PROMOTE_START_SURFACES } from "@/lib/promote/route-guard";
 import { SpendBlockedError } from "@/lib/spend/errors";
 import type { SpendActor } from "@/lib/spend/types";
-import { emptyTargeting, restrictForCategory, SPECIAL_CATEGORY_RULES, validateTargeting } from "@/lib/ads/targeting";
+import { AUDIENCE_NOT_READY, emptyTargeting, restrictForCategory, SPECIAL_CATEGORY_RULES, validateTargeting } from "@/lib/ads/targeting";
 import type { Targeting } from "@/lib/ads/types";
 
 const admin = { userId: "u1", tenantId: "t1", role: "admin" as const };
@@ -232,6 +280,9 @@ beforeEach(() => {
   store.brandIndustry = null;
   store.creativeAssets = [];
   store.allowance = null;
+  store.media = [];
+  store.audiences = [];
+  store.tests = [];
   Object.assign(book.state, { refuse: null, createRefuse: null, today: null, month: null, daily: 10_000_000n, monthly: null, dailyBinding: "owner", monthlyBinding: "owner", calls: [] });
   delete process.env.MAX_DAILY_BUDGET_MINOR;
   delete process.env.SPEND_ENFORCE;
@@ -1495,5 +1546,593 @@ describe("P3-26 the audit trail only claims what happened", () => {
     mockGraph();
     await setAdSetBudget("t1", store.adSets[0].metaAdSetId, 60000, decider);
     expect(store.audits.map((a) => a.action)).toEqual(["ads.adset.budget_change_requested", "ads.adset.budget_changed"]);
+  });
+});
+
+const KEY = "0123456789abcdef0123456789abcdef.jpg";
+
+describe("P7 creatives: Instagram boosts and no automatic changes by Meta", () => {
+  it("switches every listed creative enhancement off, on link ads and boosts alike", () => {
+    const link = buildCreative({ name: "A", template: "traffic", creative: { pageId: "page1", message: "Hi", link: "https://e.com", imageUrl: "https://e.com/a.png" } });
+    const spec = (link.degrees_of_freedom_spec as { creative_features_spec: Record<string, { enroll_status: string }> }).creative_features_spec;
+    expect(Object.keys(spec)).toEqual([...OPTED_OUT_FEATURES]);
+    expect(Object.values(spec).every((v) => v.enroll_status === "OPT_OUT")).toBe(true);
+    expect(spec).toHaveProperty("image_touchups");
+    expect(spec).toHaveProperty("text_optimizations");
+    expect(buildCreative({ name: "B", template: "boost_post", creative: { pageId: "page1", message: "", postId: "page1_9" } })).toMatchObject({ object_story_id: "page1_9", degrees_of_freedom_spec: optOutSpec() });
+  });
+
+  it("boosts an Instagram post through source_instagram_media_id, and checks a post is chosen", () => {
+    const ig = buildCreative({ name: "IG", template: "boost_post", creative: { pageId: "page1", message: "", instagramId: "ig1", instagramMediaId: "17890001" } });
+    expect(ig).toMatchObject({ object_id: "page1", instagram_user_id: "ig1", source_instagram_media_id: "17890001" });
+    expect(ig).not.toHaveProperty("object_story_id");
+    expect(creativeProblems("boost_post", { pageId: "page1", message: "" })).toContain("Choose the post to boost.");
+    expect(creativeProblems("boost_post", { pageId: "page1", message: "", instagramMediaId: "1789" })).toContain("Choose the Instagram account the post is from.");
+    expect(creativeProblems("boost_post", { pageId: "page1", message: "", instagramId: "ig1", instagramMediaId: "1789" })).toEqual([]);
+    expect(creativeProblems("boost_post", { pageId: "page1", message: "", postId: "page1_9" })).toEqual([]);
+  });
+
+  it("only JPG and PNG pictures become ad pictures; SVG placeholders and WebP are named for the wizard", () => {
+    expect(usableAssetImage({ kind: "image", storageKey: "a.png" })).toBe(true);
+    expect(usableAssetImage({ kind: "image", storageKey: "a.JPEG" })).toBe(true);
+    expect(usableAssetImage({ kind: "image", storageKey: "a.webp" })).toBe(false);
+    expect(usableAssetImage({ kind: "image", storageKey: "a.svg" })).toBe(false);
+    expect(assetImageProblem({ kind: "image", storageKey: "a.webp" })).toBe("format");
+    expect(assetImageProblem({ kind: "image", storageKey: "a.svg" })).toBe("placeholder");
+    expect(assetImageProblem({ kind: "image", storageKey: "a.jpg" })).toBeNull();
+    expect(assetImageProblem({ kind: "copy", storageKey: null })).toBeNull();
+    expect(isAdPictureKey(KEY)).toBe(true);
+    expect(isAdPictureKey(KEY.replace(".jpg", ".mp4"))).toBe(false);
+    expect(isAdPictureKey("../../etc/passwd.jpg")).toBe(false);
+  });
+});
+
+describe("P7 pictures from the media library", () => {
+  beforeEach(() => {
+    media.missing.clear();
+    media.signed = 0;
+  });
+  const withPicture = (key: string) => ({ ads: [{ name: "A", creative: { pageId: "page1", message: "Hello", link: "https://example.com", mediaKey: key } }] });
+
+  it("accepts only a JPG or PNG library key", () => {
+    expect(() => parseDraftInput(draftBody(withPicture("0123456789abcdef0123456789abcdef.mov")))).toThrow(/JPG or PNG/);
+    expect(parseDraftInput(draftBody(withPicture(KEY))).ads[0].creative.mediaKey).toBe(KEY);
+  });
+
+  it("signs the picture for the draft, then again at launch, so a waiting draft never sends a dead link", async () => {
+    const calls = mockGraph();
+    const id = await draft(withPicture(KEY));
+    expect(store.ads[0].creative).toMatchObject({ mediaKey: KEY, imageUrl: `https://wa.edwyz.com/api/content/media-public/t1/${KEY}?exp=1&sig=x` });
+    await launchCampaign(admin, id);
+    const creative = calls.find((c) => c.path.endsWith("/adcreatives"))!.body as Row;
+    const sent = creative.object_story_spec.link_data.picture as string;
+    expect(sent.startsWith(`https://wa.edwyz.com/api/content/media-public/t1/${KEY}?exp=`)).toBe(true);
+    expect(sent).not.toBe(store.ads[0].creative.imageUrl);
+    expect(Number(new URL(sent).searchParams.get("exp"))).toBe(media.signed);
+  });
+
+  it("refuses a picture that was deleted from the library, at draft time and before anything is created on Meta", async () => {
+    media.missing.add(KEY);
+    await expect(draft(withPicture(KEY))).rejects.toThrow(/no longer in your media library/);
+    media.missing.clear();
+    const calls = mockGraph();
+    const id = await draft(withPicture(KEY));
+    media.missing.add(KEY);
+    await expect(launchCampaign(admin, id)).rejects.toThrow(/no longer in your media library/);
+    expect(calls).toHaveLength(0);
+    expect(statusOf(id)).toBe("draft");
+  });
+});
+
+describe("P7 editing a draft", () => {
+  it("writes over the draft: one ad set, the new ads, client links expired, audited", async () => {
+    const id = await draft();
+    const setId = store.adSets[0].id;
+    const out = await updateCampaignDraft(admin, id, { ...draftBody({ name: "Spring v2", dailyBudgetMinor: 60000, ads: [{ name: "Only", creative: { pageId: "page1", message: "New words", link: "https://example.com", imageUrl: "https://example.com/c.png" } }] }) });
+    expect(out).toEqual({ campaignId: id, adjustments: [] });
+    expect(store.campaigns).toHaveLength(1);
+    expect(store.campaigns[0]).toMatchObject({ name: "Spring v2", dailyBudgetMinor: 60000, status: "draft" });
+    expect(store.adSets).toHaveLength(1);
+    expect(store.adSets[0]).toMatchObject({ id: setId, name: "Spring v2 ad set", dailyBudgetMinor: 60000 });
+    expect(store.ads.map((a) => a.name)).toEqual(["Only"]);
+    expect(store.ads[0].creative.message).toBe("New words");
+    expect(approvals.expireDecidedApprovals).toHaveBeenCalledWith("t1", "ad_campaign", id, "u1");
+    expect(auditMock.audit).toHaveBeenCalledWith(expect.objectContaining({ action: "ads.campaign.draft_updated", target: id }));
+  });
+
+  it("refuses once anything is on Meta, and for agents", async () => {
+    const id = await launchedCampaign();
+    await expect(updateCampaignDraft(admin, id, draftBody())).rejects.toMatchObject({ status: 409 });
+    const fresh = await draft();
+    await expect(updateCampaignDraft(agent, fresh, draftBody())).rejects.toMatchObject({ status: 403 });
+    const c = { status: "error", metaCampaignId: null, adSets: [{ metaAdSetId: null, ads: [{ metaAdId: null, creative: { metaCreativeId: "cr1" } }] }] };
+    expect(isEditableDraft(c)).toBe(false);
+    expect(isEditableDraft({ ...c, adSets: [{ metaAdSetId: null, ads: [{ metaAdId: null, creative: {} }] }] })).toBe(true);
+    expect(isEditableDraft({ ...c, status: "paused", adSets: [] })).toBe(false);
+  });
+
+  it("the PATCH route edits a draft for an admin", async () => {
+    const { PATCH } = await import("@/app/api/ads/campaigns/[id]/route");
+    authMock.getActor.mockResolvedValue(admin);
+    const id = await draft();
+    const res = await PATCH(new Request("https://wa.edwyz.com/x", { method: "PATCH", headers: { origin: "https://wa.edwyz.com", "content-type": "application/json" }, body: JSON.stringify(draftBody({ name: "Renamed" })) }), { params: Promise.resolve({ id }) });
+    expect(res.status).toBe(200);
+    expect(store.campaigns[0].name).toBe("Renamed");
+  });
+});
+
+describe("P7 changing a campaign that is on Meta", () => {
+  it("a budget raise is reserved through setAdSetBudget before Meta is called; a cut is a lowering", async () => {
+    const id = await launchedCampaign();
+    book.state.calls = [];
+    mockGraph();
+    const raised = await changeCampaignBudget(admin, id, { dailyBudgetMinor: 70000 });
+    expect(raised.appliedDailyBudgetMinor).toBe(70000);
+    expect(book.state.calls).toContain("reserveAds:raise_budget");
+    expect(store.adSets[0].dailyBudgetMinor).toBe(70000);
+    expect(raised.campaign.totalDailyBudgetMinor).toBe(70000);
+    book.state.calls = [];
+    await changeCampaignBudget(admin, id, { dailyBudgetMinor: 30000 });
+    expect(book.state.calls.some((c) => c.startsWith("recordLowering:cut_budget"))).toBe(true);
+    expect(store.adSets[0].dailyBudgetMinor).toBe(30000);
+  });
+
+  it("refuses a draft, a bad amount, a raise over the cap, and a refusal by the book leaves the budget", async () => {
+    const d = await draft();
+    await expect(changeCampaignBudget(admin, d, { dailyBudgetMinor: 70000 })).rejects.toMatchObject({ status: 409 });
+    const id = await launchedCampaign();
+    await expect(changeCampaignBudget(admin, id, { dailyBudgetMinor: 0 })).rejects.toMatchObject({ status: 400 });
+    await expect(changeCampaignBudget(admin, id, { dailyBudgetMinor: "70000" })).rejects.toMatchObject({ status: 400 });
+    await expect(changeCampaignBudget(admin, id, { dailyBudgetMinor: 100001 })).rejects.toThrow(/exceeds the cap/);
+    book.state.refuse = new SpendBlockedError("spend.daily_limit", { left: { minor: 10n, currency: "INR" }, needs: { minor: 20n, currency: "INR" } });
+    await expect(changeCampaignBudget(admin, id, { dailyBudgetMinor: 70000 })).rejects.toBeInstanceOf(SpendBlockedError);
+    expect(store.adSets.find((s) => s.campaignId === id)!.dailyBudgetMinor).toBe(50000);
+  });
+
+  it("an earlier end (or a first one) is a lowering; a later end is reserved first; every ad set gets end_time", async () => {
+    const now = new Date();
+    const id = await launchedCampaign();
+    const calls = mockGraph();
+    book.state.calls = [];
+    const first = new Date(now.getTime() + 10 * 86_400_000);
+    await changeCampaignEnd(admin, id, { endsAt: first.toISOString() });
+    expect(book.state.calls).toContain(`recordLowering:end_earlier:${store.adSets[0].metaAdSetId}`);
+    expect(calls.at(-1)).toMatchObject({ path: store.adSets[0].metaAdSetId, body: { end_time: first.toISOString() } });
+    expect(store.campaigns.find((c) => c.id === id)!.endsAt.getTime()).toBe(first.getTime());
+    book.state.calls = [];
+    const later = new Date(now.getTime() + 20 * 86_400_000);
+    const view = await changeCampaignEnd(admin, id, { endsAt: later.toISOString() });
+    expect(book.state.calls).toEqual(["reserveAds:extend_end", `assertPermitValid:${store.adSets[0].metaAdSetId}`, "settleAds:applied"]);
+    expect(book.reserveAds.mock.calls.at(-1)![1]).toEqual({ kind: "extend_end", campaignId: id, endsAt: later });
+    expect(calls.at(-1)).toMatchObject({ body: { end_time: later.toISOString() } });
+    expect(view.endsAt).toEqual(later);
+    expect(auditMock.audit).toHaveBeenCalledWith(expect.objectContaining({ action: "ads.campaign.end_changed", target: id }));
+    expect(store.audits.map((a) => a.action)).toEqual(expect.arrayContaining(["ads.campaign.end_change_requested", "ads.campaign.end_extended"]));
+  });
+
+  it("a later end that Meta does not confirm stays counted; a refusal by the book changes nothing", async () => {
+    const id = await launchedCampaign();
+    await changeCampaignEnd(admin, id, { endsAt: new Date(Date.now() + 5 * 86_400_000).toISOString() });
+    graph.graphFetchAs.mockRejectedValueOnce(ambiguousError());
+    await expect(changeCampaignEnd(admin, id, { endsAt: new Date(Date.now() + 9 * 86_400_000).toISOString() })).rejects.toThrow(/did not confirm/);
+    expect(book.state.calls.at(-1)).toBe("settleAds:unconfirmed");
+    const before = store.campaigns.find((c) => c.id === id)!.endsAt.getTime();
+    book.state.refuse = new Error("no room");
+    await expect(changeCampaignEnd(admin, id, { endsAt: new Date(Date.now() + 12 * 86_400_000).toISOString() })).rejects.toThrow("no room");
+    expect(store.campaigns.find((c) => c.id === id)!.endsAt.getTime()).toBe(before);
+  });
+
+  it("checks the new end date", () => {
+    const now = new Date("2026-10-30T10:00:00Z");
+    const c = { startsAt: null, origin: "human", lifetimeBudgetMinor: null };
+    expect(() => parseNewEnd("", c, now)).toThrow(/Choose the new end/);
+    expect(() => parseNewEnd("soon", c, now)).toThrow(/ISO date/);
+    expect(() => parseNewEnd("2026-10-30T10:30:00Z", c, now)).toThrow(/an hour from now/);
+    expect(() => parseNewEnd("2026-11-05T10:00:00Z", { ...c, startsAt: new Date("2026-11-06T00:00:00Z") }, now)).toThrow(/after the start/);
+    expect(() => parseNewEnd("2027-06-01T00:00:00Z", { ...c, origin: "assistant" }, now)).toThrow(/within 90 days/);
+    expect(parseNewEnd("2027-06-01T00:00:00Z", { ...c, origin: "assistant", lifetimeBudgetMinor: 100n }, now)).toEqual(new Date("2027-06-01T00:00:00Z"));
+  });
+
+  it("the campaign view is JSON-safe, says whether the draft can be edited and carries Meta's review", async () => {
+    const id = await launchedCampaign();
+    store.adSets[0].lifetimeBudgetMinor = 900000n;
+    store.ads[0].creative = { ...store.ads[0].creative, metaReview: { state: "rejected", metaStatus: "DISAPPROVED", reasons: ["No"], checkedAt: "2026-10-30T00:00:00Z" } };
+    const view = await getCampaignView("t1", id);
+    expect(() => JSON.stringify(view)).not.toThrow();
+    expect(view.adSets[0].lifetimeBudgetMinor).toBe(900000);
+    expect(view.adSets[0].ads[0].review).toMatchObject({ state: "rejected", reasons: ["No"] });
+    expect(view.adSets[0].ads[1].review).toBeNull();
+    expect(view.editable).toBe(false);
+    expect((await getCampaignView("t1", await draft())).editable).toBe(true);
+  });
+
+  it("the budget and end routes need an admin and the same origin", async () => {
+    const { POST: budget } = await import("@/app/api/ads/campaigns/[id]/budget/route");
+    const { POST: end } = await import("@/app/api/ads/campaigns/[id]/end/route");
+    const id = await launchedCampaign();
+    mockGraph();
+    const req = (body: unknown, origin = "https://wa.edwyz.com") => new Request("https://wa.edwyz.com/x", { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify(body) });
+    const params = { params: Promise.resolve({ id }) };
+    authMock.getActor.mockResolvedValue(agent);
+    expect((await budget(req({ dailyBudgetMinor: 60000 }), params)).status).toBe(403);
+    authMock.getActor.mockResolvedValue(admin);
+    expect((await budget(req({ dailyBudgetMinor: 60000 }, "https://evil.example"), params)).status).toBe(403);
+    expect((await budget(req({ dailyBudgetMinor: 60000 }), params)).status).toBe(200);
+    expect(store.adSets.find((s) => s.campaignId === id)!.dailyBudgetMinor).toBe(60000);
+    const res = await end(req({ endsAt: new Date(Date.now() + 3 * 86_400_000).toISOString() }), params);
+    expect(res.status).toBe(200);
+    expect((await res.json()).campaign.id).toBe(id);
+  });
+});
+
+// ===== PRM-05: launch with library media, compared versions, audiences and the account's time zone =====
+
+describe("PRM-05 launch with media, versions, audiences and the account zone (IG-PAGE-ADS-SPEC 6.1 rules 1 and 2, 3.1a, 3.8, 5.4)", () => {
+  const promote: DraftParseOptions = { surface: "promote" };
+  const inDays = (d: number) => new Date(Date.now() + d * 86_400_000).toISOString();
+  const image = (id: string, over: Row = {}): Row => ({
+    id,
+    tenantId: "t1",
+    adAccountAssetId: "acc1",
+    kind: "image",
+    mime: "image/jpeg",
+    bytes: 200_000n,
+    width: 1080,
+    height: 1350,
+    rotation: 0,
+    durationMs: null,
+    videoCodec: null,
+    status: "ready",
+    metaImageHash: `imghash_${id}`,
+    metaVideoId: null,
+    metaThumbHash: null,
+    ...over,
+  });
+  const video = (id: string, over: Row = {}): Row => ({ ...image(id), kind: "video", mime: "video/mp4", bytes: 5_000_000n, width: 1080, height: 1920, durationMs: 15_000, videoCodec: "avc1", metaImageHash: null, metaVideoId: `vid_${id}`, metaThumbHash: `thumbhash_${id}`, ...over });
+  const creative = (over: Row = {}) => ({ pageId: "page1", message: "Diwali offer", link: "https://example.com/diwali", format: "single_image", media: { feed: "med_feed" }, ...over });
+  const promoteBody = (over: Row = {}) => ({
+    name: "Diwali",
+    goal: "website_visits",
+    adAccountAssetId: "acc1",
+    dailyBudgetMinor: 30000,
+    specialAdCategory: "none",
+    endsAt: inDays(7),
+    targeting: baseTargeting(),
+    ads: [{ name: "Offer", creative: creative() }],
+    ...over,
+  });
+  const promoteDraft = async (over: Row = {}) => (await createCampaignDraft(admin, parseDraftInput(promoteBody(over), promote))).campaignId;
+  const versions = (keys: string[]) => keys.map((key) => ({ key, creative: creative({ message: `Offer ${key}`, media: { feed: `med_${key}` } }) }));
+  const withZone = (timezone: string) =>
+    connect.listAssets.mockImplementation(async (tenantId: string, type: string) => {
+      if (tenantId !== "t1") return [];
+      if (type === "ad_account") return [{ id: "acc1", type, externalId: "123", name: "Main", status: "active", meta: { currency: "INR", timezone } }];
+      if (type === "page") return [{ id: "pg", type, externalId: "page1", name: "Page", status: "active", meta: {} }];
+      return [];
+    });
+
+  it("the new flows are the surfaces the Start gate guards", () => {
+    expect([...NEW_FLOW_SURFACES]).toEqual([...PROMOTE_START_SURFACES]);
+  });
+
+  it("returns 409 media_not_ready while a picture or video is still on its way to Meta, and creates nothing", async () => {
+    store.media = [image("med_feed", { status: "processing", metaImageHash: null })];
+    const calls = mockGraph();
+    const id = await promoteDraft();
+    const error = await launchCampaign(admin, id).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AdsMediaNotReadyError);
+    expect(error).toMatchObject({ status: 409, code: "media_not_ready", mediaIds: ["med_feed"] });
+    expect((error as AdsMediaNotReadyError).toJSON()).toEqual({ error: (error as Error).message, code: "media_not_ready", mediaIds: ["med_feed"] });
+    expect(calls).toHaveLength(0);
+    expect(book.permitForPausedCreate).not.toHaveBeenCalled();
+    expect(statusOf(id)).toBe("draft");
+    // A video Meta is still processing says so in plain words.
+    store.media.push(video("med_clip", { status: "uploading" }));
+    const clip = await promoteDraft({ name: "Clip", ads: [{ name: "Clip", creative: creative({ format: "single_video", media: { video: "med_clip" } }) }] });
+    await expect(launchCampaign(admin, clip)).rejects.toThrow(/Meta is still preparing your video/);
+    // Media Meta refused, or that left the library, is a validation error.
+    store.media = [image("med_feed", { status: "error" })];
+    await expect(launchCampaign(admin, id)).rejects.toMatchObject({ status: 400, message: expect.stringContaining("Meta couldn't take a picture or video") });
+    store.media = [];
+    await expect(launchCampaign(admin, id)).rejects.toThrow(/no longer in this ad account's library/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("the launch route answers 409 with code media_not_ready and the media ids, so the page and Eddy can wait and try again", async () => {
+    const { POST } = await import("@/app/api/ads/campaigns/[id]/launch/route");
+    authMock.getActor.mockResolvedValue(admin);
+    const calls = mockGraph();
+    store.media = [image("med_feed", { status: "processing", metaImageHash: null }), video("med_clip", { status: "uploading" })];
+    const call = (id: string) => POST(new Request("https://wa.edwyz.com/x", { method: "POST", headers: { origin: "https://wa.edwyz.com" } }), { params: Promise.resolve({ id }) });
+    const picture = await call(await promoteDraft());
+    expect(picture.status).toBe(409);
+    expect(await picture.json()).toEqual({ error: "Your picture is still being sent to Meta. Try again in a minute.", code: "media_not_ready", mediaIds: ["med_feed"] });
+    const clip = await call(await promoteDraft({ name: "Clip", ads: [{ name: "Clip", creative: creative({ format: "single_video", media: { video: "med_clip" } }) }] }));
+    expect(clip.status).toBe(409);
+    expect(await clip.json()).toEqual({ error: "Meta is still preparing your video. This usually takes 5 to 30 minutes.", code: "media_not_ready", mediaIds: ["med_clip"] });
+    expect(calls).toHaveLength(0);
+    // Any other 409 keeps the plain { error } shape: no code to retry on.
+    store.media = [image("med_feed")];
+    const id = await promoteDraft({ name: "Ready" });
+    expect((await call(id)).status).toBe(200);
+    const again = await call(id);
+    expect(again.status).toBe(409);
+    expect(await again.json()).toEqual({ error: "This campaign has already been launched." });
+  });
+
+  it("refuses a draft that names media from another ad account or workspace", async () => {
+    store.media = [image("med_feed", { adAccountAssetId: "acc2" })];
+    await expect(promoteDraft()).rejects.toMatchObject({ status: 400 });
+    store.media = [image("med_feed", { tenantId: "t2" })];
+    await expect(promoteDraft()).rejects.toThrow(/no longer in this ad account's library/);
+    expect(store.campaigns).toHaveLength(0);
+  });
+
+  it("sends the Meta image hash, video id and thumbnail hash once the media is ready, never the library id", async () => {
+    store.media = [image("med_feed", { metaImageHash: "aaa111" }), image("med_tall", { width: 1080, height: 1920, metaImageHash: "bbb222" }), video("med_clip", { metaVideoId: "777", metaThumbHash: "ccc333" })];
+    const calls = mockGraph();
+    const id = await promoteDraft({
+      ads: [
+        { name: "Picture", creative: creative({ media: { feed: "med_feed", vertical: "med_tall" } }) },
+        { name: "Clip", creative: creative({ format: "single_video", media: { video: "med_clip" } }) },
+      ],
+    });
+    expect(store.ads.map((a) => [a.format, a.mediaIds])).toEqual([
+      ["single_image", ["med_feed", "med_tall"]],
+      ["single_video", ["med_clip"]],
+    ]);
+    await launchCampaign(admin, id);
+    const [picture, clip] = calls.filter((c) => c.path.endsWith("/adcreatives")).map((c) => JSON.stringify(c.body));
+    expect(picture).toContain("aaa111");
+    expect(picture).toContain("bbb222");
+    expect(clip).toContain(`"video_id":"777"`);
+    expect(clip).toContain("ccc333");
+    expect(JSON.stringify(calls)).not.toMatch(/med_(feed|tall|clip)/);
+    for (const c of calls.filter((x) => x.path.endsWith("/adcreatives"))) expect(c.body).not.toHaveProperty("status");
+    // Retention keeps media that a launched ad uses.
+    expect(store.media.every((m) => m.lastUsedAt instanceof Date)).toBe(true);
+  });
+
+  it("creates one ad set per version at an equal share, under one create permit for 1 + ad sets + 2 x ads objects", async () => {
+    store.media = ["A", "B", "C"].map((k) => image(`med_${k}`, { metaImageHash: `hash_${k}` }));
+    const calls = mockGraph();
+    const id = await promoteDraft({ ads: undefined, dailyBudgetMinor: 29000, versions: versions(["C", "A", "B"]) });
+    const sets = store.adSets.filter((s) => s.campaignId === id);
+    expect(sets.map((s) => [s.name, s.variantKey, s.dailyBudgetMinor])).toEqual([
+      ["Version A", "A", 9600],
+      ["Version B", "B", 9600],
+      ["Version C", "C", 9600],
+    ]);
+    expect(store.ads.map((a) => [a.name, a.variantLabel])).toEqual([
+      ["Diwali · Version A", "A"],
+      ["Diwali · Version B", "B"],
+      ["Diwali · Version C", "C"],
+    ]);
+    expect(store.tests).toEqual([expect.objectContaining({ campaignId: id, kind: "creative", mode: "fair_split", status: "draft" })]);
+    // ₹290 split 3 ways is ₹96 each: the amount to confirm is the sum of the shares.
+    expect(store.campaigns[0].dailyBudgetMinor).toBe(28800);
+    expect((await getCampaign("t1", id)).confirmTotalMinor).toBe(28800);
+
+    await launchCampaign(admin, id);
+    expect(book.permitForPausedCreate).toHaveBeenCalledTimes(1);
+    expect(book.permitForPausedCreate).toHaveBeenCalledWith("t1", "123", 1 + 3 + 2 * 3, expect.anything());
+    const creates = calls.filter((c) => /\/(campaigns|adsets|adcreatives|ads)$/.test(c.path));
+    expect(creates.map((c) => c.path.split("/")[1])).toEqual(["campaigns", "adsets", "adcreatives", "ads", "adsets", "adcreatives", "ads", "adsets", "adcreatives", "ads"]);
+    const adsets = creates.filter((c) => c.path.endsWith("/adsets")).map((c) => c.body);
+    expect(adsets.map((b) => [b.name, b.daily_budget, b.status])).toEqual([
+      ["Version A", 9600, "PAUSED"],
+      ["Version B", 9600, "PAUSED"],
+      ["Version C", 9600, "PAUSED"],
+    ]);
+    const bodies = creates.filter((c) => c.path.endsWith("/adcreatives")).map((c) => JSON.stringify(c.body));
+    expect(bodies.map((b) => ["hash_A", "hash_B", "hash_C"].find((h) => b.includes(h)))).toEqual(["hash_A", "hash_B", "hash_C"]);
+    // Every ad lands in its own version's ad set.
+    const adSetIds = creates.filter((c) => c.path.endsWith("/ads")).map((c) => c.body.adset_id);
+    expect(new Set(adSetIds).size).toBe(3);
+    expect(store.adSets.every((s) => s.metaAdSetId && s.status === "paused")).toBe(true);
+  });
+
+  it("'Let Meta pick' keeps the versions as ads of one ad set at the whole budget, with no test", async () => {
+    store.media = ["A", "B"].map((k) => image(`med_${k}`));
+    mockGraph();
+    const id = await promoteDraft({ ads: undefined, compareMode: "meta_picks", versions: versions(["A", "B"]) });
+    const sets = store.adSets.filter((s) => s.campaignId === id);
+    expect(sets).toHaveLength(1);
+    expect(sets[0]).toMatchObject({ dailyBudgetMinor: 30000, name: "Diwali ad set" });
+    expect(store.ads.map((a) => a.variantLabel)).toEqual(["A", "B"]);
+    expect(store.tests).toHaveLength(0);
+    await launchCampaign(admin, id);
+    expect(book.permitForPausedCreate).toHaveBeenCalledWith("t1", "123", 1 + 1 + 2 * 2, expect.anything());
+  });
+
+  it("refuses a version share below one whole unit a day before anything is saved", async () => {
+    store.media = ["A", "B", "C"].map((k) => image(`med_${k}`));
+    await expect(promoteDraft({ ads: undefined, dailyBudgetMinor: 250, versions: versions(["A", "B", "C"]) })).rejects.toThrow(/Each version needs at least ₹1 a day/);
+    expect(store.campaigns).toHaveLength(0);
+  });
+
+  it("sends AdAudience ids as Meta audience ids, and refuses an audience that is not ready before any Meta call", async ({ onTestFinished }) => {
+    // Customer lists are offered (PRM-11: loadAudiences keeps only the kinds PROMOTE_AUDIENCES offers).
+    const level = process.env.PROMOTE_AUDIENCES;
+    process.env.PROMOTE_AUDIENCES = "all";
+    onTestFinished(() => {
+      if (level === undefined) delete process.env.PROMOTE_AUDIENCES;
+      else process.env.PROMOTE_AUDIENCES = level;
+    });
+    store.media = [image("med_feed")];
+    const audience = (id: string, over: Row = {}): Row => ({ id, tenantId: "t1", adAccountAssetId: "acc1", kind: "customer_list", status: "ready", metaAudienceId: "23850001", deletedAt: null, ...over });
+    store.audiences = [audience("aud_in"), audience("aud_out", { kind: "engagement_instagram", metaAudienceId: "23850002" })];
+    let calls = mockGraph();
+    const id = await promoteDraft({ customAudienceIds: ["aud_in"], excludedAudienceIds: ["aud_out"], advantageAudience: true });
+    expect(store.adSets[0].targeting).toMatchObject({ customAudienceIds: ["aud_in"], excludedAudienceIds: ["aud_out"], advantageAudience: true });
+    await launchCampaign(admin, id);
+    const targeting = (calls.find((c) => c.path.endsWith("/adsets"))!.body as Row).targeting;
+    expect(targeting.custom_audiences).toEqual([{ id: "23850001" }]);
+    expect(targeting.excluded_custom_audiences).toEqual([{ id: "23850002" }]);
+    expect(targeting.targeting_automation).toEqual({ advantage_audience: 1 });
+    expect(JSON.stringify(calls)).not.toMatch(/aud_(in|out)/);
+
+    // Still filling on Meta: refused with plain copy before anything is created.
+    store.audiences[0].status = "populating";
+    calls = mockGraph();
+    const later = await promoteDraft({ name: "Later", customAudienceIds: ["aud_in"] });
+    await expect(launchCampaign(admin, later)).rejects.toThrow(AUDIENCE_NOT_READY);
+    // An audience of another ad account resolves to nothing either.
+    store.audiences[0] = audience("aud_in", { adAccountAssetId: "acc2" });
+    await expect(launchCampaign(admin, later)).rejects.toThrow(AUDIENCE_NOT_READY);
+    expect(calls).toHaveLength(0);
+    // Another workspace's audience, or a deleted one, can't even be saved in a draft.
+    store.audiences.push(audience("aud_x", { tenantId: "t2" }), audience("aud_gone", { deletedAt: new Date() }));
+    await expect(promoteDraft({ name: "X", customAudienceIds: ["aud_x"] })).rejects.toThrow(/isn't in this workspace/);
+    await expect(promoteDraft({ name: "Y", excludedAudienceIds: ["aud_gone"] })).rejects.toThrow(/isn't in this workspace/);
+  });
+
+  it("refuses a ready audience whose kind PROMOTE_AUDIENCES no longer offers, before any Meta call (PRM-11)", async ({ onTestFinished }) => {
+    const level = process.env.PROMOTE_AUDIENCES;
+    onTestFinished(() => {
+      if (level === undefined) delete process.env.PROMOTE_AUDIENCES;
+      else process.env.PROMOTE_AUDIENCES = level;
+    });
+    store.media = [image("med_feed")];
+    const audience = (id: string, kind: string, metaAudienceId: string): Row => ({ id, tenantId: "t1", adAccountAssetId: "acc1", kind, status: "ready", metaAudienceId, deletedAt: null });
+    store.audiences = [audience("aud_list", "customer_list", "23850001"), audience("aud_eng", "engagement_instagram", "23850002")];
+    // Customer lists switched off (engagement): a ready list is refused, as a target and as an exclusion.
+    process.env.PROMOTE_AUDIENCES = "engagement";
+    let calls = mockGraph();
+    const list = await promoteDraft({ name: "List", customAudienceIds: ["aud_list"] });
+    await expect(launchCampaign(admin, list)).rejects.toThrow(AUDIENCE_NOT_READY);
+    const excluded = await promoteDraft({ name: "Excluded", customAudienceIds: ["aud_eng"], excludedAudienceIds: ["aud_list"] });
+    await expect(launchCampaign(admin, excluded)).rejects.toThrow(AUDIENCE_NOT_READY);
+    expect(calls).toHaveLength(0);
+    // An engagement audience is still offered at that level.
+    const engaged = await promoteDraft({ name: "Engaged", customAudienceIds: ["aud_eng"] });
+    await launchCampaign(admin, engaged);
+    expect((calls.find((c) => c.path.endsWith("/adsets"))!.body as Row).targeting.custom_audiences).toEqual([{ id: "23850002" }]);
+    // Off: saved audiences only, so no Meta audience goes into a new ad set.
+    process.env.PROMOTE_AUDIENCES = "off";
+    calls = mockGraph();
+    const later = await promoteDraft({ name: "Later", customAudienceIds: ["aud_eng"] });
+    await expect(launchCampaign(admin, later)).rejects.toThrow(AUDIENCE_NOT_READY);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("sends start and end times with the ad account zone's offset at each instant (D30)", async () => {
+    withZone("America/New_York");
+    const calls = mockGraph();
+    // Across New York's change to daylight time on Sun 14 Mar 2027: one offset at the start, another at the end.
+    const id = await draft({ startsAt: "2027-03-10T15:00:00Z", endsAt: "2027-03-16T03:59:00Z" });
+    await launchCampaign(admin, id);
+    const adset = calls.find((c) => c.path.endsWith("/adsets"))!.body;
+    expect(adset.start_time).toBe("2027-03-10T10:00:00-0500");
+    expect(adset.end_time).toBe("2027-03-15T23:59:00-0400");
+    // The preview shows the same times.
+    const preview = await previewCampaign(admin, id);
+    expect(preview.payload.adSet).toMatchObject({ end_time: "2027-03-15T23:59:00-0400" });
+  });
+
+  it("a run length ends at 23:59 in the account zone, and starting now sends no start time", async () => {
+    withZone("Asia/Kolkata");
+    store.media = [image("med_feed")];
+    const calls = mockGraph();
+    const id = await promoteDraft({ endsAt: undefined, runDays: 7, startMode: "now" });
+    expect(store.campaigns[0]).toMatchObject({ runDays: 7, startMode: "now", startsAt: null, surface: "promote", goal: "website_visits", placementMode: "auto" });
+    await launchCampaign(admin, id);
+    const adset = calls.find((c) => c.path.endsWith("/adsets"))!.body;
+    expect(adset.end_time).toMatch(/T23:59:00\+0530$/);
+    expect(adset).not.toHaveProperty("start_time");
+  });
+
+  it("keeps the lease and orphan adoption with versions: a retry adopts the campaign by name and creates only what is missing", async () => {
+    store.media = ["A", "B"].map((k) => image(`med_${k}`));
+    const id = await promoteDraft({ ads: undefined, versions: versions(["A", "B"]) });
+    // The campaign POST fails without an answer: Meta may have created it.
+    graph.graphFetchAs.mockImplementation(async (_t: string, req: Row) => {
+      if (req.method !== "GET" && /\/campaigns$/.test(req.path)) throw new Error("timeout");
+      return { id: "x" };
+    });
+    await expect(launchCampaign(admin, id)).rejects.toThrow(/Could not create the campaign/);
+    expect(statusOf(id)).toBe("error");
+    // Another launch holding a fresh claim is honoured.
+    Object.assign(store.campaigns[0], { status: "launching", updatedAt: new Date() });
+    await expect(launchCampaign(admin, id)).rejects.toThrow(/already being launched/);
+    Object.assign(store.campaigns[0], { updatedAt: new Date(Date.now() - LAUNCH_LEASE_MS - 60_000) });
+    book.permitForPausedCreate.mockClear();
+    const calls: Row[] = [];
+    graph.graphFetchAs.mockImplementation(async (_t: string, req: Row) => {
+      calls.push(req);
+      if (req.method === "GET" && /\/campaigns$/.test(req.path)) return { data: [{ id: "orphan9", name: "Diwali", status: "PAUSED", created_time: new Date().toISOString() }] };
+      return { id: `m_${calls.length}` };
+    });
+    const result = await launchCampaign(admin, id);
+    expect(result.metaCampaignId).toBe("orphan9");
+    expect(calls.filter((c) => c.method !== "GET" && String(c.path).endsWith("/campaigns"))).toHaveLength(0);
+    expect(calls.filter((c) => String(c.path).endsWith("/adsets")).map((c) => c.body.campaign_id)).toEqual(["orphan9", "orphan9"]);
+    expect(book.permitForPausedCreate).toHaveBeenCalledWith("t1", "123", 1 + 2 + 2 * 2, expect.anything());
+    expect(result.status).toBe("paused");
+  });
+
+  it("a draft of the new flows may use a goal the old routes can't, built PAUSED like every other", async () => {
+    store.media = [image("med_feed")];
+    const calls = mockGraph();
+    const id = await promoteDraft({ goal: "awareness", ads: [{ name: "Reach", creative: creative({ link: undefined }) }] });
+    expect(store.campaigns[0]).toMatchObject({ template: "awareness", goal: "awareness", objective: "OUTCOME_AWARENESS" });
+    await launchCampaign(admin, id);
+    expect(calls[0].body).toMatchObject({ objective: "OUTCOME_AWARENESS", status: "PAUSED" });
+    // The same body from an old route is refused: the surface is the trusted caller's, not the body's.
+    expect(() => parseDraftInput({ ...promoteBody({ goal: "awareness" }), surface: "promote" })).toThrow(/template must be/);
+  });
+
+  it("validation runs the format and placement checks before anything is sent (4.5, 4.6, D31, 6.1 rule 3)", async () => {
+    connect.listAssets.mockImplementation(async (tenantId: string, type: string) => {
+      if (tenantId !== "t1") return [];
+      if (type === "ad_account") return [{ id: "acc1", type, externalId: "123", name: "Main", status: "active", meta: { currency: "INR", timezone: "Asia/Kolkata" } }];
+      if (type === "page") return [{ id: "pg", type, externalId: "page1", name: "Page", status: "active", meta: {} }];
+      if (type === "instagram") return [{ id: "ig", type, externalId: "ig1", name: "Shop IG", status: "active", meta: {} }];
+      return [];
+    });
+    store.media = [image("med_feed"), image("med_wide", { width: 3000, height: 1000 })];
+    const id = await promoteDraft({ targeting: { ...baseTargeting(), placements: ["instagram_feed", "facebook_feed"] }, ads: [{ name: "Offer", creative: creative({ instagramId: "ig1" }) }] });
+    const errors = async () => (await previewCampaign(admin, id)).errors.join(" ");
+    expect((await previewCampaign(admin, id)).errors).toEqual([]);
+    const ad = store.ads[0];
+    // Instagram's hard limits, where the ad shows on Instagram.
+    ad.creative = { ...ad.creative, message: "#tag ".repeat(31) };
+    expect(await errors()).toContain("Offer: Instagram allows at most 30 hashtags. This has 31.");
+    ad.creative = { ...ad.creative, message: "x".repeat(2300) };
+    expect(await errors()).toContain("Offer: Shorten to 2,200 characters for Instagram.");
+    // An Instagram position needs an Instagram account.
+    ad.creative = { ...ad.creative, message: "Hi", instagramId: undefined };
+    expect(await errors()).toContain("Instagram places need an Instagram account. Choose one, or run on Facebook only.");
+    // A picture of a shape the feeds don't take.
+    ad.creative = { ...ad.creative, instagramId: "ig1", media: { feed: "med_wide" } };
+    expect(await errors()).toContain("Offer: This image is 3:1. Feeds take 4:5 to 1.91:1, so crop it to 4:5.");
+    // A carousel of one card.
+    ad.creative = { ...ad.creative, format: "carousel", media: undefined, cards: [{ mediaId: "med_feed", headline: "One" }] };
+    expect(await errors()).toContain("Offer: A carousel needs 2 to 10 cards.");
+    // Meta changed Messenger placements.
+    ad.creative = creative({ instagramId: "ig1" });
+    store.adSets[0].targeting = { ...store.adSets[0].targeting, placements: ["messenger_inbox", "facebook_feed"] };
+    expect(await errors()).toContain("Pick where your ad shows again: Meta changed Messenger placements");
+    // The run: more than 24 hours, and the new flows always end.
+    store.adSets[0].targeting = baseTargeting();
+    expect((await previewCampaign(admin, id)).errors).toEqual([]);
+    store.campaigns[0].endsAt = new Date(Date.now() + 12 * 3_600_000);
+    expect(await errors()).toContain("Meta needs ads with a daily budget to run for more than a day, so the shortest run is 2 days.");
+    store.campaigns[0].endsAt = null;
+    expect(await errors()).toContain("Choose when your ads stop. Ads made here always have an end date.");
+    // Launch refuses the same, with nothing sent.
+    const calls = mockGraph();
+    await expect(launchCampaign(admin, id)).rejects.toMatchObject({ status: 400 });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("previews a draft with versions and library media without calling Meta", async () => {
+    store.media = ["A", "B"].map((k) => image(`med_${k}`, { metaImageHash: `hash_${k}` }));
+    const id = await promoteDraft({ ads: undefined, versions: versions(["A", "B"]) });
+    const preview = await previewCampaign(admin, id);
+    expect(graph.graphFetchAs).not.toHaveBeenCalled();
+    expect(preview.errors).toEqual([]);
+    expect(JSON.stringify(preview.payload.ads[0].creative)).toContain("hash_A");
+    expect(preview.totalDailyBudgetMinor).toBe(30000);
   });
 });

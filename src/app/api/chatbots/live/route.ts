@@ -5,7 +5,11 @@ import { HttpError, errorResponse } from "@/lib/tenancy";
 
 export const dynamic = "force-dynamic";
 
-/** GET ?conversationId= -> { session: latest bot session of the chat or null, available: [{ id, name }] bots that can be started on it }. */
+/**
+ * GET ?conversationId= -> { session: latest bot session of the chat or null, available: [{ id, name }] bots that can be started on
+ * it, aiPaused: true when the AI agent is paused in this chat (it handed the chat over, or was paused for a bot) while an agent that
+ * is switched on could answer here; the inbox then offers "Let the AI answer again" }.
+ */
 export async function GET(request: Request) {
   try {
     const actor = await getActor(request);

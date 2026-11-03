@@ -10,8 +10,24 @@ import { TEMPLATE_LABELS, campaignStatusView, categoryName, formatMinor, friendl
 import { formatMinor as formatSpendMinor, type MoneyDTO } from "@/lib/spend/money";
 import { ceil175 } from "@/lib/spend/worstcase";
 import type { PotView, SpendSummaryView } from "@/lib/spend/summary";
+import { PromoteTiles } from "@/components/promote/PromoteTiles";
+import { PROMOTE_ACCESS_PATH, promoteVisible, type AccessLite, type PromotionItem } from "@/components/promote/results-helpers";
 
-type Item = { id: string; name: string; template: string; status: string; currency: string; totalDailyBudgetMinor: number; adCount: number; lastError: string | null; specialAdCategory: string };
+type Item = {
+  id: string;
+  name: string;
+  template: string;
+  status: string;
+  currency: string;
+  totalDailyBudgetMinor: number;
+  adCount: number;
+  lastError: string | null;
+  specialAdCategory: string;
+  /** wizard | promote | eddy | api (docs/IG-PAGE-ADS-SPEC.md 5.1). */
+  surface?: string | null;
+  goal?: string | null;
+  reviewState?: string | null;
+};
 type Caps = { maxDailyBudgetMinor: number | null; currency: string | null };
 
 const CURRENCIES = ["INR", "USD", "EUR", "GBP", "AED"];
@@ -100,7 +116,7 @@ function CapPanel({ role }: { role: ReturnType<typeof useRole> }) {
           </Alert>
         ) : hasCap ? (
           <p className="text-sm">
-            Current limit: <strong className="text-lg tabular-nums">{formatMinor(caps!.maxDailyBudgetMinor!, activeCurrency)}</strong> a day
+            Current limit: <strong className="text-lg tabular-nums">{formatMinor(caps!.maxDailyBudgetMinor!, activeCurrency)}</strong>{" "}a day
           </p>
         ) : (
           <Alert tone="warn" title="No limit set yet">
@@ -164,9 +180,23 @@ const COLUMNS: Column<Item>[] = [
     { key: "category", header: "Special category", accessor: (c) => (c.specialAdCategory === "none" ? "None" : categoryName(c.specialAdCategory)) },
 ];
 
+/**
+ * The Promote tiles (docs/IG-PAGE-ADS-SPEC.md 7.1): mounted only when promoteAccess says Instagram and Facebook Page ads are
+ * visible to this member (GET /api/promote/access answers 404 while they are hidden, which leaves `access` null).
+ */
+export function PromoteArea({ access, campaigns, onChanged }: { access: AccessLite | null | undefined; campaigns: readonly PromotionItem[]; onChanged?: () => void }) {
+  if (!promoteVisible(access)) return null;
+  return <PromoteTiles campaigns={campaigns} goals={access?.goals ?? null} canWrite={access?.canWrite !== false} onChanged={onChanged} />;
+}
+
 export function CampaignsView() {
   const role = useRole();
-  const { data, error, loading, retry } = useApi<{ campaigns: Item[] }>("/api/ads/campaigns", 10000);
+  const { data, error, loading, reload, retry } = useApi<{ campaigns: Item[] }>("/api/ads/campaigns", 10000);
+  const promote = useApi<{ access: AccessLite }>(canManage(role) ? PROMOTE_ACCESS_PATH : null);
+  // Campaigns run in a connected Meta ad account. Without one, the create buttons point to the connection instead of a wizard
+  // that can only say "connect first". Unknown (loading, or the check failed) keeps the normal buttons.
+  const options = useApi<{ adAccounts: unknown[] }>(canManage(role) ? "/api/ads/options" : null);
+  const noAccount = options.data?.adAccounts.length === 0;
   const blocked = role !== null && !canManage(role);
 
   if (blocked) {
@@ -179,14 +209,21 @@ export function CampaignsView() {
   }
 
   const campaigns = data?.campaigns ?? [];
+  const connect = <LinkButton href="/app/settings/connections">Connect ad account</LinkButton>;
 
   return (
     <div>
       <PageHeader
         title="Ad campaigns"
         description="Run Facebook and Instagram ads from here. New campaigns start paused, so nothing is spent until you activate one."
-        actions={<LinkButton href="/app/ads/new">New campaign</LinkButton>}
+        actions={noAccount ? connect : <LinkButton href="/app/ads/new">New campaign</LinkButton>}
       />
+      {noAccount && campaigns.length > 0 && (
+        <Alert tone="warn" className="mb-6" title="No ad account connected" action={connect}>
+          Your campaigns stay listed here, but new ones need a connected Meta ad account.
+        </Alert>
+      )}
+      <PromoteArea access={promote.data?.access} campaigns={campaigns} onChanged={reload} />
       <CapPanel role={role} />
       {error && !data ? (
         <ErrorState title="We could not load your campaigns" message="Check your connection and try again." action={<Button variant="secondary" onClick={retry}>Try again</Button>} />
@@ -204,12 +241,21 @@ export function CampaignsView() {
             rowKey={(c) => c.id}
             loading={loading}
             empty={
-              <EmptyState
-                compact
-                title="No campaigns yet"
-                body="A campaign shows your ad to the right people on Facebook and Instagram. Pick a goal, set a daily budget and review it before anything is spent."
-                action={<LinkButton href="/app/ads/new">Create a campaign</LinkButton>}
-              />
+              noAccount ? (
+                <EmptyState
+                  compact
+                  title="No campaigns yet"
+                  body="Campaigns run in your Meta ad account. Connect it first, then pick a goal, set a daily budget and review it before anything is spent."
+                  action={connect}
+                />
+              ) : (
+                <EmptyState
+                  compact
+                  title="No campaigns yet"
+                  body="A campaign shows your ad to the right people on Facebook and Instagram. Pick a goal, set a daily budget and review it before anything is spent."
+                  action={<LinkButton href="/app/ads/new">Create a campaign</LinkButton>}
+                />
+              )
             }
           />
         </>

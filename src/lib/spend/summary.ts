@@ -26,7 +26,7 @@ import { getAllowance, previewAllowanceChange, setAllowances, type AllowancePatc
 import { hashApprovalToken, isApprovalTokenShape } from "./approval-token";
 import { adsHeadroomDetail, headroom, type AdsHeadroomDetail } from "./book";
 import { listBreakers, type BreakerRow } from "./breakers/state";
-import { isMetaLimitManaged, loadAdAccounts, toMetaLimitRow, type AdAccountInfo } from "./commitments";
+import { isMetaLimitManaged, loadAdAccounts, toMetaLimitRow, type AdAccountInfo, type AdsFigures } from "./commitments";
 import { applyLedgered, getControl, type SpendControlState, type SpendDb } from "./control";
 import { containsBannedWord, formatCopyDate, spendCopy } from "./copy";
 import { isDemoWorkspace } from "./demo";
@@ -466,6 +466,17 @@ export const ADS_NOT_SET_NOTE = "Not set. Ads can't start until you set a daily 
 export const MESSAGING_NOT_SET_NOTE = "Not set. Your team and automations send as usual; assistants can't send until you set a limit.";
 export const NO_WHATSAPP_NOTE = "Connect WhatsApp to use this. You can set a limit now.";
 export const MANAGED_EXTERNAL_NOTE = "Includes ads you run yourself in Meta Ads Manager on this ad account, because Meta's limit covers the whole account.";
+export const STALE_FIGURES_NOTE = "Meta hasn't sent fresh figures for over an hour, so today's figures assume the most your running ads could spend.";
+export const NO_FIGURES_YET_NOTE = "Meta hasn't sent figures for your running ads yet, so today's figures assume the most they could spend.";
+
+/**
+ * The late-figures note, or null. Only with a connected ad account and ads running: their spend today is then counted at its
+ * most. With nothing connected or nothing running there are no figures to be late, so nothing is said. Pure.
+ */
+export function staleFiguresNote(connected: boolean, figures: Pick<AdsFigures, "stale" | "perCommitment" | "otherCurrency">, lastSyncAt: Date | null): string | null {
+  if (!connected || !figures.stale || figures.perCommitment.length + figures.otherCurrency.length === 0) return null;
+  return lastSyncAt ? STALE_FIGURES_NOTE : NO_FIGURES_YET_NOTE;
+}
 
 function adAccountDTO(a: AdAccountInfo): AdAccountDTO {
   return { assetId: a.assetId, externalId: a.externalId, name: a.name, currency: a.currency, timezone: a.timezone, sandbox: a.sandbox, demo: a.demo };
@@ -509,7 +520,8 @@ function adsPot(detail: AdsHeadroomDetail, role: SpendRole, demo: boolean, accou
   for (const o of figures.otherCurrency) {
     notes.push(`Also running on ${names.get(o.adAccountAssetId) ?? "another ad account"} (${o.currency}): up to ${money(o.couldAddThisMonth, o.currency)} more this month, not counted in your ${cur} limit.`);
   }
-  if (figures.stale) notes.push("Meta hasn't sent fresh figures for over an hour, so today's figures assume the most your running ads could spend.");
+  const stale = staleFiguresNote(connected, figures, detail.state.lastSyncAt);
+  if (stale) notes.push(stale);
   const binding = newWorkspaceBindingNote(limits);
   if (binding) notes.push(binding);
   const help = [limits.daily !== null ? `${ADS_HELP_SET_ASIDE} ${budgetWithinSentence(limits.daily, cur)}` : ADS_HELP_SET_ASIDE, ADS_HELP_CREDITS];
@@ -529,7 +541,7 @@ function adsPot(detail: AdsHeadroomDetail, role: SpendRole, demo: boolean, accou
         ? { counted: figures.external.counted, spentMonth: toMoneyDTO(figures.external.spentMonth, cur), riskMonth: toMoneyDTO(figures.external.riskMonth, cur), estimated: true }
         : null,
     otherCurrency: figures.otherCurrency.map((o) => ({ accountName: names.get(o.adAccountAssetId) ?? "Another ad account", currency: o.currency, couldAddThisMonth: toMoneyDTO(o.couldAddThisMonth, o.currency) })),
-    stale: figures.stale,
+    stale: stale !== null,
     connected,
     sampleData: demo,
     notes,
@@ -2053,6 +2065,8 @@ export function staticCopy(): string[] {
     MESSAGING_NOT_SET_NOTE,
     NO_WHATSAPP_NOTE,
     MANAGED_EXTERNAL_NOTE,
+    STALE_FIGURES_NOTE,
+    NO_FIGURES_YET_NOTE,
     OWNER_ONLY_SETTINGS,
     ACTIVITY_DENIED,
     UNDO_TOO_OLD,

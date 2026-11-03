@@ -1,10 +1,12 @@
+import { markAiPaused, STOP_TAG as AI_STOP_TAG } from "@/lib/ai-agent/pause";
 import { prisma } from "@/lib/db";
 import { matchesKeywords } from "@/lib/automation/match";
 import { isWithinServiceWindow } from "@/lib/inbox/window";
 import { describeError } from "@/lib/safe-error";
+import { mayReceive, OPTED_OUT_OF_MARKETING, optedOutSince } from "@/lib/contacts/opt-out";
 import { HttpError } from "@/lib/tenancy";
-import { asRec, isStopMessage } from "@/lib/webhooks/payload";
-import { beginSession, endSession, parseFlow, resumeSession, SESSION_TTL_MS, stepsAsideForHuman, type SessionRow } from "./engine";
+import { asRec, isStopMessage, stopSourceOf } from "@/lib/webhooks/payload";
+import { beginSession, endSession, parseFlow, resumeSession, SESSION_TTL_MS, sleepingStep, stepsAsideForHuman, wakeSession, type SessionRow } from "./engine";
 import { parseSettings, type BotSettings, type FlowDefinition } from "./flow";
 
 export { validateFlow } from "./flow";
@@ -21,6 +23,8 @@ export type ChatbotInbound = {
   receivedAt: Date;
   /** Id of the tapped reply button or list row, when the customer tapped one. */
   replyId?: string;
+  /** The inbound message's type (text, button and so on): a template button's text is read as STOP only for unambiguous words. */
+  messageType?: string;
 };
 
 type ChatbotRow = { id: string; triggerType: string; triggerKeywords: string[]; publishedFlow: unknown; createdAt: Date; phoneNumberId?: string | null };
@@ -29,8 +33,7 @@ const TRIGGER_ORDER = ["keyword", "first_message", "any_message"];
 const LIVE = ["waiting", "active"] as const;
 /** A running session that has not moved for this long (and is not sleeping in a delay) is a crashed run, not a bot still working. */
 const STALE_RUN_MS = 10 * 60_000;
-/** Same values as the AI agent module (STOP_TAG, AI_REPLY_REF); not imported so the bot code stays light and free of import cycles. */
-const AI_STOP_TAG = "ai:stopped";
+/** Same value as the AI agent module's AI_REPLY_REF; not imported so the bot code stays light and free of import cycles (the pause has its own small module). */
 const AI_REPLY_REF = "ai_reply";
 
 type Stamp = { id: string; startedAt: Date };
@@ -164,6 +167,7 @@ async function aiAgentIsTalking(tenantId: string, conversationId: string, tags: 
 
 async function pauseAiAgent(tenantId: string, conversationId: string, tags: string[]) {
   if (!tags.includes(AI_STOP_TAG)) await prisma.conversation.updateMany({ where: { id: conversationId, tenantId }, data: { tags: [...tags, AI_STOP_TAG] } });
+  await markAiPaused(tenantId, conversationId);
 }
 
 /**
@@ -179,14 +183,18 @@ export async function handleInboundForChatbots(input: ChatbotInbound): Promise<b
       prisma.conversation.findFirst({ where: { id: conversationId, tenantId }, select: { status: true, assignedToId: true, tags: true } }),
     ]);
 
-    // The title of a tapped button or list row is the business's own wording ("Cancel", "End"), so it is never read as STOP.
-    if (!input.replyId && isStopMessage(input.text)) {
+    // The title of a tapped button or list row is the business's own wording ("Cancel", "End"), so it is never read as STOP, and a
+    // template's quick-reply button counts only for the unambiguous words (stopSourceOf).
+    if (isStopMessage(input.text, [], stopSourceOf(input.messageType, input.replyId))) {
       if (live) await endSession(live, "completed");
       return false;
     }
-    // A blocked chat or an opted-out contact never gets a bot message, so a session still waiting or sleeping there ends now.
-    if (!contact || contact.optedOutAt || !conversation || conversation.status === "blocked") {
-      if (live) await endSession(live, contact?.optedOutAt ? "completed" : "expired");
+    // A blocked chat never gets a bot message, so a session still waiting or sleeping there ends now. An opt-out stops marketing only
+    // (lib/contacts/opt-out.ts): the bot still answers a contact who opted out, and refuses only a marketing template step. A session
+    // that was running when they opted out ends instead of answering: their STOP answered it.
+    const stopped = !!live && !!contact && optedOutSince(contact, live.startedAt);
+    if (!contact || !mayReceive(contact, "service") || stopped || !conversation || conversation.status === "blocked") {
+      if (live) await endSession(live, stopped || (contact && !mayReceive(contact, "service")) ? "completed" : "expired");
       return false;
     }
     if (live?.status === "active") {
@@ -194,8 +202,10 @@ export async function handleInboundForChatbots(input: ChatbotInbound): Promise<b
       const crashed = !live.wakeAt && age > STALE_RUN_MS;
       if (age > SESSION_TTL_MS || crashed) await endSession(live, "expired");
       else {
-        // The bot is sleeping in a delay (or busy right now) and still owns this chat. Reporting the message as handled keeps routing,
-        // holiday mode and classic rules from acting beside it; a person who took the chat over ends the bot instead.
+        // The bot is sleeping in a delay (or busy right now) and still owns this chat. By default the message is reported as handled,
+        // which keeps routing, holiday mode and classic rules from acting beside it; a person who took the chat over ends the bot
+        // instead. A wait step can choose otherwise: "continue" ends the wait now, "pass" lets routing and rules see the message
+        // (routing may give the chat to a teammate, rules may tag or assign it); nothing replies, as the bot still owns the chat.
         const owner = await prisma.chatbot.findFirst({ where: { id: live.chatbotId, tenantId, status: "published" }, select: { publishedFlow: true } });
         const flow = owner ? parseFlow(owner.publishedFlow) : null;
         if (!flow) {
@@ -206,6 +216,9 @@ export async function handleInboundForChatbots(input: ChatbotInbound): Promise<b
           await endSession(live, "handed_off");
           return false;
         }
+        const onReply = live.wakeAt ? sleepingStep(live, flow)?.data.onReply : undefined;
+        if (onReply === "pass") return false;
+        if (onReply === "continue") await wakeSession(live, flow, { reply: input.text });
         return true;
       }
     } else if (live) {
@@ -248,7 +261,7 @@ export async function startChatbot(who: { tenantId: string }, chatbotId: string,
   const flow = chatbot.status === "published" ? parseFlow(chatbot.publishedFlow) : null;
   if (!flow) throw new HttpError(409, "Publish the chatbot before starting it.");
   if (chatbot.phoneNumberId && chatbot.phoneNumberId !== conversation.phoneNumberId) throw new HttpError(409, "This chatbot is set up for a different WhatsApp number.");
-  if (conversation.contact?.optedOutAt) throw new HttpError(409, "This contact has opted out of messages.");
+  if (!mayReceive(conversation.contact, "service")) throw new HttpError(409, OPTED_OUT_OF_MARKETING);
   if (conversation.status === "blocked") throw new HttpError(409, "This conversation is blocked.");
   if (source !== "manual" && conversation.assignedToId && flow.settings?.skipAssignedChats !== false) {
     throw new HttpError(409, "A teammate owns this chat, so the chatbot was not started.");
@@ -279,10 +292,27 @@ export async function startChatbot(who: { tenantId: string }, chatbotId: string,
 
 export type LiveSession = { id: string; chatbotId: string; chatbotName: string; status: string; startedAt: Date; updatedAt: Date; endedAt: Date | null };
 
-/** The most recent bot session of a conversation (running or finished) and the bots a teammate can start on it. */
-export async function getConversationBotState(tenantId: string, conversationId: string): Promise<{ session: LiveSession | null; available: { id: string; name: string }[] }> {
-  const conversation = await prisma.conversation.findFirst({ where: { id: conversationId, tenantId }, select: { phoneNumberId: true } });
+/** An AI agent that is switched on and may answer chats on this number. A failed read counts as none (the inbox then just hides the control). */
+async function aiAgentAvailable(tenantId: string, phoneNumberId: string): Promise<boolean> {
+  try {
+    return (await prisma.aiAgent.count({ where: { tenantId, enabled: true, OR: [{ phoneNumberId: null }, { phoneNumberId }] } })) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The most recent bot session of a conversation (running or finished), the bots a teammate can start on it, and aiPaused: the AI
+ * agent handed this chat over (or was paused for a bot) and stays quiet here until a new episode or a teammate's "Let the AI answer again".
+ */
+export async function getConversationBotState(
+  tenantId: string,
+  conversationId: string,
+): Promise<{ session: LiveSession | null; available: { id: string; name: string }[]; aiPaused: boolean }> {
+  const conversation = await prisma.conversation.findFirst({ where: { id: conversationId, tenantId }, select: { phoneNumberId: true, tags: true } });
   if (!conversation) throw new HttpError(404, "Conversation not found.");
+  const tags = Array.isArray(conversation.tags) ? conversation.tags : [];
+  const aiPaused = tags.includes(AI_STOP_TAG) && (await aiAgentAvailable(tenantId, conversation.phoneNumberId));
   const [latest, bots] = await Promise.all([
     prisma.chatbotSession.findFirst({
       where: { tenantId, conversationId },
@@ -297,7 +327,7 @@ export async function getConversationBotState(tenantId: string, conversationId: 
     }),
   ]);
   const name = latest ? (await prisma.chatbot.findFirst({ where: { id: latest.chatbotId, tenantId }, select: { name: true } }))?.name : undefined;
-  return { session: latest ? { ...latest, chatbotName: name ?? "Chatbot" } : null, available: bots };
+  return { session: latest ? { ...latest, chatbotName: name ?? "Chatbot" } : null, available: bots, aiPaused };
 }
 
 /** Ends the live bot session of a conversation (a teammate takes over). Returns whether one was running. */

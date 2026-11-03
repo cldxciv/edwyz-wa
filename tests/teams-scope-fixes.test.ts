@@ -196,9 +196,9 @@ describe("live stream and unread count for restricted agents", () => {
     vi.useRealTimers();
     db.conversation.count.mockResolvedValue(2);
     await countUnreadConversations("t1", { assignedToId: "me" });
-    expect(db.conversation.count).toHaveBeenCalledWith({ where: { tenantId: "t1", unreadCount: { gt: 0 }, assignedToId: "me" } });
+    expect(db.conversation.count).toHaveBeenCalledWith({ where: { tenantId: "t1", unreadCount: { gt: 0 }, status: { not: "blocked" }, assignedToId: "me" } });
     await countUnreadConversations("t1");
-    expect(db.conversation.count).toHaveBeenLastCalledWith({ where: { tenantId: "t1", unreadCount: { gt: 0 } } });
+    expect(db.conversation.count).toHaveBeenLastCalledWith({ where: { tenantId: "t1", unreadCount: { gt: 0 }, status: { not: "blocked" } } });
   });
 });
 

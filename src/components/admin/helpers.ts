@@ -149,6 +149,54 @@ const AUDIT_LABELS: Record<string, string> = {
   "admin.api.list_spending": "Opened spending across workspaces",
   "admin.api.view_tenant_spending": "Opened a workspace's spending",
   "admin.api.spending_settings": "Opened spending settings",
+  "auth.signup": "Signed up",
+  "auth.login": "Signed in",
+  "auth.login_failed": "Sign-in failed",
+  "auth.login_refused": "Sign-in refused: the account is turned off",
+  "auth.password_reset": "Reset their password",
+  "auth.password_changed": "Changed their password",
+  "account.profile_updated": "Changed their name",
+  "workspace.renamed": "Renamed the workspace",
+  "billing.manual_plan_expired": "A plan assigned by hand ended",
+  "auth.workspace_switched": "Switched workspace",
+  "auth.invite_accepted": "Accepted an invitation",
+  "invite.created": "Invited a team member",
+  "invite.revoked": "Cancelled an invitation",
+  "member.role_changed": "Changed a team member's role",
+  "member.removed": "Removed a team member",
+  "member.ownership_transferred": "Handed over ownership",
+  "onboarding.started": "Started WhatsApp setup",
+  "onboarding.completed": "Finished WhatsApp setup",
+  "meta_connect.started": "Started connecting Facebook",
+  "meta_connect.connected": "Connected Facebook",
+  "meta_connect.refreshed": "Refreshed the Facebook connection",
+  "meta_connect.disconnected": "Disconnected Facebook",
+  "meta_connect.expired": "Facebook connection expired",
+  "export.contact": "Downloaded contacts",
+  "export.workspace": "Downloaded all workspace data",
+  "export.broadcast_report": "Downloaded a broadcast report",
+  "contact.imported": "Imported contacts",
+  "contact.deleted": "Deleted a contact",
+  "template.created": "Created a template",
+  "template.updated": "Changed a template",
+  "template.duplicated": "Copied a template",
+  "template.submitted": "Sent a template to Meta for review",
+  "template.deleted": "Deleted a template",
+  "template.synced": "Updated templates from Meta",
+  "broadcast.created": "Created a broadcast",
+  "broadcast.started": "Started a broadcast",
+  "broadcast.canceled": "Cancelled a broadcast",
+  "chatbot.created": "Created a chatbot",
+  "chatbot.updated": "Changed a chatbot",
+  "chatbot.published": "Published a chatbot",
+  "ai_agent.create": "Created an AI agent",
+  "ai_agent.update": "Changed an AI agent",
+  "ai_agent.delete": "Deleted an AI agent",
+  "ai_agent.paused": "Paused the AI agent in a chat",
+  "ai_agent.pause_lifted": "The AI agent's pause ended",
+  "ai_agent.resumed": "Let the AI answer a chat again",
+  "workspace.deletion_requested": "Asked to delete the workspace",
+  "workspace.deletion_cancelled": "Cancelled the workspace deletion",
 };
 
 /** True when an audit action has its own plain label (the spending pages' actions are all covered; checked by a test). */
@@ -207,12 +255,43 @@ type Metrics = {
   quality: { rating: string; count: number }[];
   jobs: Record<string, number>;
   failedEvents: { id: string }[];
+  /** Workspaces whose owner asked for deletion that nobody has erased yet, and the earliest date one is due (ISO). */
+  deletionRequests?: { pending: number; nearestDeleteBy: string | null };
 };
 
 const plural = (n: number, one: string, many: string) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
 
+/** Deletion requests turn red this many days before the earliest one is due (the privacy promise is 30 days). */
+export const DELETION_URGENT_DAYS = 7;
+const DAY_MS = 86_400_000;
+
+/**
+ * The deletion-request item: amber while every request has time left, red within DELETION_URGENT_DAYS of the earliest due date or
+ * past it. The only other alert is an email to the team, which never goes out while SMTP is off, so this is where they are seen.
+ */
+export function deletionAttention(d: Metrics["deletionRequests"], now = new Date()): Attention | null {
+  if (!d || d.pending <= 0) return null;
+  const due = d.nearestDeleteBy ? new Date(d.nearestDeleteBy) : null;
+  const daysLeft = due && !Number.isNaN(due.getTime()) ? Math.ceil((due.getTime() - now.getTime()) / DAY_MS) : null;
+  const date = due ? when(due).slice(0, 10) : null;
+  let body = "We promise to erase a workspace within 30 days of the owner's request.";
+  if (date && daysLeft !== null) {
+    body = daysLeft <= 0
+      ? `The earliest was due to be erased by ${date}. We promise deletion within 30 days of the request.`
+      : `The earliest must be erased by ${date}, ${plural(daysLeft, "day", "days")} from now. We promise deletion within 30 days of the request.`;
+  }
+  return {
+    id: "deletion",
+    tone: daysLeft !== null && daysLeft <= DELETION_URGENT_DAYS ? "bad" : "warn",
+    title: `${plural(d.pending, "workspace has", "workspaces have")} asked to be deleted`,
+    body,
+    href: "/admin/tenants?filter=deletion_requested",
+    linkLabel: "Open deletion requests",
+  };
+}
+
 /** What the operator should look at first, most urgent first. Empty when everything is healthy. */
-export function attentionItems(m: Metrics): Attention[] {
+export function attentionItems(m: Metrics, now = new Date()): Attention[] {
   const out: Attention[] = [];
   const failedJobs = m.jobs.failed ?? 0;
   if (failedJobs > 0) out.push({ id: "jobs", tone: "bad", title: `${plural(failedJobs, "background job has", "background jobs have")} failed`, body: "Messages, broadcasts or emails may not have gone out. Check the worker logs on the server." });
@@ -223,7 +302,10 @@ export function attentionItems(m: Metrics): Attention[] {
   if (pastDue > 0) out.push({ id: "pastdue", tone: "warn", title: `${plural(pastDue, "workspace has", "workspaces have")} a failed payment`, body: "They are in the grace period. Sending stops if the payment is not fixed.", href: "/admin/payments", linkLabel: "Open payments" });
   const locked = m.tenantsByState.locked ?? 0;
   if (locked > 0) out.push({ id: "locked", tone: "warn", title: `${plural(locked, "workspace is", "workspaces are")} read-only`, body: "Their trial or subscription ended.", href: "/admin/tenants", linkLabel: "Open workspaces" });
-  return out;
+  const deletion = deletionAttention(m.deletionRequests, now);
+  if (deletion) out.push(deletion);
+  // Red before amber; the order within each tone stays as pushed (sort is stable).
+  return out.sort((a, b) => (a.tone === b.tone ? 0 : a.tone === "bad" ? -1 : 1));
 }
 
 /** Admin timestamps are always shown in UTC so two operators read the same time. */
@@ -236,6 +318,12 @@ export function inrText(paise: number): string {
 
 export function validatePrice(input: string): string | null {
   return /^\d{1,8}(\.\d{1,2})?$/.test(input.trim()) ? null : "Enter an amount in rupees, like 999 or 999.50.";
+}
+
+/** A plan code from the plan's name ("Growth Plus" -> "growth-plus"), or "" when the name has too few usable characters. */
+export function planCodeFrom(name: string): string {
+  const code = name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "");
+  return code.length >= 2 ? code : "";
 }
 
 export function validatePlanCode(input: string): string | null {
@@ -340,9 +428,9 @@ export function moneyText(m: Money, notSet = "Not set"): string {
   return m ? m.formatted : notSet;
 }
 
-/** One list cell: spent / set aside / limit. */
+/** One list cell: spent / set aside / limit. Empty until the owner picks the ad account Edwyz spends from, even with accounts connected. */
 export function cellText(cell: { spent: Money; setAside: Money; limit: Money } | null | undefined): string {
-  if (!cell) return "No ad account";
+  if (!cell) return "No spending ad account";
   return `${moneyText(cell.spent, "-")} / ${moneyText(cell.setAside, "-")} / ${moneyText(cell.limit)}`;
 }
 

@@ -15,10 +15,11 @@ async function assignee(tenantId: string, phoneEnd: string): Promise<string | nu
 
 async function inbound(page: Page, fx: { wabaId: string; phoneNumberId: string }, tenantId: string, phone: string) {
   await deliverInbound(page.request, fx, phone, "hello", `Customer ${phone.slice(-4)}`);
+  // each round runs one tick, which the helper allows up to 60 s when the scheduled sweeps fall due, so the poll allows as much
   await expect.poll(async () => {
     await tick(page.request, 1);
     return (await assignee(tenantId, phone)) !== undefined;
-  }, { timeout: 30_000, intervals: [500, 1000, 2000] }).toBe(true);
+  }, { timeout: 60_000, intervals: [500, 1000, 2000] }).toBe(true);
   // give the assignment step a moment after the message is stored
   await tick(page.request, 1);
   return assignee(tenantId, phone);
@@ -119,8 +120,10 @@ test.describe.serial("routing: settings, availability and automatic assignment",
     // the inbox shows who has the chat
     await page.goto("/app/inbox");
     await page.getByText("Customer 0002").first().click();
-    await expect(page.getByLabel("Assignee")).toBeVisible();
-    const chosen = await page.getByLabel("Assignee").evaluate((s) => (s as HTMLSelectElement).selectedOptions[0].textContent);
+    // The Details panel (open on a wide screen) always shows the assignee; the header menu only when the chat column is wide.
+    const assigned = page.getByRole("complementary", { name: "Contact details" }).getByLabel("Assigned to");
+    await expect(assigned).toBeVisible();
+    const chosen = await assigned.evaluate((s) => (s as HTMLSelectElement).selectedOptions[0].textContent);
     expect(chosen).not.toBe("Unassigned");
   });
 

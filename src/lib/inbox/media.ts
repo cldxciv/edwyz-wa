@@ -192,49 +192,147 @@ export function inboundMediaPath(tenantId: string, messageId: string): string | 
   return full.startsWith(dir + path.sep) ? full : null;
 }
 
-/** Deletes the oldest cached files of a workspace until it fits the quota. Only counts are logged. */
-export async function evictOldest(tenantId: string, keep: string, quota = INBOUND_MEDIA_QUOTA_BYTES): Promise<{ files: number; bytes: number }> {
-  const dir = inboundMediaDir(tenantId);
+/**
+ * Deletes files of one folder (never `keep`) until it fits the quota, oldest first; with maxAgeMs, anything older goes too.
+ * Sub-folders are left alone, and partial writes are removed once they are an hour old.
+ */
+async function trimDir(dir: string, keep: string, quota: number, maxAgeMs: number | null = null, now = Date.now()): Promise<{ files: number; bytes: number }> {
   const out = { files: 0, bytes: 0 };
-  if (!dir) return out;
   const entries: { full: string; size: number; at: number }[] = [];
+  // A file that cannot be removed (still open on some platforms) is skipped, not counted.
+  const remove = async (full: string, size: number) => {
+    if (!(await fs.rm(full, { force: true }).then(() => true, () => false))) return false;
+    out.files += 1;
+    out.bytes += size;
+    return true;
+  };
   for (const name of await fs.readdir(dir).catch(() => [] as string[])) {
     const full = path.join(dir, name);
     const st = await fs.stat(full).catch(() => null);
     if (!st?.isFile()) continue;
     if (name.includes(".part-")) {
-      if (Date.now() - st.mtimeMs > STALE_PART_MS) await fs.rm(full, { force: true });
+      if (now - st.mtimeMs > STALE_PART_MS) await fs.rm(full, { force: true });
       continue;
     }
+    if (maxAgeMs !== null && name !== keep && now - st.mtimeMs > maxAgeMs && (await remove(full, st.size))) continue;
     entries.push({ full, size: st.size, at: st.mtimeMs });
   }
   let total = entries.reduce((sum, e) => sum + e.size, 0);
   for (const e of entries.sort((a, b) => a.at - b.at)) {
     if (total <= quota) break;
     if (path.basename(e.full) === keep) continue;
-    // A file that cannot be removed (still open on some platforms) is skipped, not counted.
-    if (!(await fs.rm(e.full, { force: true }).then(() => true, () => false))) continue;
-    total -= e.size;
-    out.files += 1;
-    out.bytes += e.size;
+    if (await remove(e.full, e.size)) total -= e.size;
   }
-  if (out.files > 0) console.info("[inbound-media] evicted", { tenantId, files: out.files, bytes: out.bytes });
   return out;
 }
 
-async function writeCache(tenantId: string, messageId: string, bytes: Buffer): Promise<boolean> {
-  const file = inboundMediaPath(tenantId, messageId);
+/**
+ * Deletes the oldest cached files of a workspace until it fits the quota. Unsent copies of agents' uploads that are more than
+ * a day old go at the same time (see trimPendingUploads below). Only counts are logged.
+ */
+export async function evictOldest(tenantId: string, keep: string, quota = INBOUND_MEDIA_QUOTA_BYTES): Promise<{ files: number; bytes: number }> {
   const dir = inboundMediaDir(tenantId);
-  if (!file || !dir) return false;
+  if (!dir) return { files: 0, bytes: 0 };
+  const out = await trimDir(dir, keep, quota);
+  if (out.files > 0) console.info("[inbound-media] evicted", { tenantId, files: out.files, bytes: out.bytes });
+  await trimPendingUploads(tenantId).catch(() => undefined);
+  return out;
+}
+
+/** Writes through a partial file and a rename, so a reader never sees half a file. False on any disk error. */
+async function writeAtomic(file: string, bytes: Buffer): Promise<boolean> {
   const part = `${file}.part-${process.pid}-${Date.now()}`;
   try {
-    await fs.mkdir(dir, { recursive: true });
+    await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(part, bytes, { mode: 0o600 });
     await fs.rename(part, file);
+    return true;
   } catch {
     await fs.rm(part, { force: true }).catch(() => undefined);
     return false;
   }
+}
+
+async function writeCache(tenantId: string, messageId: string, bytes: Buffer): Promise<boolean> {
+  const file = inboundMediaPath(tenantId, messageId);
+  if (!file || !(await writeAtomic(file, bytes))) return false;
+  await evictOldest(tenantId, messageId).catch(() => undefined);
+  return true;
+}
+
+/* ---------- copies of files agents send ---------- */
+
+/**
+ * An agent's attachment goes straight to WhatsApp (upload.ts), never into the workspace's media library, so the library's
+ * file and size limits cannot stop a send. A copy is kept so the chat shows the file without asking Meta again: it waits
+ * in DATA_DIR/inbound-media/<tenantId>/.pending/<mediaId> until the message is queued, then moves to that message's place in
+ * the cache above, where the workspace quota and eviction apply and contact erasure finds it. No message points at a copy that
+ * is never sent, so erasure cannot find it: such copies are deleted once they are a day old (sooner when the waiting folder
+ * passes its own quota). The check runs whenever the workspace uploads a file, saves a media preview or moves a sent file's
+ * copy into the cache; sweepPendingUploads runs it for every workspace at once, for a daily job. A lost copy only means the
+ * preview is loaded from Meta instead; nothing here ever fails a send.
+ */
+export const PENDING_UPLOAD_TTL_MS = 24 * 60 * 60_000;
+export const PENDING_UPLOAD_QUOTA_BYTES = 200 * 1048576;
+// The dot keeps it apart from message ids (SAFE_ID has none), and eviction skips folders.
+const PENDING_DIR = ".pending";
+
+/** DATA_DIR/inbound-media/<tenantId>/.pending/<mediaId>, or null unless both ids are plain. */
+export function pendingUploadPath(tenantId: string, mediaId: string): string | null {
+  const dir = inboundMediaDir(tenantId);
+  if (!dir || !SAFE_ID.test(mediaId)) return null;
+  const pending = path.join(dir, PENDING_DIR);
+  const full = path.resolve(pending, mediaId);
+  return full.startsWith(pending + path.sep) ? full : null;
+}
+
+/** Keeps the copy of a file just uploaded to WhatsApp. False when it was not kept (empty, over 25 MB, unsafe id, disk error); never throws. */
+export async function keepPendingUpload(tenantId: string, mediaId: string, bytes: Buffer, quota = PENDING_UPLOAD_QUOTA_BYTES): Promise<boolean> {
+  if (bytes.length === 0 || bytes.length > MAX_INBOUND_MEDIA_BYTES) return false;
+  const file = pendingUploadPath(tenantId, mediaId);
+  if (!file || !(await writeAtomic(file, bytes))) return false;
+  await trimPendingUploads(tenantId, mediaId, quota).catch(() => undefined);
+  return true;
+}
+
+/**
+ * Deletes a workspace's unsent copies that are more than a day old, then the oldest ones until the waiting folder fits its
+ * quota, never `keep` (the copy just written). Only a real folder is trimmed, never one a link points elsewhere. Counts only.
+ */
+async function trimPendingUploads(tenantId: string, keep = "", quota = PENDING_UPLOAD_QUOTA_BYTES, now = Date.now()): Promise<{ files: number; bytes: number }> {
+  const dir = inboundMediaDir(tenantId);
+  if (!dir) return { files: 0, bytes: 0 };
+  const pending = path.join(dir, PENDING_DIR);
+  if (!(await fs.lstat(pending).catch(() => null))?.isDirectory()) return { files: 0, bytes: 0 };
+  const out = await trimDir(pending, keep, quota, PENDING_UPLOAD_TTL_MS, now);
+  if (out.files > 0) console.info("[inbound-media] removed unsent copies", { tenantId, files: out.files, bytes: out.bytes });
+  return out;
+}
+
+/**
+ * Removes unsent copies more than a day old in every workspace. A workspace's own uploads and media loads already do this for
+ * it; this pass is for a daily job, so a file attached and never sent in a workspace where nothing else happens does not stay on
+ * disk. Counts only; never throws.
+ */
+export async function sweepPendingUploads(now = Date.now()): Promise<{ tenants: number; files: number; bytes: number }> {
+  const out = { tenants: 0, files: 0, bytes: 0 };
+  for (const tenantId of await fs.readdir(dataRoot()).catch(() => [] as string[])) {
+    const dir = inboundMediaDir(tenantId);
+    if (!dir || !(await fs.lstat(dir).catch(() => null))?.isDirectory()) continue;
+    const removed = await trimPendingUploads(tenantId, "", PENDING_UPLOAD_QUOTA_BYTES, now).catch(() => ({ files: 0, bytes: 0 }));
+    out.tenants += 1;
+    out.files += removed.files;
+    out.bytes += removed.bytes;
+  }
+  return out;
+}
+
+/** Moves the kept copy of an uploaded file to the cache entry of the message that sends it. False when there was none; never throws. */
+export async function adoptPendingUpload(tenantId: string, mediaId: string, messageId: string): Promise<boolean> {
+  const from = pendingUploadPath(tenantId, mediaId);
+  const to = inboundMediaPath(tenantId, messageId);
+  if (!from || !to) return false;
+  if (!(await fs.rename(from, to).then(() => true, () => false))) return false;
   await evictOldest(tenantId, messageId).catch(() => undefined);
   return true;
 }

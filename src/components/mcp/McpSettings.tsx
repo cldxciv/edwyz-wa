@@ -51,7 +51,7 @@ export function McpSettings() {
       <Card>
         <h2 className="text-base font-semibold">1. Create an API key</h2>
         <p className="mt-1 text-sm text-muted">
-          Open <Link className="underline" href="/app/settings/api">API and webhooks</Link> and create a key just for this assistant. Pick only what it needs:
+          Open <Link className="underline" href="/app/settings/api">API and webhooks</Link>{" "}and create a key just for this assistant. Pick only what it needs:
         </p>
         <ul className="mt-2 list-disc space-y-1 pl-5 text-sm">
           <li><code>{withScopeNames("conversations:read")}</code>: read conversations and messages, and draft replies.</li>
@@ -96,7 +96,7 @@ export function McpSettings() {
           <li>Everything runs inside this workspace only, with the permissions of the key you create. Revoke the key to cut access at once.</li>
           <li>Sending tools return a draft and a short-lived <code>confirmToken</code> tied to that key, tool and exact content. A message is sent only when the assistant calls again with confirm set to true, that token, and the key has <code>messages:write</code>.</li>
           <li>
-            <strong>Only give <code>messages:write</code> keys to clients that make you approve each tool call.</strong> The token forces a second call but cannot prove a person approved it: a client that runs tools on its own can be steered by text a customer sends.
+            <strong>Only give <code>messages:write</code> keys to clients that make you approve each tool call.</strong>{" "}The token forces a second call but cannot prove a person approved it: a client that runs tools on its own can be steered by text a customer sends.
           </li>
           <li>Confirmed sends are capped per key (20 per hour) and per contact (3 per 24 hours) by default, and customer text returned to the assistant is wrapped in untrusted-text markers.</li>
           <li>Free text can only be sent inside the 24-hour window; otherwise only approved templates. Opted-out contacts are never messaged, and marketing templates need opt-in.</li>

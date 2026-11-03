@@ -17,15 +17,21 @@ vi.mock("@/lib/graph", async (orig) => ({ ...(await orig<typeof import("@/lib/gr
 
 import { GraphError } from "@/lib/graph";
 import {
+  adoptPendingUpload,
   evictOldest,
   inboundMediaDir,
   inboundMediaPath,
+  keepPendingUpload,
   MAX_INBOUND_MEDIA_BYTES,
   MAX_TENANT_DOWNLOADS,
   narrowMime,
   parseAllowedMediaUrl,
   parseRange,
+  PENDING_UPLOAD_QUOTA_BYTES,
+  PENDING_UPLOAD_TTL_MS,
+  pendingUploadPath,
   sniffMime,
+  sweepPendingUploads,
 } from "@/lib/inbox/media";
 import { parseMediaRef, toMediaRef } from "@/lib/webhooks/media";
 import { GET } from "@/app/api/inbox/media/[messageId]/route";
@@ -477,5 +483,139 @@ describe("disk quota", () => {
     await evictOldest(t, "none");
     expect(fs.existsSync(stale)).toBe(false);
     expect(fs.existsSync(recent)).toBe(true);
+  });
+});
+
+describe("copies of files agents send", () => {
+  it("keeps a waiting copy per workspace, under a folder no message id can name", async () => {
+    const t = freshTenant();
+    expect(pendingUploadPath(t, "777")).toBe(path.resolve(dataDir, "inbound-media", t, ".pending", "777"));
+    expect(pendingUploadPath(t, "../777")).toBeNull();
+    expect(pendingUploadPath("../t", "777")).toBeNull();
+    expect(inboundMediaPath(t, ".pending")).toBeNull();
+    expect(await keepPendingUpload(t, "777", JPEG)).toBe(true);
+    expect(fs.readFileSync(pendingUploadPath(t, "777") as string)).toEqual(JPEG);
+    expect(await keepPendingUpload(t, "empty", Buffer.alloc(0))).toBe(false);
+    expect(await keepPendingUpload(t, "big", Buffer.alloc(MAX_INBOUND_MEDIA_BYTES + 1))).toBe(false);
+    expect(await keepPendingUpload(t, "a/b", JPEG)).toBe(false);
+  });
+
+  it("moves the copy to the sent message, so the chat's preview is served from disk without asking Meta", async () => {
+    const t = freshTenant();
+    await keepPendingUpload(t, "888", JPEG);
+    expect(await adoptPendingUpload(t, "888", "sent1")).toBe(true);
+    expect(fs.existsSync(pendingUploadPath(t, "888") as string)).toBe(false);
+    messages({ sent1: { tenantId: t, mediaUrl: "meta-media:888", mediaMime: "image/jpeg" } });
+    asTenant(t);
+    const res = await call("sent1");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/jpeg");
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(JPEG);
+    expect(graphFetch).not.toHaveBeenCalled();
+  });
+
+  it("without a copy the preview still loads from Meta, and adopting never throws", async () => {
+    const t = freshTenant();
+    expect(await adoptPendingUpload(t, "nothing", "sent2")).toBe(false);
+    expect(await adoptPendingUpload(t, "../x", "sent2")).toBe(false);
+    messages({ sent2: { tenantId: t, mediaUrl: "meta-media:999", mediaMime: "image/jpeg" } });
+    asTenant(t);
+    expect((await call("sent2")).status).toBe(200);
+    expect(graphFetch).toHaveBeenCalledWith({ tenantId: t, path: "999" });
+  });
+
+  it("deletes copies that were never sent after a day, and keeps the waiting folder within its own quota", async () => {
+    const t = freshTenant();
+    await keepPendingUpload(t, "stale", JPEG);
+    await keepPendingUpload(t, "recent", JPEG);
+    const dayOld = (Date.now() - PENDING_UPLOAD_TTL_MS - 60_000) / 1000;
+    fs.utimesSync(pendingUploadPath(t, "stale") as string, dayOld, dayOld);
+    await keepPendingUpload(t, "next", JPEG);
+    const folder = path.dirname(pendingUploadPath(t, "next") as string);
+    expect(fs.readdirSync(folder).sort()).toEqual(["next", "recent"]);
+
+    // Over the quota the oldest waiting copies go first; the one just written always stays.
+    expect(PENDING_UPLOAD_QUOTA_BYTES).toBeGreaterThan(MAX_INBOUND_MEDIA_BYTES);
+    const minuteAgo = Date.now() / 1000 - 60;
+    fs.utimesSync(pendingUploadPath(t, "recent") as string, minuteAgo - 60, minuteAgo - 60);
+    fs.utimesSync(pendingUploadPath(t, "next") as string, minuteAgo, minuteAgo);
+    await keepPendingUpload(t, "newest", JPEG, JPEG.length * 2);
+    expect(fs.readdirSync(folder).sort()).toEqual(["newest", "next"]);
+    await keepPendingUpload(t, "huge", Buffer.alloc(5000, 1), 100);
+    expect(fs.readdirSync(folder)).toEqual(["huge"]);
+  });
+
+  it("never lets the waiting copies count against, or be evicted by, the chat cache", async () => {
+    const t = freshTenant();
+    await keepPendingUpload(t, "waiting", Buffer.alloc(5000, 1));
+    const dir = inboundMediaDir(t) as string;
+    fs.writeFileSync(path.join(dir, "cached"), Buffer.alloc(1000));
+    expect(await evictOldest(t, "none", 1500)).toEqual({ files: 0, bytes: 0 });
+    expect(fs.existsSync(pendingUploadPath(t, "waiting") as string)).toBe(true);
+    expect(fs.existsSync(path.join(dir, "cached"))).toBe(true);
+  });
+
+  const ageOverADay = (file: string) => {
+    const dayOld = (Date.now() - PENDING_UPLOAD_TTL_MS - 60_000) / 1000;
+    fs.utimesSync(file, dayOld, dayOld);
+  };
+
+  it("deletes a day-old unsent copy when a media preview is saved, without another upload", async () => {
+    const t = freshTenant();
+    await keepPendingUpload(t, "forgotten", JPEG);
+    await keepPendingUpload(t, "today", JPEG);
+    ageOverADay(pendingUploadPath(t, "forgotten") as string);
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    messages({ in1: { tenantId: t, mediaUrl: "meta-media:555", mediaMime: "image/jpeg" } });
+    asTenant(t);
+    expect((await call("in1")).status).toBe(200);
+    expect(fs.existsSync(pendingUploadPath(t, "forgotten") as string)).toBe(false);
+    expect(fs.existsSync(pendingUploadPath(t, "today") as string)).toBe(true);
+    expect(info).toHaveBeenCalledWith("[inbound-media] removed unsent copies", { tenantId: t, files: 1, bytes: JPEG.length });
+    info.mockRestore();
+  });
+
+  it("deletes a day-old unsent copy when another sent file's copy moves into the cache", async () => {
+    const t = freshTenant();
+    await keepPendingUpload(t, "forgotten", JPEG);
+    await keepPendingUpload(t, "sending", JPEG);
+    ageOverADay(pendingUploadPath(t, "forgotten") as string);
+    expect(await adoptPendingUpload(t, "sending", "sent3")).toBe(true);
+    expect(fs.readdirSync(path.dirname(pendingUploadPath(t, "x") as string))).toEqual([]);
+    expect(fs.existsSync(inboundMediaPath(t, "sent3") as string)).toBe(true);
+  });
+
+  it("sweeps every workspace's day-old unsent copies, keeping recent ones and ignoring anything that is not a workspace folder", async () => {
+    const saved = process.env.DATA_DIR;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pending-sweep-"));
+    process.env.DATA_DIR = root;
+    try {
+      expect(await sweepPendingUploads()).toEqual({ tenants: 0, files: 0, bytes: 0 });
+      await keepPendingUpload("ta", "old", JPEG);
+      await keepPendingUpload("ta", "new", JPEG);
+      await keepPendingUpload("tb", "old", Buffer.alloc(100, 1));
+      fs.mkdirSync(inboundMediaDir("tc") as string, { recursive: true });
+      fs.writeFileSync(path.join(root, "inbound-media", "stray-file"), "x");
+      fs.mkdirSync(path.join(root, "inbound-media", "not.a.tenant", ".pending"), { recursive: true });
+      const notTenant = path.join(root, "inbound-media", "not.a.tenant", ".pending", "old");
+      fs.writeFileSync(notTenant, "x");
+      for (const file of [pendingUploadPath("ta", "old"), pendingUploadPath("tb", "old"), notTenant]) ageOverADay(file as string);
+
+      const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+      expect(await sweepPendingUploads()).toEqual({ tenants: 3, files: 2, bytes: JPEG.length + 100 });
+      info.mockRestore();
+      expect(fs.existsSync(pendingUploadPath("ta", "old") as string)).toBe(false);
+      expect(fs.existsSync(pendingUploadPath("tb", "old") as string)).toBe(false);
+      expect(fs.existsSync(pendingUploadPath("ta", "new") as string)).toBe(true);
+      expect(fs.existsSync(notTenant)).toBe(true);
+      expect(fs.existsSync(path.join(root, "inbound-media", "stray-file"))).toBe(true);
+
+      // A later run (the daily job passes its clock) catches what has aged since.
+      expect((await sweepPendingUploads(Date.now() + PENDING_UPLOAD_TTL_MS + 60_000)).files).toBe(1);
+      expect(fs.existsSync(pendingUploadPath("ta", "new") as string)).toBe(false);
+    } finally {
+      process.env.DATA_DIR = saved;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

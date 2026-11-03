@@ -226,6 +226,8 @@ describe("converting classic rules", () => {
     expect(parseDefinition(def)).toMatchObject({ ok: true });
     expect(def.filters.root.items).toEqual([{ type: "keyword", mode: "exact", keywords: ["price"] }]);
     expect(def.actions).toEqual([{ type: "send_text", text: "Hello" }]);
+    // Like the classic reply, the converted rule stays quiet while a person is handling the chat.
+    expect(def.filters.options).toEqual({ allowWhenHumanActive: false });
   });
   it("welcome rules keep their silence rule and away rules keep their open hours", () => {
     expect(convertDefinition({ ...base, type: "welcome" }).filters.root.items).toEqual([{ type: "quiet_for", minutes: 720 }]);

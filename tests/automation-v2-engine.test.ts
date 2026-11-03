@@ -99,12 +99,17 @@ describe("inbound orchestration", () => {
     expect(fire.mock.calls[0][0].message).toMatchObject({ text: "", messageType: "image" });
   });
 
-  it("never runs anything for opted-out contacts or STOP", async () => {
+  it("never runs anything for STOP", async () => {
     db.automationRule.findMany.mockResolvedValue([v2, classic]);
     expect((await runAutomationsForInbound({ ...base, text: "STOP" })).replied).toBe(false);
-    db.contact.findFirst.mockResolvedValue({ optedOutAt: new Date(), createdAt: new Date() });
-    expect((await runAutomationsForInbound(base)).replied).toBe(false);
     expect(fire).not.toHaveBeenCalled();
+  });
+
+  it("still runs rules for a contact who opted out earlier: an opt-out stops marketing only, and marketing steps are refused per step", async () => {
+    db.automationRule.findMany.mockResolvedValue([v2]);
+    db.contact.findFirst.mockResolvedValue({ optedOutAt: new Date("2026-01-01T00:00:00Z"), createdAt: new Date("2025-01-01T00:00:00Z") });
+    await runAutomationsForInbound(base);
+    expect(fire).toHaveBeenCalled();
   });
 });
 

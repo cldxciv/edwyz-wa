@@ -22,7 +22,13 @@
  *   (block_raises, assistants only) until an end date is set again or it is archived, notice.
  * Limits still win: the daily_limit and monthly_limit breakers pause on their next run. Campaigns created in Ads Manager are
  * not structure-synced. Demo and sandbox accounts are skipped (8.4).
+ *
+ * A third read per account, outside the book, follows Meta's ad review for the same campaigns:
+ *   GET act_X/ads?filtering=[{field:'campaign.id',operator:'IN',value:[...]}]&fields=id,campaign_id,effective_status,ad_review_feedback
+ * The result is stored on each Ad row (creative.metaReview, src/lib/ads/review.ts) so the campaign page says "Meta is
+ * reviewing" or "Not approved: <reason>", and a rejection raises an in-app notice. A failed review read never stops the sync.
  */
+import { AD_REVIEW_FIELDS, readAdReview, reviewChanged, reviewFromMeta, type MetaAdRead } from "@/lib/ads/review";
 import { prisma } from "@/lib/db";
 import { graphFetchAs } from "@/lib/graph";
 import { describeError } from "@/lib/safe-error";
@@ -42,6 +48,7 @@ export const STRUCTURE_IDS_PER_REQUEST = 50;
 export const ARCHIVED_LOOKBACK_MS = 35 * 86_400_000;
 export const CAMPAIGN_FIELDS = "id,name,status,effective_status,daily_budget,lifetime_budget,stop_time,is_adset_budget_sharing_enabled";
 export const ADSET_FIELDS = "id,name,campaign_id,status,effective_status,daily_budget,lifetime_budget,end_time";
+export const AD_FIELDS = AD_REVIEW_FIELDS;
 
 const EXTERNAL: SpendActor = { type: "external", source: "meta_ads_manager" };
 const OPEN = ["reserved", "live", "unconfirmed"];
@@ -94,7 +101,7 @@ export async function structureToken(io: StructureIo, tenantId: string, adAccoun
   return (await getAssetAccess(tenantId, adAccountAssetId)).token;
 }
 
-async function readEdge<T>(token: string, accountExternalId: string, edge: "campaigns" | "adsets", field: "id" | "campaign.id", ids: string[], fields: string): Promise<T[]> {
+async function readEdge<T>(token: string, accountExternalId: string, edge: "campaigns" | "adsets" | "ads", field: "id" | "campaign.id", ids: string[], fields: string): Promise<T[]> {
   const out: T[] = [];
   let after: string | undefined;
   for (let page = 0; page < MAX_PAGES; page++) {
@@ -147,6 +154,8 @@ export async function syncStructure(tenantId: string, adAccountAssetId: string, 
   }
   const metaCampaigns: MetaCampaignRead[] = [];
   const metaSets: MetaAdSetRead[] = [];
+  const metaAds: MetaAdRead[] = [];
+  let reviewsRead = true;
   let reads = 0;
   const ids = campaigns.map((c) => c.metaCampaignId!).filter(Boolean);
   for (let i = 0; i < ids.length; i += STRUCTURE_IDS_PER_REQUEST) {
@@ -154,6 +163,15 @@ export async function syncStructure(tenantId: string, adAccountAssetId: string, 
     metaCampaigns.push(...(await readEdge<MetaCampaignRead>(token, asset.externalId, "campaigns", "id", part, CAMPAIGN_FIELDS)));
     metaSets.push(...(await readEdge<MetaAdSetRead>(token, asset.externalId, "adsets", "campaign.id", part, ADSET_FIELDS)));
     reads += 2;
+    if (!reviewsRead) continue;
+    try {
+      metaAds.push(...(await readEdge<MetaAdRead>(token, asset.externalId, "ads", "campaign.id", part, AD_FIELDS)));
+      reads += 1;
+    } catch (error) {
+      // The review is for display only: the book's reads above stand, and the next sync tries again.
+      reviewsRead = false;
+      console.error(`[spend] ad review read of ${asset.id} failed: ${describeError(error)}`);
+    }
   }
 
   const control = await getControl(tenantId, { db, prune: false });
@@ -185,9 +203,53 @@ export async function syncStructure(tenantId: string, adAccountAssetId: string, 
   for (const campaignId of pending.breakers.clear) {
     await clearBreaker({ tenantId, kind: "external_edit", scopeType: "campaign", scopeId: campaignId }, { db, now, reason: "The campaign has an end date again, or was archived." }).catch(() => undefined);
   }
+  if (reviewsRead && metaAds.length > 0) {
+    await recordAdReviews(db, tenantId, campaigns, metaAds, now, pending).catch((e: unknown) => console.error(`[spend] ad review not stored: ${describeError(e)}`));
+  }
   const notify = io.notify ?? ((n: SpendNotice) => notifySpend(n));
   for (const n of pending.notices) await notify(n).catch(() => undefined);
   return { status: "synced", reads, changes: pending.changes };
+}
+
+/**
+ * Stores Meta's review of each ad on its Ad row (creative.metaReview) when it changed, and adds an in-app notice when an ad
+ * is newly not approved. Only Edwyz's own ads (matched by metaAdId); never a Meta call, never the book.
+ */
+async function recordAdReviews(db: SpendDb, tenantId: string, campaigns: DbCampaign[], metaAds: MetaAdRead[], now: Date, pending: Pending): Promise<void> {
+  const sets = ((await db.adSet.findMany({ where: { tenantId, campaignId: { in: campaigns.map((c) => c.id) } }, select: { id: true, campaignId: true } })) ?? []) as { id: string; campaignId: string }[];
+  if (sets.length === 0) return;
+  const ads = ((await db.ad.findMany({ where: { tenantId, adSetId: { in: sets.map((s) => s.id) }, metaAdId: { not: null } }, select: { id: true, adSetId: true, metaAdId: true, name: true, creative: true } })) ?? []) as {
+    id: string;
+    adSetId: string;
+    metaAdId: string | null;
+    name: string;
+    creative: unknown;
+  }[];
+  for (const ad of ads) {
+    const read = metaAds.find((m) => m.id === ad.metaAdId);
+    const review = read ? reviewFromMeta(read, now) : null;
+    if (!review) continue;
+    const before = readAdReview(ad.creative);
+    if (!reviewChanged(before, review)) continue;
+    const creative = ad.creative && typeof ad.creative === "object" && !Array.isArray(ad.creative) ? (ad.creative as Record<string, unknown>) : {};
+    await db.ad.updateMany({ where: { id: ad.id, tenantId }, data: { creative: { ...creative, metaReview: review } as never } });
+    if (review.state !== "rejected" || before?.state === "rejected") continue;
+    const dc = campaigns.find((c) => c.id === sets.find((s) => s.id === ad.adSetId)?.campaignId);
+    if (!dc) continue;
+    const why = review.reasons[0] ? `: ${review.reasons[0].replace(/[.!?]*$/, ".")}` : ".";
+    pending.notices.push({
+      tenantId,
+      kind: "breaker_tripped",
+      severity: "heads_up",
+      audience: "owner",
+      dedupeKey: `ads-review:${ad.id}:rejected`,
+      title: "Meta did not approve an ad",
+      body: `Meta did not approve ${ad.name} in ${dc.name}${why} Change the ad and create it again, or ask Meta for another review in Ads Manager.`,
+      link: `/app/ads/${dc.id}`,
+      subjectType: "campaign",
+      subjectId: dc.id,
+    });
+  }
 }
 
 type AdoptInput = {

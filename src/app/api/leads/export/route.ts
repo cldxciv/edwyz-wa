@@ -5,7 +5,10 @@ import { filtersFrom } from "../filters";
 
 export const dynamic = "force-dynamic";
 
-/** GET (admin) -> text/csv with the same filters as the list. Cells starting with = + - @ are neutralised. */
+/**
+ * GET (admin) -> text/csv with the same filters as the list (source, platform and test included). The last three columns are
+ * source, platform and test (yes for a test lead). Cells starting with = + - @ are neutralised.
+ */
 export async function GET(request: Request) {
   try {
     const actor = await getActor(request);

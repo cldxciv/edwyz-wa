@@ -1,7 +1,6 @@
 import { prisma } from "@/lib/db";
 import { HttpError } from "@/lib/tenancy";
-import { templateVariables } from "@/lib/templates/validate";
-import { unsupportedReason } from "@/lib/broadcasts/components";
+import { positionalCount, readPlaceholders } from "@/lib/templates/validate";
 import { DEFAULT_GAPS_MIN, validGaps } from "./schedule";
 
 export type CommerceSettings = {
@@ -48,11 +47,41 @@ export async function deleteSettings(tenantId: string, storeId: string) {
   await prisma.platformSetting.deleteMany({ where: { key: key(tenantId, storeId) } });
 }
 
-export function bodyVariableCount(components: unknown): number {
-  const list = Array.isArray(components) ? components : [];
-  const body = list.find((c) => c && typeof c === "object" && (c as { type?: string }).type === "BODY") as { text?: string } | undefined;
-  const vars = templateVariables(body?.text ?? "");
-  return vars.length ? Math.max(...vars) : 0;
+type Component = Record<string, unknown>;
+const list = (components: unknown): Component[] => (Array.isArray(components) ? (components as Component[]).filter((c) => c && typeof c === "object") : []);
+
+/**
+ * The highest {{n}} in the template's message (0 when it has none), or null when the template uses named placeholders. Never
+ * throws: synced templates are Meta's, and one with {{first_name}} must not break the reminder settings for every other template.
+ */
+export function bodyVariableCount(components: unknown): number | null {
+  return positionalCount(list(components).find((c) => c.type === "BODY")?.text ?? "");
+}
+
+const REMINDER_BUTTONS = new Set(["QUICK_REPLY", "URL", "PHONE_NUMBER"]);
+
+/**
+ * Why an approved template cannot be a cart reminder, in the merchant's words, or null when it can. Reminders fill the message's
+ * {{1}} first name, {{2}} cart total and {{3}} checkout link, and a website button's placeholder with the checkout link.
+ */
+export function reminderSupportReason(components: unknown): string | null {
+  const all = list(components);
+  const count = bodyVariableCount(components);
+  if (count === null) return "It uses named placeholders. Reminders fill numbered ones: {{1}} first name, {{2}} cart total, {{3}} checkout link.";
+  if (count > MAX_TEMPLATE_VARIABLES) return "It has more than 3 placeholders. Reminders fill only {{1}} first name, {{2}} cart total and {{3}} checkout link.";
+  const header = all.find((c) => c.type === "HEADER");
+  const format = typeof header?.format === "string" ? header.format.toUpperCase() : "TEXT";
+  if (header && format !== "TEXT") return "It shows a picture, video, document or location at the top, which reminders cannot fill in yet.";
+  if (header && readPlaceholders(header.text).format !== "none") return "Its header has a placeholder, which reminders cannot fill in.";
+  if (all.some((c) => c.type === "CAROUSEL" || c.type === "LIMITED_TIME_OFFER")) return "Carousel and limited-time-offer templates cannot be used for reminders.";
+  const buttons = (all.find((c) => c.type === "BUTTONS")?.buttons as Component[] | undefined) ?? [];
+  for (const b of buttons) {
+    const type = typeof b?.type === "string" ? b.type.toUpperCase() : "";
+    if (type === "COPY_CODE") return "It has a coupon-code button, which reminders cannot fill in yet.";
+    if (type && !REMINDER_BUTTONS.has(type)) return "It has a button that reminders cannot fill in. Use quick replies, a call button or a website button.";
+    if (type === "URL" && typeof b.url === "string" && /^https:\/\/www\.whatsapp\.com\/otp\//i.test(b.url)) return "Login-code templates cannot be used for reminders.";
+  }
+  return null;
 }
 
 function optionalId(value: unknown, field: string): string | null | undefined {
@@ -73,11 +102,8 @@ async function assertTemplate(tenantId: string, templateId: string) {
   const template = await prisma.template.findFirst({ where: { id: templateId, tenantId }, select: { status: true, components: true } });
   if (!template) throw new HttpError(400, "Template not found.");
   if (template.status !== "approved") throw new HttpError(400, "The template must be approved by Meta.");
-  if (bodyVariableCount(template.components) > MAX_TEMPLATE_VARIABLES) {
-    throw new HttpError(400, "The template can use at most 3 variables: first name, cart total, checkout link.");
-  }
-  const reason = unsupportedReason(template.components);
-  if (reason) throw new HttpError(400, reason);
+  const reason = reminderSupportReason(template.components);
+  if (reason) throw new HttpError(400, `This template cannot be a reminder. ${reason}`);
 }
 
 export async function saveSettings(tenantId: string, storeId: string, raw: Record<string, unknown>): Promise<CommerceSettings> {

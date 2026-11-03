@@ -29,7 +29,7 @@ const escalationUsesAi = (flow: unknown): boolean => {
   return escalation.enabled !== false && escalation.useAi === true;
 };
 
-function chatbotSpend(flow: unknown): "none" | "messaging" | "ai" {
+export function chatbotSpend(flow: unknown): "none" | "messaging" | "ai" {
   if (flowNodes(flow).some((n) => n.type === "send_template")) return "messaging";
   return escalationUsesAi(flow) ? "ai" : "none";
 }

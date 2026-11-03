@@ -43,7 +43,8 @@ export function LegalDoc({ title, summary, sections, children }: Props) {
 
 export function Sec({ section, children }: { section: Section; children: ReactNode }) {
   return (
-    <section id={section.id} aria-labelledby={`${section.id}-h`} className="scroll-mt-20">
+    // No scroll-margin here: html already has scroll-padding-top for the sticky header (globals.css), and the two would add up.
+    <section id={section.id} aria-labelledby={`${section.id}-h`}>
       <h2 id={`${section.id}-h`}>{section.title}</h2>
       {children}
     </section>

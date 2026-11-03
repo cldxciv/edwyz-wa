@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Button, FormField, Input, Select } from "@/components/ui";
 import { LIMITS, MESSAGE_TYPES, type Condition, type Group } from "@/lib/automation/v2/model";
 import { DAY_LABELS, addKeywords, timezoneOptions } from "./helpers";
-import { ATTRIBUTE_OP_LABEL, conditionsFor, defaultCondition, MESSAGE_TYPE_LABEL, type Options } from "./rulesV2";
+import { ATTRIBUTE_OP_LABEL, conditionProblem, conditionsFor, defaultCondition, MESSAGE_TYPE_LABEL, type Options } from "./rulesV2";
 import type { Trigger } from "@/lib/automation/v2/model";
 
 const zones = timezoneOptions();
@@ -17,10 +17,22 @@ const QUIET_CHOICES = [
   { label: "7 days", value: 10080 },
 ];
 
-type Ctx = { trigger: Trigger; options: Options; timezone: string };
+/** showErrors: the person pressed Create rule or Save changes, so each condition shows its problem under the field it is about. */
+type Ctx = { trigger: Trigger; options: Options; timezone: string; showErrors?: boolean };
 
-function KeywordsField({ value, onChange }: { value: string[]; onChange: (next: string[]) => void }) {
+/** The error line under a group of checkboxes or the word list, which have no single FormField to carry it. */
+function GroupError({ id, message }: { id: string; message?: string }) {
+  if (!message) return null;
+  return (
+    <p id={id} role="alert" data-problem className="mt-1.5 text-xs font-medium text-bad-fg">
+      {message}
+    </p>
+  );
+}
+
+function KeywordsField({ value, onChange, error }: { value: string[]; onChange: (next: string[]) => void; error?: string }) {
   const [text, setText] = useState("");
+  const errorId = useId();
   const commit = () => {
     if (text.trim()) onChange(addKeywords(value, text, LIMITS.keywords));
     setText("");
@@ -40,6 +52,8 @@ function KeywordsField({ value, onChange }: { value: string[]; onChange: (next: 
       <div className="flex gap-2">
         <Input
           aria-label="Add a word or phrase"
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? errorId : undefined}
           value={text}
           maxLength={LIMITS.keywordLength}
           placeholder="Type a word and press Enter"
@@ -56,13 +70,15 @@ function KeywordsField({ value, onChange }: { value: string[]; onChange: (next: 
           Add word
         </Button>
       </div>
+      <GroupError id={errorId} message={error} />
     </div>
   );
 }
 
-function DaysField({ value, onChange }: { value: number[]; onChange: (next: number[]) => void }) {
+function DaysField({ value, onChange, error }: { value: number[]; onChange: (next: number[]) => void; error?: string }) {
+  const errorId = useId();
   return (
-    <fieldset>
+    <fieldset aria-describedby={error ? errorId : undefined}>
       <legend className="mb-1.5 text-sm font-medium">Days</legend>
       <div className="flex flex-wrap gap-1.5">
         {DAY_LABELS.map((label, day) => (
@@ -72,11 +88,15 @@ function DaysField({ value, onChange }: { value: number[]; onChange: (next: numb
           </label>
         ))}
       </div>
+      <GroupError id={errorId} message={error} />
     </fieldset>
   );
 }
 
 function ConditionFields({ c, onChange, ctx }: { c: Condition; onChange: (next: Condition) => void; ctx: Ctx }) {
+  const problem = ctx.showErrors ? conditionProblem(c) : null;
+  const err = (field: string) => (problem?.field === field ? problem.message : undefined);
+  const errorId = useId();
   switch (c.type) {
     case "keyword":
       return (
@@ -87,7 +107,7 @@ function ConditionFields({ c, onChange, ctx }: { c: Condition; onChange: (next: 
               <option value="exact">is exactly one of these words</option>
             </Select>
           </FormField>
-          <KeywordsField value={c.keywords} onChange={(keywords) => onChange({ ...c, keywords })} />
+          <KeywordsField value={c.keywords} onChange={(keywords) => onChange({ ...c, keywords })} error={err("keywords")} />
           <p className="text-xs text-muted">Capital letters do not matter.</p>
         </div>
       );
@@ -102,7 +122,7 @@ function ConditionFields({ c, onChange, ctx }: { c: Condition; onChange: (next: 
       );
     case "quiet_for":
       return (
-        <FormField label="The customer is new, or has been quiet for at least" hint="Good for a welcome message that should come back after a long break.">
+        <FormField label="The customer is new, or has been quiet for at least" hint="Good for a welcome message that should come back after a long break." error={err("quiet_for")}>
           <Select value={String(c.minutes)} onChange={(e) => onChange({ ...c, minutes: Number(e.target.value) })}>
             {(QUIET_CHOICES.some((q) => q.value === c.minutes) ? QUIET_CHOICES : [{ label: `${c.minutes} minutes`, value: c.minutes }, ...QUIET_CHOICES]).map((q) => (
               <option key={q.value} value={q.value}>
@@ -114,7 +134,7 @@ function ConditionFields({ c, onChange, ctx }: { c: Condition; onChange: (next: 
       );
     case "message_type":
       return (
-        <fieldset>
+        <fieldset aria-describedby={err("types") ? errorId : undefined}>
           <legend className="mb-1.5 text-sm font-medium">The message is any of</legend>
           <div className="flex flex-wrap gap-1.5">
             {MESSAGE_TYPES.map((t) => (
@@ -124,6 +144,7 @@ function ConditionFields({ c, onChange, ctx }: { c: Condition; onChange: (next: 
               </label>
             ))}
           </div>
+          <GroupError id={errorId} message={err("types")} />
         </fieldset>
       );
     case "time_window":
@@ -135,16 +156,16 @@ function ConditionFields({ c, onChange, ctx }: { c: Condition; onChange: (next: 
               <option value="inside">inside these hours</option>
             </Select>
           </FormField>
-          <DaysField value={c.days} onChange={(days) => onChange({ ...c, days })} />
+          <DaysField value={c.days} onChange={(days) => onChange({ ...c, days })} error={err("days")} />
           <div className="grid grid-cols-2 gap-3">
-            <FormField label="From">
+            <FormField label="From" error={err("times")}>
               <Input type="time" value={c.start} onChange={(e) => onChange({ ...c, start: e.target.value })} />
             </FormField>
             <FormField label="To">
               <Input type="time" value={c.end} onChange={(e) => onChange({ ...c, end: e.target.value })} />
             </FormField>
           </div>
-          <FormField label="Timezone">
+          <FormField label="Timezone" error={err("timezone")}>
             <Select value={c.timezone} onChange={(e) => onChange({ ...c, timezone: e.target.value })}>
               {(zones.includes(c.timezone) ? zones : [c.timezone, ...zones]).map((z) => (
                 <option key={z} value={z}>
@@ -158,7 +179,7 @@ function ConditionFields({ c, onChange, ctx }: { c: Condition; onChange: (next: 
     case "attribute":
       return (
         <div className="grid gap-3 sm:grid-cols-3">
-          <FormField label="Contact detail" hint="For example city">
+          <FormField label="Contact detail" hint="For example city" error={err("name")}>
             <Input value={c.name} maxLength={LIMITS.attribute} onChange={(e) => onChange({ ...c, name: e.target.value })} />
           </FormField>
           <FormField label="Compare">
@@ -171,7 +192,7 @@ function ConditionFields({ c, onChange, ctx }: { c: Condition; onChange: (next: 
             </Select>
           </FormField>
           {c.op !== "exists" && c.op !== "not_exists" && (
-            <FormField label="Value">
+            <FormField label="Value" error={err("value")}>
               <Input value={c.value} maxLength={LIMITS.attributeValue} onChange={(e) => onChange({ ...c, value: e.target.value })} />
             </FormField>
           )}
@@ -186,7 +207,7 @@ function ConditionFields({ c, onChange, ctx }: { c: Condition; onChange: (next: 
               <option value="not">does not have the tag</option>
             </Select>
           </FormField>
-          <FormField label="Tag">
+          <FormField label="Tag" error={err("tag")}>
             <Input value={c.tag} maxLength={LIMITS.tag} onChange={(e) => onChange({ ...c, tag: e.target.value })} />
           </FormField>
         </div>
@@ -200,7 +221,7 @@ function ConditionFields({ c, onChange, ctx }: { c: Condition; onChange: (next: 
               <option value="out">is not in the segment</option>
             </Select>
           </FormField>
-          <FormField label="Segment" hint={ctx.options.segments.length === 0 ? "You have no segments yet." : undefined}>
+          <FormField label="Segment" hint={ctx.options.segments.length === 0 ? "You have no segments yet." : undefined} error={err("segment")}>
             <Select value={c.segmentId} onChange={(e) => onChange({ ...c, segmentId: e.target.value })}>
               <option value="">Choose a segment</option>
               {ctx.options.segments.map((s) => (
@@ -222,7 +243,7 @@ function ConditionFields({ c, onChange, ctx }: { c: Condition; onChange: (next: 
               <option value="contains">contains</option>
             </Select>
           </FormField>
-          <FormField label="Digits" hint="Use the country code, for example +91 for India.">
+          <FormField label="Digits" hint="Use the country code, for example +91 for India." error={err("value")}>
             <Input inputMode="tel" value={c.value} maxLength={20} onChange={(e) => onChange({ ...c, value: e.target.value })} />
           </FormField>
         </div>
@@ -238,7 +259,7 @@ function ConditionFields({ c, onChange, ctx }: { c: Condition; onChange: (next: 
             </Select>
           </FormField>
           {c.state === "user" && (
-            <FormField label="Person">
+            <FormField label="Person" error={err("user")}>
               <Select value={c.userId ?? ""} onChange={(e) => onChange({ ...c, userId: e.target.value || null })}>
                 <option value="">Choose a person</option>
                 {ctx.options.members.map((m) => (

@@ -25,8 +25,10 @@ export async function goDark(page: Page) {
   const toDark = page.getByRole("button", { name: "Switch to dark theme" }).first();
   if (await toDark.isVisible().catch(() => false)) await toDark.click();
   else {
-    // mobile: the toggle lives in the menu drawer
-    await page.getByRole("button", { name: /menu/i }).first().click().catch(() => undefined);
+    // mobile: the toggle lives in the drawer the "More" tab opens (the first /menu/ button is the account menu, which has none)
+    const more = page.getByRole("button", { name: "More", exact: true });
+    if (await more.isVisible().catch(() => false)) await more.click();
+    else await page.getByRole("button", { name: /menu/i }).first().click().catch(() => undefined);
     await page.getByRole("button", { name: "Switch to dark theme" }).first().click().catch(() => undefined);
     await page.keyboard.press("Escape");
   }

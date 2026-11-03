@@ -1,16 +1,23 @@
+import { deleteMedia } from "@/lib/content/media";
 import { prisma } from "@/lib/db";
 import { disconnect } from "@/lib/meta-connect/service";
+import { forgetContact, queueAdAccountAudienceDeletes } from "@/lib/promote/forget";
 import { BATCH, chunk, delegateFor, deleteByIds } from "./batch";
 
 /**
  * Decision: when Meta tells us a Facebook user removed the app, we erase what came from that user's Meta connection and
  * leave the rest of the workspace alone. That is the connection row, its assets (Pages, Instagram accounts, ad accounts,
  * datasets, catalogs) with their tokens, and data derived only from those assets: lead forms and leads from its Pages (with
- * their follow-up runs and conversion events), contacts created only by those leads, campaigns, ad sets, ads, ad performance
- * snapshots and optimizer proposals for its ad accounts, and post targets for its assets. WhatsApp contacts, conversations,
- * messages, billing and team members belong to the business, not to the Facebook user, and stay. An asset is unique per
- * workspace (tenantId, type, externalId), so everything keyed by an asset id came solely from one connection.
+ * their follow-up runs and conversion events), contacts created only by those leads, campaigns, ad sets, ads, version
+ * comparisons, ad performance snapshots and breakdowns and optimizer proposals for its ad accounts, the ad media and audiences
+ * of its ad accounts (their customer-list audiences are deleted on Meta first, best effort), and post targets for its assets.
+ * WhatsApp contacts, conversations, messages, billing and team members belong to the business, not to the Facebook user, and
+ * stay. An asset is unique per workspace (tenantId, type, externalId), so everything keyed by an asset id came solely from one
+ * connection.
  */
+
+/** AdMedia sources whose file Edwyz made only for ads (a copy of Instagram media, a crop). Library uploads and generated creatives keep their file. */
+const ADS_ONLY_FILE_SOURCES: readonly string[] = ["ig_copy", "crop"];
 
 export type MetaErasureCounts = Record<string, number>;
 
@@ -40,7 +47,10 @@ async function eraseLeads(tenantId: string, pageIds: string[], counts: MetaErasu
       where: { tenantId, id: { in: part }, optInSource: "lead_form", conversations: { none: {} }, broadcastRecipients: { none: {} } },
       select: { id: true },
     });
-    if (candidates.length) add(counts, "Contact", (await prisma.contact.deleteMany({ where: { tenantId, id: { in: candidates.map((c) => c.id) } } })).count);
+    if (candidates.length === 0) continue;
+    // Out of the workspace's customer-list audiences on Meta first, while the email and phone can still be read (IG-PAGE-ADS-SPEC 5.5).
+    for (const c of candidates) await forgetContact(tenantId, c.id);
+    add(counts, "Contact", (await prisma.contact.deleteMany({ where: { tenantId, id: { in: candidates.map((c) => c.id) } } })).count);
   }
   add(counts, "LeadForm", (await prisma.leadForm.deleteMany({ where: { tenantId, id: { in: formIds } } })).count);
 }
@@ -57,14 +67,50 @@ async function eraseAdData(tenantId: string, adAccountIds: string[], counts: Met
 
     const metaIds = [...campaigns.map((c) => c.metaCampaignId), ...adSets.map((s) => s.metaAdSetId), ...ads.map((a) => a.metaAdId)].filter((v): v is string => !!v);
     add(counts, "InsightSnapshot", await deleteByIds("InsightSnapshot", { tenantId }, "entityMetaId", metaIds));
+    add(counts, "InsightBreakdown", await deleteByIds("InsightBreakdown", { tenantId }, "entityMetaId", metaIds));
     add(counts, "OptimizerProposal", await deleteByIds("OptimizerProposal", { tenantId }, "targetMetaId", metaIds));
     add(counts, "ApprovalRequest", await deleteByIds("ApprovalRequest", { tenantId, subjectType: "ad_campaign" }, "subjectId", campaignIds));
     add(counts, "PlatformSetting", await deleteByIds("PlatformSetting", {}, "key", campaignIds.map((id) => `approval:ad_campaign:${tenantId}:${id}`), "key"));
+    add(counts, "AdTest", await deleteByIds("AdTest", { tenantId }, "campaignId", campaignIds));
     add(counts, "Ad", await deleteByIds("Ad", { tenantId }, "adSetId", adSetIds));
     add(counts, "AdSet", (await prisma.adSet.deleteMany({ where: { tenantId, id: { in: adSetIds } } })).count);
     const { count } = await prisma.adCampaign.deleteMany({ where: { tenantId, id: { in: campaignIds } } });
     add(counts, "AdCampaign", count);
     if (count === 0) break;
+  }
+  await eraseAdAccountMediaAndAudiences(tenantId, adAccountIds, counts);
+}
+
+/**
+ * The ad media and audiences of the erased ad accounts (docs/IG-PAGE-ADS-SPEC.md 5.5). Every AdMedia row goes; a file goes only
+ * when Edwyz made it for ads (ADS_ONLY_FILE_SOURCES) and no other AdMedia row of the workspace still names it, through the content
+ * store's own path checks. The audiences go with their upload records (their customer lists were deleted on Meta before the
+ * connection was revoked, see deleteAccountAudiencesOnMeta).
+ */
+async function eraseAdAccountMediaAndAudiences(tenantId: string, adAccountIds: string[], counts: MetaErasureCounts): Promise<void> {
+  const media = await prisma.adMedia.findMany({ where: { tenantId, adAccountAssetId: { in: adAccountIds } }, select: { source: true, sourceKey: true } });
+  add(counts, "AdMedia", await deleteByIds("AdMedia", { tenantId }, "adAccountAssetId", adAccountIds));
+  for (const key of new Set(media.filter((m) => ADS_ONLY_FILE_SOURCES.includes(m.source)).map((m) => m.sourceKey))) {
+    if ((await prisma.adMedia.count({ where: { tenantId, sourceKey: key, source: { not: "creative" } } })) > 0) continue;
+    if (await deleteMedia(tenantId, key).catch(() => false)) add(counts, "AdMediaFile", 1);
+  }
+  const audienceIds = (await prisma.adAudience.findMany({ where: { tenantId, adAccountAssetId: { in: adAccountIds } }, select: { id: true } })).map((a) => a.id);
+  add(counts, "AdAudienceUpload", await deleteByIds("AdAudienceUpload", { tenantId }, "audienceId", audienceIds));
+  add(counts, "AdAudience", await deleteByIds("AdAudience", { tenantId }, "id", audienceIds));
+}
+
+/**
+ * Deletes the customer-list audiences of the connection's ad accounts on Meta (promote/forget.ts), while the connection's token
+ * still works. Best effort: a failure is counted and never stops the erasure.
+ */
+async function deleteAccountAudiencesOnMeta(tenantId: string, adAccountIds: string[], counts: MetaErasureCounts): Promise<void> {
+  if (adAccountIds.length === 0) return;
+  try {
+    const out = await queueAdAccountAudienceDeletes(tenantId, adAccountIds);
+    if (out.queued) add(counts, "metaAudiencesDeleted", out.queued);
+    if (out.failed) add(counts, "metaAudienceDeletesFailed", out.failed);
+  } catch {
+    add(counts, "metaAudienceDeletesFailed", 1);
   }
 }
 
@@ -73,6 +119,10 @@ export async function eraseMetaConnectionData(tenantId: string, connectionId: st
   const counts: MetaErasureCounts = {};
   const connection = await prisma.metaConnection.findFirst({ where: { id: connectionId, tenantId }, select: { id: true, status: true } });
   if (!connection) return counts;
+
+  // Customer-list audiences of its ad accounts on Meta first, while the token still works and before their rows go (5.5).
+  const adAccounts = await prisma.metaAsset.findMany({ where: { tenantId, connectionId: connection.id, type: "ad_account" }, select: { id: true } });
+  await deleteAccountAudiencesOnMeta(tenantId, adAccounts.map((a) => a.id), counts);
 
   if (connection.status !== "revoked") {
     try {

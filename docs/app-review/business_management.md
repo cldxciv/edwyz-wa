@@ -1,9 +1,9 @@
 # business_management
 
 Phase: A
-Feature built: **NOT BUILT**
+Feature built: **Built**: Connections at /app/settings/connections (connect with Facebook, asset discovery, disconnect; `src/lib/meta-connect`). Not yet exercised against live Meta with the review user.
 
-> DO NOT SUBMIT until built. Phase A routes under /app/ads, /app/leads and /app/settings/connections do not exist in the repo as of 2026-10-27. Reviewers reject demos of flows that do not exist. The text below is the plan; re-check against the final UI.
+> Built; needs a live test and a screencast. Before submitting: run the flow below with the review user on the test assets, record the screencast, make the API test calls in the App Dashboard, and re-check the text against the final UI. The request is a draft (1799953447868194, not submitted); state in `status.md`.
 
 VERIFY: permission names and the Instagram family (Facebook Login vs Instagram Login) in the App Dashboard permissions list at submission time.
 
@@ -22,7 +22,7 @@ Length: 497 characters (limit 1000).
 Record at 1080p with the browser URL bar visible. No narration of secrets. Captions or voice-over naming each step.
 
 1. Sign in at https://wa.edwyz.com/login.
-2. Open Settings > Connections (planned route /app/settings/connections). Click Connect with Facebook.
+2. Open Settings > Connections (/app/settings/connections). Click Connect with Facebook.
 3. Show the Login for Business dialog with the business portfolio and asset selection and the permission list visible.
 4. After redirect, show the discovered assets list: portfolio, Pages, ad accounts, datasets.
 5. Select assets and save; show 'what we can access' list.

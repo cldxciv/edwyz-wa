@@ -72,7 +72,8 @@ export default function Home() {
           </ul>
         </section>
 
-        <section id={SECTION.howItWorks} className={`${wrap} scroll-mt-20 py-16 sm:py-20`} aria-labelledby="how-title">
+        {/* Anchor jumps clear the sticky header through html { scroll-padding-top } in globals.css; a scroll-margin on these sections would add to it. */}
+        <section id={SECTION.howItWorks} className={`${wrap} py-16 sm:py-20`} aria-labelledby="how-title">
           <SectionHead id="how-title" eyebrow="How it works" title="Up and running in three steps" />
           <ol className="mt-10 grid gap-6 md:grid-cols-3">
             {STEPS.map((s, i) => (
@@ -90,7 +91,7 @@ export default function Home() {
           </ol>
         </section>
 
-        <section id={SECTION.features} className="scroll-mt-20 border-t border-border bg-surface" aria-labelledby="features-title">
+        <section id={SECTION.features} className="border-t border-border bg-surface" aria-labelledby="features-title">
           <div className={`${wrap} py-16 sm:py-20`}>
             <SectionHead
               id="features-title"
@@ -112,7 +113,7 @@ export default function Home() {
           </div>
         </section>
 
-        <section id={SECTION.eddy} className={`${wrap} scroll-mt-20 py-16 sm:py-20`} aria-labelledby="eddy-title">
+        <section id={SECTION.eddy} className={`${wrap} py-16 sm:py-20`} aria-labelledby="eddy-title">
           <div className="grid gap-10 lg:grid-cols-2 lg:items-start">
             <div>
               <SectionHead
@@ -128,7 +129,7 @@ export default function Home() {
           </div>
         </section>
 
-        <section id={SECTION.spending} className="scroll-mt-20 border-y border-border bg-surface" aria-labelledby="spending-title">
+        <section id={SECTION.spending} className="border-y border-border bg-surface" aria-labelledby="spending-title">
           <div className={`${wrap} grid gap-10 py-16 sm:py-20 lg:grid-cols-[1.2fr_0.8fr] lg:items-start`}>
             <div>
               <SectionHead
@@ -144,7 +145,7 @@ export default function Home() {
           </div>
         </section>
 
-        <section id={SECTION.comingSoon} className={`${wrap} scroll-mt-20 py-16 sm:py-20`} aria-labelledby="soon-title">
+        <section id={SECTION.comingSoon} className={`${wrap} py-16 sm:py-20`} aria-labelledby="soon-title">
           <SectionHead
             id="soon-title"
             eyebrow="On the way"
@@ -158,14 +159,14 @@ export default function Home() {
           </p>
         </section>
 
-        <section id={SECTION.developers} className="scroll-mt-20 border-y border-border bg-surface" aria-labelledby="dev-title">
+        <section id={SECTION.developers} className="border-y border-border bg-surface" aria-labelledby="dev-title">
           <div className={`${wrap} grid gap-10 py-16 sm:py-20 lg:grid-cols-2 lg:items-start`}>
             <div>
               <SectionHead
                 id="dev-title"
                 eyebrow="For developers"
                 title="Connect your own systems and AI tools"
-                intro="Everything the API can do follows the same WhatsApp rules as the app: replies inside the 24-hour window, approved templates outside it, and no messages to people who opted out."
+                intro="Everything the API can do follows the same WhatsApp rules as the app: replies inside the 24-hour window, approved templates outside it, and no marketing messages to people who opted out."
               />
               <PointList items={DEVELOPER_POINTS} />
             </div>
@@ -191,7 +192,7 @@ export default function Home() {
           </div>
         </section>
 
-        <section id={SECTION.security} className={`${wrap} scroll-mt-20 py-16 sm:py-20`} aria-labelledby="security-title">
+        <section id={SECTION.security} className={`${wrap} py-16 sm:py-20`} aria-labelledby="security-title">
           <SectionHead
             id="security-title"
             eyebrow="Security and privacy"
@@ -224,7 +225,7 @@ export default function Home() {
           </p>
         </section>
 
-        <section id={SECTION.faq} className="scroll-mt-20 border-t border-border" aria-labelledby="faq-title">
+        <section id={SECTION.faq} className="border-t border-border" aria-labelledby="faq-title">
           <div className={`${wrap} py-16 sm:py-20`}>
             <SectionHead id="faq-title" eyebrow="Questions" title="Answers before you ask" />
             <Faq items={FAQS} />

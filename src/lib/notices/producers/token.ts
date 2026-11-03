@@ -4,9 +4,12 @@
  * Skipped in the demo workspace, which has no token by design (6.14). When the connection is fine again, or there is none
  * (the setup step covers that), both resolve.
  */
-import { getWhatsAppTokenHealth, type TokenHealth } from "@/lib/onboarding/token-health";
+import { prisma } from "@/lib/db";
+import { EXPIRING_DAYS, REJECTED_FLAG_PREFIX, getWhatsAppTokenHealth, type TokenHealth } from "@/lib/onboarding/token-health";
 import { act, dedupe } from "../kinds";
 import type { NoticeProducer } from "../scan";
+
+const DAY_MS = 86_400_000;
 
 export type TokenHealthReader = (tenantId: string, now: Date) => Promise<TokenHealth>;
 let read: TokenHealthReader = getWhatsAppTokenHealth;
@@ -19,6 +22,14 @@ export const producer: NoticeProducer = {
   name: "token",
   kinds: ["token_expiring", "token_expired"],
   skipDemo: true,
+  /** Workspaces whose token Meta refused, or with a token that expires within EXPIRING_DAYS or has expired. */
+  async due(tenantIds, now) {
+    const [flags, tokens] = await Promise.all([
+      prisma.platformSetting.findMany({ where: { key: { in: tenantIds.map((id) => `${REJECTED_FLAG_PREFIX}${id}`) } }, select: { key: true } }) as Promise<{ key: string }[]>,
+      prisma.accessToken.groupBy({ by: ["tenantId"], where: { tenantId: { in: [...tenantIds] }, expiresAt: { lte: new Date(now.getTime() + EXPIRING_DAYS * DAY_MS) } } }),
+    ]);
+    return [...flags.map((f) => f.key.slice(REJECTED_FLAG_PREFIX.length)), ...tokens.map((t) => t.tenantId)];
+  },
   async run(ctx) {
     const health = await read(ctx.tenantId, ctx.now);
     const keep: string[] = [];

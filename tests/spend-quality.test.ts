@@ -29,6 +29,7 @@ import {
   normalizeQualityRating,
   pollQuality,
   readWabaCurrencies,
+  readWabaTiers,
   storedNumberStatus,
   templateUsableByAssistant,
   WABA_CURRENCY_KEY,
@@ -114,7 +115,7 @@ describe("spend.quality.poll (6.3)", () => {
     const m = meta({ meta_ph1: { quality_rating: "YELLOW", status: "CONNECTED" }, meta_waba_1: { currency: "INR" } });
     const out = await pollQuality({ now: NOW, read: m.read });
     expect(out).toMatchObject({ polled: 1, opened: 1, failed: 0 });
-    expect(m.calls[0]).toEqual({ tenantId: T, path: "meta_ph1", fields: "quality_rating,status" });
+    expect(m.calls[0]).toEqual({ tenantId: T, path: "meta_ph1", fields: "quality_rating,status,messaging_limit_tier" });
     expect(phone().qualityRating).toBe("YELLOW");
     expect(open("wa_quality_yellow")[0]).toMatchObject({ scopeType: "phone", scopeId: "ph1", effect: "block_marketing" });
     expect(paused).toHaveBeenCalledWith(T, "ph1", "number_quality_yellow");
@@ -202,7 +203,7 @@ describe("spend.quality.poll (6.3)", () => {
     ]);
     const m = meta({ meta_ph1: { quality_rating: "GREEN", status: "CONNECTED" } });
     const out = await pollQuality({ now: NOW, read: m.read });
-    expect(m.calls.map((c) => c.path).filter((p) => p.startsWith("meta_"))).toEqual(["meta_ph1", "meta_waba_1"]);
+    expect(m.calls.map((c) => c.path).filter((p) => p.startsWith("meta_"))).toEqual(["meta_ph1", "meta_waba_1", "meta_waba_1"]);
     expect(out).toMatchObject({ polled: 1, skipped: 2 });
   });
 
@@ -215,6 +216,33 @@ describe("spend.quality.poll (6.3)", () => {
     expect(h.db.rows("platformSetting").some((s) => s.key === WABA_CURRENCY_KEY(T))).toBe(true);
     await pollQuality({ now: new Date(NOW.getTime() + 25 * 60 * MIN), read: m.read });
     expect(m.calls.filter((c) => c.fields === "currency")).toHaveLength(2);
+  });
+
+  it("re-reads the messaging limit: the portfolio's once a day (it wins), each number's every poll when the portfolio has none", async () => {
+    h.db.seed("waba", [{ id: "w1", tenantId: T, wabaId: "meta_waba_1", businessId: null }]);
+    phone().messagingLimitTier = "TIER_250";
+    const m = meta({ meta_ph1: { quality_rating: "GREEN", status: "CONNECTED", messaging_limit_tier: "TIER_1K" }, meta_waba_1: { whatsapp_business_manager_messaging_limit: "TIER_10K" } });
+    const out = await pollQuality({ now: NOW, read: m.read });
+    expect(m.calls.filter((c) => c.fields === "whatsapp_business_manager_messaging_limit")).toEqual([{ tenantId: T, path: "meta_waba_1", fields: "whatsapp_business_manager_messaging_limit" }]);
+    expect(phone().messagingLimitTier).toBe("TIER_10K");
+    expect(out.tiers).toBe(1);
+    expect(await readWabaTiers(T)).toEqual({ wabas: { w1: { tier: "TIER_10K", at: NOW.toISOString() } } });
+    // Half an hour later the portfolio is not read again, and the number's own older tier does not undo the portfolio's.
+    await pollQuality({ now: new Date(NOW.getTime() + 30 * MIN), read: m.read });
+    expect(m.calls.filter((c) => c.fields === "whatsapp_business_manager_messaging_limit")).toHaveLength(1);
+    expect(phone().messagingLimitTier).toBe("TIER_10K");
+  });
+
+  it("stores a number's own tier (normalised) when Meta reports no portfolio limit", async () => {
+    phone().messagingLimitTier = "TIER_250";
+    const m = meta({ meta_ph1: { quality_rating: "GREEN", status: "CONNECTED", messaging_limit_tier: "tier_2k" }, meta_waba_1: { currency: "INR" } });
+    const out = await pollQuality({ now: NOW, read: m.read });
+    expect(phone().messagingLimitTier).toBe("TIER_2K");
+    expect(out.tiers).toBe(1);
+    // A failed portfolio read keeps the number's reading in charge and changes nothing else.
+    const failed = meta({ meta_ph1: { quality_rating: "GREEN", status: "CONNECTED" }, meta_waba_1: new Error("no permission") });
+    expect((await pollQuality({ now: new Date(NOW.getTime() + 25 * 60 * MIN), read: failed.read })).tiers).toBe(0);
+    expect(phone().messagingLimitTier).toBe("TIER_2K");
   });
 
   it("the existing quality email fires from the fresh rating the poll stored", async () => {

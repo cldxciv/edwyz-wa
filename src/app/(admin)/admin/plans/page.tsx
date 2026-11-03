@@ -1,5 +1,6 @@
 import { requireAdminPage } from "@/lib/admin/page";
 import { listPlans } from "@/lib/admin/plans";
+import { razorpayConfigured } from "@/lib/billing/razorpay";
 import { formatInr } from "@/lib/admin/queries";
 import { audit } from "@/lib/auth/audit";
 import { ActionForm } from "@/components/admin/ActionForm";
@@ -22,6 +23,13 @@ export default async function PlansPage() {
   return (
     <AdminShell email={admin.email} current="/admin/plans">
       <PageHeader title="Plans" description="The plans customers can buy. There are no built-in prices: enter them here, then publish a plan to Razorpay before anyone can subscribe." />
+      {!razorpayConfigured() && (
+        <div className="mb-6">
+          <Alert tone="warn" title="Razorpay is not connected">
+            You can create and edit plans now, but none can be published or bought until RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET are set on the server.
+          </Alert>
+        </div>
+      )}
       {plans.length === 0 ? (
         <EmptyState title="No plans yet" body="Create your first plan below. Customers cannot subscribe until a plan is created and published." />
       ) : (

@@ -4,6 +4,7 @@ import { eddyForgetUserEverywhere } from "@/lib/eddy/forget-user";
 import type { EddyTables } from "@/lib/eddy/retention";
 import { removeInboundMediaFiles } from "@/lib/inbox/media";
 import { revokeKeysBestEffort } from "@/lib/integrations/apikeys";
+import { forgetContact } from "@/lib/promote/forget";
 
 /** The transaction client, seen as the Eddy tables the erasure helpers use (docs/EDDY-SPEC.md 7.6, EDDY-16). */
 const eddyTx = (tx: unknown) => tx as EddyTables;
@@ -65,6 +66,11 @@ export async function anonymiseUser(userId: string): Promise<{ found: boolean; r
  * What Eddy holds about the contact goes in the same transaction (docs/EDDY-SPEC.md 7.6, EDDY-16 acceptance 6): every Eddy
  * conversation that mentions the contact loses its messages and is marked erased, and the action records and notices about
  * the contact or its chats are deleted. The daily eddy.erasure-sweep stays as the backstop.
+ * Before anything is deleted, promote/forget.forgetContact removes the person from the workspace's customer-list audiences on
+ * Meta (docs/IG-PAGE-ADS-SPEC.md 5.5): it still needs the contact's email and phone, and if it fails the erasure rolls back
+ * rather than leave the person in an audience with nothing left to find them by. Every other path that deletes a contact row
+ * (the contacts page and API, Eddy, the Meta data-deletion callback) calls forgetContact first too: promote/forget.ts lists them
+ * and tests/lifecycle-erase.test.ts fails on a new one that does not.
  */
 export async function deleteContactData(tenantId: string, who: string | { phone: string } | { bsuid: string }): Promise<{ deleted: boolean }> {
   let messageIds: string[] = [];
@@ -73,6 +79,7 @@ export async function deleteContactData(tenantId: string, who: string | { phone:
     // A person who messaged through a WhatsApp username may have no phone on file, so erasure can name them by BSUID instead.
     const contact = await tx.contact.findUnique({ where: "phone" in key ? { tenantId_phone: { tenantId, phone: key.phone } } : { tenantId_bsuid: { tenantId, bsuid: key.bsuid } }, select: { id: true } });
     if (!contact) return { deleted: false };
+    await forgetContact(tenantId, contact.id, { db: tx });
     const conversations = await tx.conversation.findMany({ where: { tenantId, contactId: contact.id }, select: { id: true } });
     const conversationIds = conversations.map((c) => c.id);
     if (conversationIds.length) {

@@ -4,6 +4,7 @@ import { apiFetch, Button, cn, EmptyState, Input, Select } from "@/components/ui
 import { isInsideEddy } from "@/components/eddy/keyguard";
 import { TeamFilter } from "@/components/teams/InboxTeamControls";
 import { avatarHint, displayName } from "@/lib/contacts/identity";
+import { MIN_TEXT_SEARCH, shortSearchHint } from "@/lib/inbox/search";
 import { deriveStatus } from "@/lib/inbox/status-rules";
 import { Avatar, Icon, WhatsAppGlyph } from "./Avatar";
 import { SavedViews } from "./SavedViews";
@@ -211,6 +212,9 @@ export function ConversationList({
   const itemIds = items.map((c) => c.id);
   const memberName = (id: string | null) => (id ? (id === me?.user.id ? "You" : (members.find((m) => m.userId === id)?.name ?? "Teammate")) : null);
   const filtered = filter !== "all" || tag || team || search;
+  // Under three characters only names and numbers are searched (message text needs three): the box says so, rather than an
+  // unexplained "No conversations match".
+  const searchHint = shortSearchHint(search);
 
   const range = visibleRange(scrollTop, viewport, ROW_HEIGHT, items.length);
   useEffect(() => {
@@ -328,8 +332,9 @@ export function ConversationList({
       <div className="space-y-2 border-b border-border p-3">
         <div className="relative">
           <Icon name="search" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
-          <Input ref={searchBox} type="search" aria-label="Search conversations" placeholder="Search name, number or message (f)" className="pl-9" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} />
+          <Input ref={searchBox} type="search" aria-label="Search conversations" aria-describedby={searchHint ? "inbox-search-hint" : undefined} placeholder="Search name, number or message (f)" className="pl-9" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} />
         </div>
+        <p id="inbox-search-hint" aria-live="polite" className={searchHint ? "text-[11px] text-muted" : "sr-only"}>{searchHint}</p>
         <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5" role="group" aria-label="Filter conversations">
           {FILTER_TABS.map((f) => (
             <button
@@ -412,12 +417,12 @@ export function ConversationList({
           <div className="p-4">
             <EmptyState
               title={filtered ? "No conversations match" : "No conversations yet"}
-              body={filtered ? "Try a different filter or search, or clear them to see everything." : "Messages appear here when customers write to your number. To message someone first, press New chat and send an approved template. Not connected yet? Finish setup first."}
+              body={searchHint ? `No name or number matches "${search}". Messages are searched from ${MIN_TEXT_SEARCH} characters, so type a little more.` : filtered ? "Try a different filter or search, or clear them to see everything." : "Messages appear here when customers write to your number. To message someone first, press New chat and send an approved template. Not connected yet? Finish setup first."}
               action={
                 filtered ? (
                   <Button size="sm" variant="secondary" onClick={() => { setFilter("all"); setTag(""); setSearchInput(""); }}>Clear filters</Button>
                 ) : (
-                  <a className="text-sm font-semibold text-accent underline" href="/app/settings">Connect a number</a>
+                  <a className="text-sm font-semibold text-accent underline" href="/app/settings/connect">Connect a number</a>
                 )
               }
             />

@@ -260,3 +260,78 @@ describe("what an agent may read of a chatbot", () => {
     expect(JSON.parse(text).chatbot.publishedFlow.nodes[0].type).toBe("webhook");
   });
 });
+
+describe("a published bot's trigger is part of the draft until it is published (P5)", () => {
+  const live = (extra: Record<string, unknown> = {}) => bot({ status: "published", publishedFlow: goodFlow, phoneNumberId: null, ...extra });
+  const written = () => db.chatbot.updateMany.mock.calls[0][0].data;
+
+  it("Save draft keeps a new trigger, words and number in the draft, and leaves the live columns alone", async () => {
+    db.chatbot.findFirst.mockResolvedValue(live());
+    db.phoneNumber.findFirst.mockResolvedValue({ id: "pn2" });
+    const res = await patch(call("/api/chatbots/b1", { name: "Bot", triggerType: "any_message", triggerKeywords: [], phoneNumberId: "pn2", flow: goodFlow }, "PATCH"), ctx);
+    expect(res.status).toBe(200);
+    expect(written()).not.toHaveProperty("triggerType");
+    expect(written()).not.toHaveProperty("triggerKeywords");
+    expect(written()).not.toHaveProperty("phoneNumberId");
+    expect(written().flow).toMatchObject({ ...goodFlow, trigger: { triggerType: "any_message", triggerKeywords: [], phoneNumberId: "pn2" } });
+  });
+
+  it("a draft that puts the trigger back as it is live carries no pending trigger", async () => {
+    db.chatbot.findFirst.mockResolvedValue(live({ flow: { ...goodFlow, trigger: { triggerType: "any_message", triggerKeywords: [], phoneNumberId: null } } }));
+    await patch(call("/api/chatbots/b1", { triggerType: "keyword", triggerKeywords: ["hi"] }, "PATCH"), ctx);
+    expect(written().flow).toEqual(goodFlow);
+  });
+
+  it("refuses to save a published word-triggered bot without words", async () => {
+    db.chatbot.findFirst.mockResolvedValue(live());
+    const res = await patch(call("/api/chatbots/b1", { triggerKeywords: [] }, "PATCH"), ctx);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(/needs at least one word/);
+    expect(db.chatbot.updateMany).not.toHaveBeenCalled();
+    // A draft bot may be saved half-done; the words are only needed to publish.
+    db.chatbot.findFirst.mockResolvedValue(bot());
+    expect((await patch(call("/api/chatbots/b1", { triggerKeywords: [] }, "PATCH"), ctx)).status).toBe(200);
+    expect(written()).toMatchObject({ triggerType: "keyword", triggerKeywords: [] });
+  });
+
+  it("publishing copies the pending trigger live and clears it from the draft", async () => {
+    const pending = { triggerType: "first_message", triggerKeywords: [], phoneNumberId: "pn2" };
+    db.chatbot.findFirst.mockResolvedValue(live({ flow: { ...goodFlow, trigger: pending } }));
+    // The number chosen in the draft was removed meanwhile: publishing says so instead of failing.
+    db.phoneNumber.findFirst.mockResolvedValue(null);
+    expect((await publish(call("/api/chatbots/b1/publish"), ctx)).status).toBe(422);
+    expect(db.chatbot.updateMany).not.toHaveBeenCalled();
+    db.phoneNumber.findFirst.mockResolvedValue({ id: "pn2" });
+    expect((await publish(call("/api/chatbots/b1/publish"), ctx)).status).toBe(200);
+    expect(db.phoneNumber.findFirst.mock.calls.at(-1)![0].where).toEqual({ id: "pn2", tenantId: "t1" });
+    expect(written()).toMatchObject({ status: "published", triggerType: "first_message", triggerKeywords: [], phoneNumberId: "pn2", flow: goodFlow });
+    expect(written().publishedFlow).not.toHaveProperty("trigger");
+  });
+
+  it("publishing checks the draft trigger's words, not the live ones", async () => {
+    db.chatbot.findFirst.mockResolvedValue(live({ flow: { ...goodFlow, trigger: { triggerType: "keyword", triggerKeywords: [], phoneNumberId: null } } }));
+    expect((await publish(call("/api/chatbots/b1/publish"), ctx)).status).toBe(422);
+  });
+
+  it("refuses to publish a free message after a wait of a day", async () => {
+    const longWait = {
+      version: 1,
+      start: "w",
+      nodes: [
+        { id: "w", type: "delay", position: { x: 0, y: 0 }, data: { minutes: 1440 } },
+        { id: "t", type: "send_text", position: { x: 0, y: 0 }, data: { text: "Still there?" } },
+      ],
+      edges: [{ id: "e1", from: "w", to: "t" }],
+    };
+    db.chatbot.findFirst.mockResolvedValue(bot({ flow: longWait }));
+    const res = await publish(call("/api/chatbots/b1/publish"), ctx);
+    expect(res.status).toBe(422);
+    expect(((await res.json()) as { errors: { nodeId?: string; message: string }[] }).errors[0]).toMatchObject({ nodeId: "w", message: expect.stringMatching(/Send template/) });
+  });
+
+  it("a copy starts from the source's draft trigger", async () => {
+    db.chatbot.findFirst.mockResolvedValue(live({ flow: { ...goodFlow, trigger: { triggerType: "manual", triggerKeywords: [], phoneNumberId: null } } }));
+    await duplicate(call("/api/chatbots/b1/duplicate"), ctx);
+    expect(db.chatbot.create.mock.calls[0][0].data).toMatchObject({ triggerType: "manual", triggerKeywords: [], flow: goodFlow });
+  });
+});

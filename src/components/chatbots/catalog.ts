@@ -1,3 +1,4 @@
+import { OPT_OUT_REPLY } from "@/lib/contacts/opt-out";
 import type { FlowNode, NodeDataMap, NodeType, Point } from "./types";
 
 export type NodeMeta = { label: string; group: "Messages" | "Collect and decide" | "Contact and team" | "Flow control"; help: string };
@@ -18,7 +19,7 @@ export const NODE_META: Record<NodeType, NodeMeta> = {
   webhook: { label: "Connect to another app", group: "Flow control", help: "Sends information to a website or app you use, and can remember its reply. For advanced use." },
   handoff: { label: "Hand over to your team", group: "Flow control", help: "Stops the bot, passes the conversation to a team or teammate and leaves them a note of what the bot learned." },
   subscribe: { label: "Allow offers", group: "Contact and team", help: "Records that the customer agreed to receive offers and updates from you, and where they agreed." },
-  unsubscribe: { label: "Stop messages", group: "Contact and team", help: "Opts the customer out of messages, like a STOP reply, and ends the chatbot. Use it when someone asks you to stop." },
+  unsubscribe: { label: "Stop messages", group: "Contact and team", help: "Opts the customer out of marketing, like a STOP reply, and ends the chatbot. They still get order updates and replies to their own messages. Use it when someone asks you to stop." },
   end: { label: "End", group: "Flow control", help: "Ends the conversation with the bot." },
 };
 
@@ -41,7 +42,7 @@ export function defaultData(type: NodeType): NodeDataMap[NodeType] {
     case "set_status": return { status: "pending" };
     case "handoff": return { message: "" };
     case "subscribe": return {};
-    case "unsubscribe": return { message: "You will not receive more messages from us." };
+    case "unsubscribe": return { message: OPT_OUT_REPLY };
     case "end": return {};
   }
 }

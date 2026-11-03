@@ -3,6 +3,7 @@ import { audit } from "@/lib/auth/audit";
 import { emitAutomationEvent, emitTagChanges } from "@/lib/automation/v2/emit";
 import { endBotsOnBlock } from "@/lib/chatbots/human-reply";
 import { emitStatusChanged } from "@/lib/integrations/emitters";
+import { applyAssignment, assertAssignable } from "@/lib/routing";
 import { hasRole, HttpError, type Actor } from "@/lib/tenancy";
 import { canTransition, normalizeStatus, SETTABLE_STATUSES } from "./status-rules";
 import { SERVICE_WINDOW_MS } from "./window";
@@ -120,6 +121,10 @@ export function parseBulkInput(body: Record<string, unknown>): BulkInput {
   throw new HttpError(400, "action must be status, assign or tag.");
 }
 
+/**
+ * skipped reasons: not_found, assigned_to_other (an agent and a teammate's chat), invalid_transition (status), and for assign
+ * not_in_team (the chat's team does not include the person) or changed (someone reassigned it while the batch ran).
+ */
 export type BulkResult = { updated: number; skipped: { id: string; reason: string }[] };
 
 export function applyTagChange(current: string[], add: string[], remove: string[]): string[] {
@@ -127,19 +132,21 @@ export function applyTagChange(current: string[], add: string[], remove: string[
   return [...new Set([...current.filter((t) => !removed.has(t)), ...add])];
 }
 
+/**
+ * Bulk assign makes, chat by chat, the same write as assigning one chat (routing's applyAssignment): the person must be a member
+ * whose account is not disabled (checked once), each chat stays inside its team, and round-robin, the contact-owner setting and
+ * the audit log all see it. A chat that cannot take the person is skipped with its reason; the rest still go.
+ */
 export async function bulkUpdate(actor: Actor, input: BulkInput): Promise<BulkResult> {
   if (input.action === "assign" && actor.role === "agent" && input.userId !== null && input.userId !== actor.userId) {
     throw new HttpError(403, "Agents can only assign chats to themselves.");
   }
   const to = input.action === "status" ? assertCanSetStatus(actor, input.status) : null;
-  if (input.action === "assign" && input.userId) {
-    const member = await prisma.membership.findFirst({ where: { tenantId: actor.tenantId, userId: input.userId }, select: { id: true } });
-    if (!member) throw new HttpError(400, "That user is not a member of this workspace.");
-  }
+  if (input.action === "assign" && input.userId) await assertAssignable(actor.tenantId, input.userId);
 
   const rows = await prisma.conversation.findMany({
     where: { tenantId: actor.tenantId, id: { in: input.ids } },
-    select: { id: true, status: true, assignedToId: true, tags: true, contactId: true },
+    select: { id: true, status: true, assignedToId: true, teamId: true, tags: true, contactId: true },
   });
   const byId = new Map(rows.map((r) => [r.id, r]));
   const skipped: BulkResult["skipped"] = [];
@@ -154,6 +161,7 @@ export async function bulkUpdate(actor: Actor, input: BulkInput): Promise<BulkRe
 
   const ids = eligible.map((r) => r.id);
   const where = { tenantId: actor.tenantId, id: { in: ids } };
+  let updated = ids.length;
   if (ids.length > 0) {
     const now = new Date();
     if (input.action === "status") {
@@ -164,8 +172,18 @@ export async function bulkUpdate(actor: Actor, input: BulkInput): Promise<BulkRe
         await emitStatusChanged(actor.tenantId, { conversationId: row.id, contactId: row.contactId ?? null, from: normalizeStatus(row.status) ?? row.status, to: to!, changedBy: actor.userId, source: "user" });
       }
     }
-    else if (input.action === "assign") await prisma.conversation.updateMany({ where, data: { assignedToId: input.userId, assignedAt: input.userId ? now : null } });
-    else {
+    else if (input.action === "assign") {
+      updated = 0;
+      for (const row of eligible) {
+        try {
+          await applyAssignment(actor, row, input.userId, { memberChecked: true });
+          updated += 1;
+        } catch (e) {
+          if (!(e instanceof HttpError) || (e.status !== 400 && e.status !== 409)) throw e;
+          skipped.push({ id: row.id, reason: e.status === 409 ? "changed" : "not_in_team" });
+        }
+      }
+    } else {
       for (const row of eligible) {
         const next = applyTagChange(row.tags, input.add, input.remove);
         await prisma.conversation.updateMany({
@@ -176,6 +194,6 @@ export async function bulkUpdate(actor: Actor, input: BulkInput): Promise<BulkRe
       }
     }
   }
-  await audit({ tenantId: actor.tenantId, userId: actor.userId, action: `inbox.bulk.${input.action}`, meta: { requested: input.ids.length, updated: ids.length } });
-  return { updated: ids.length, skipped };
+  await audit({ tenantId: actor.tenantId, userId: actor.userId, action: `inbox.bulk.${input.action}`, meta: { requested: input.ids.length, updated } });
+  return { updated, skipped };
 }

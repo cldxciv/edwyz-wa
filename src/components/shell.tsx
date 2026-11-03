@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { COMPANY } from "@/lib/config";
+import { LEGAL } from "@/lib/legal";
 import { NAV_LINKS, SIGN_IN, START_TRIAL } from "@/components/site/content";
 import { MobileNav } from "@/components/site/mobile-nav";
+import { NavLink } from "@/components/site/nav-link";
 
 export function Logo({ className = "text-lg" }: { className?: string }) {
   return (
-    <Link href="/" aria-label={`${COMPANY.product} home`} className={`inline-flex items-center gap-2 font-semibold tracking-tight ${className}`}>
+    <Link href="/" aria-label={`${COMPANY.product} home`} className={`inline-flex shrink-0 items-center gap-2 whitespace-nowrap font-semibold tracking-tight ${className}`}>
       <svg viewBox="0 0 32 32" className="h-7 w-7" aria-hidden="true" focusable="false">
         <rect width="32" height="32" rx="9" className="fill-accent" />
         <path d="M16 7.5a8.5 8.5 0 0 0-7.3 12.9L7.5 24.5l4.2-1.1A8.5 8.5 0 1 0 16 7.5z" fill="none" stroke="#fff" strokeWidth="2" strokeLinejoin="round" />
@@ -19,7 +21,9 @@ export function Logo({ className = "text-lg" }: { className?: string }) {
 }
 
 const ctaClass =
-  "inline-flex items-center justify-center rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-strong";
+  "inline-flex items-center justify-center whitespace-nowrap rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-strong";
+const navLinkClass = "rounded-full px-3 py-2 hover:bg-surface";
+const navCurrentClass = "bg-surface text-accent-ink";
 
 export function Header() {
   const mobileLinks = [...NAV_LINKS, SIGN_IN];
@@ -29,20 +33,22 @@ export function Header() {
         <Logo />
         <nav aria-label="Main" className="hidden items-center gap-1 text-sm font-medium md:flex">
           {NAV_LINKS.map((l) => (
-            <Link key={l.href} href={l.href} className="rounded-full px-3 py-2 hover:bg-surface">
+            <NavLink key={l.href} href={l.href} className={navLinkClass} currentClassName={navCurrentClass}>
               {l.label}
-            </Link>
+            </NavLink>
           ))}
-          <Link href={SIGN_IN.href} className="ml-2 rounded-full px-3 py-2 hover:bg-surface">
+          <NavLink href={SIGN_IN.href} className={`ml-2 ${navLinkClass}`} currentClassName={navCurrentClass}>
             {SIGN_IN.label}
-          </Link>
+          </NavLink>
           <Link href={START_TRIAL.href} className={`ml-1 ${ctaClass}`}>
             {START_TRIAL.label}
           </Link>
         </nav>
         <div className="flex items-center gap-2 md:hidden">
-          <Link href={START_TRIAL.href} className={ctaClass}>
-            {START_TRIAL.label}
+          {/* Below 360px the logo, the full label and the menu button do not fit on one line, so the button says less. */}
+          <Link href={START_TRIAL.href} className={`${ctaClass} max-[359px]:px-3`}>
+            <span className="max-[359px]:hidden">{START_TRIAL.label}</span>
+            <span className="hidden max-[359px]:inline">{START_TRIAL.shortLabel}</span>
           </Link>
           <MobileNav links={mobileLinks} />
         </div>
@@ -106,7 +112,9 @@ export function LegalPage({ title, children }: { title: string; children: React.
   return (
     <main className="mx-auto max-w-3xl px-6 pt-16">
       <h1 className="text-3xl font-semibold tracking-tight">{title}</h1>
-      <p className="mt-2 text-sm text-muted">Effective {COMPANY.effectiveDate}</p>
+      <p className="mt-2 text-sm text-muted">
+        Last updated {LEGAL.lastUpdated} &middot; Version {LEGAL.version} &middot; {COMPANY.legalName}
+      </p>
       <div className="prose-legal mt-6">{children}</div>
     </main>
   );

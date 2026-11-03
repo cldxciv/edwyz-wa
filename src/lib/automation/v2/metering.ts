@@ -6,7 +6,8 @@ import { monthStart } from "@/lib/usage";
 
 /**
  * A trigger is one rule run that completed (RuleExecution.outcome = "ok"). The monthly allowance comes from the plan:
- * Plan.features.automationTriggersMonthly (whole number, 0 or more). When the plan leaves it out there is no limit.
+ * Plan.features.automationTriggersMonthly (whole number, 1 or more). When the plan leaves it out there is no limit. 0 is ignored:
+ * it would switch automation off for a plan, and every module is on every plan (owner decision 6, 2026-10-31).
  */
 export const LIMIT_FEATURE = "automationTriggersMonthly";
 export const ALERT_THRESHOLDS = [80, 90, 100] as const;
@@ -21,7 +22,7 @@ export function resetMeteringCache() {
 export function readLimit(features: unknown): number | null {
   if (!features || typeof features !== "object" || Array.isArray(features)) return null;
   const raw = (features as Record<string, unknown>)[LIMIT_FEATURE];
-  return typeof raw === "number" && Number.isInteger(raw) && raw >= 0 ? raw : null;
+  return typeof raw === "number" && Number.isInteger(raw) && raw >= 1 ? raw : null;
 }
 
 export async function triggerLimit(tenantId: string, now = Date.now()): Promise<number | null> {

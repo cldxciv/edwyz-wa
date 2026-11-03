@@ -13,7 +13,7 @@
  * Bump VERSION whenever this file or the offline page changes: the new worker installs, takes over at once, and deletes the
  * older edwyz-wa-* caches.
  */
-const VERSION = "v1";
+const VERSION = "v2";
 const CACHE_PREFIX = "edwyz-wa-";
 const CACHE_NAME = CACHE_PREFIX + "offline-" + VERSION;
 const OFFLINE_URL = "/offline";

@@ -4,14 +4,14 @@ import type { FakeActionsDb } from "./helpers/fake-actions-db";
 /**
  * docs/EDDY-SPEC.md 4.4 and EDDY-04: assignAsActor and setTagsAsActor hold the logic that was inline in the assign and tags
  * routes; both routes call them. An agent may only take an unassigned chat for themselves or release their own, an admin is
- * limited to the chat's team pool, and the tag diff keeps an edit someone else made at the same moment.
+ * limited to the chat's team pool, and the tag diff keeps an edit someone else made at the same moment. The assignment itself
+ * is routing's applyAssignment, which runs for real here: disabled accounts, round-robin, contact owner and the audit row.
  */
 const h = vi.hoisted(() => ({
   db: null as unknown as FakeActionsDb,
   actor: { userId: "u_agent", tenantId: "t1", role: "agent" as "agent" | "admin" | "owner" },
   visible: vi.fn(async (_actor: unknown, _id: string) => undefined as void),
   emitTagChanges: vi.fn(async () => undefined),
-  onAssigned: vi.fn(async () => undefined),
 }));
 vi.mock("@/lib/db", async () => {
   const { createFakeActionsDb } = await import("./helpers/fake-actions-db");
@@ -20,10 +20,10 @@ vi.mock("@/lib/db", async () => {
 });
 vi.mock("@/lib/teams/visibility", () => ({ assertConversationVisible: h.visible }));
 vi.mock("@/lib/automation/v2/emit", () => ({ emitTagChanges: h.emitTagChanges, emitAutomationEvent: vi.fn(), tagChangeEvents: vi.fn() }));
-vi.mock("@/lib/routing", () => ({ onConversationAssigned: h.onAssigned }));
 vi.mock("@/lib/auth", () => ({ getActor: async () => h.actor }));
 
 import { AGENT_ASSIGN_MESSAGE, assignAsActor, MAX_CHAT_TAGS, nextTags, setTagsAsActor } from "@/lib/inbox/actor-ops";
+import { assign, getConversation } from "@/lib/inbox/service";
 import { PUT as assignRoute } from "@/app/api/inbox/conversations/[id]/assign/route";
 import { PUT as tagsRoute } from "@/app/api/inbox/conversations/[id]/tags/route";
 import { HttpError } from "@/lib/tenancy";
@@ -36,13 +36,19 @@ function chat(id: string, over: Record<string, unknown> = {}) {
   return h.db.insert("conversation", { id, tenantId: "t1", contactId: "k1", assignedToId: null, teamId: null, tags: [], status: "open", ...over });
 }
 const conv = (id: string) => h.db.rows("conversation").find((r) => r.id === id)!;
+const audits = (action: string) => h.db.rows("auditLog").filter((r) => r.action === action);
 
 beforeEach(() => {
   h.db.reset();
   vi.clearAllMocks();
   h.visible.mockResolvedValue(undefined);
   h.actor = { ...AGENT };
-  for (const m of [AGENT, OTHER, ADMIN]) h.db.insert("membership", { id: `m_${m.userId}`, tenantId: "t1", userId: m.userId, role: m.role });
+  for (const m of [AGENT, OTHER, ADMIN]) h.db.insert("membership", { id: `m_${m.userId}`, tenantId: "t1", userId: m.userId, role: m.role, user: { disabledAt: null } });
+  // The fake has no upsert; this one is enough for agentAvailability's (tenantId, userId) key.
+  (h.db.prisma.agentAvailability as Record<string, unknown>).upsert = async ({ where, create, update }: { where: { tenantId_userId: Record<string, string> }; create: Record<string, unknown>; update: Record<string, unknown> }) => {
+    const row = h.db.rows("agentAvailability").find((r) => r.tenantId === where.tenantId_userId.tenantId && r.userId === where.tenantId_userId.userId);
+    return row ? Object.assign(row, update) : h.db.insert("agentAvailability", { ...create });
+  };
 });
 
 describe("assignAsActor", () => {
@@ -93,7 +99,71 @@ describe("assignAsActor", () => {
     await expect(assignAsActor(AGENT, "hidden", "me")).rejects.toMatchObject({ status: 404 });
     await expect(assignAsActor(ADMIN, "missing", "me")).rejects.toMatchObject({ status: 404 });
     chat("c1");
-    await expect(assignAsActor(ADMIN, "c1", "u_stranger")).rejects.toMatchObject({ status: 400, message: "That user is not a member of this workspace." });
+    await expect(assignAsActor(ADMIN, "c1", "u_stranger")).rejects.toMatchObject({ status: 400, message: "That person is not a member of this workspace." });
+  });
+
+  it("follows the routing rules: refuses a disabled account, moves round-robin, lets the contact owner follow and writes routing.assign", async () => {
+    h.db.rows("membership").find((m) => m.userId === OTHER.userId)!.user = { disabledAt: new Date() };
+    chat("c1");
+    await expect(assignAsActor(ADMIN, "c1", OTHER.userId)).rejects.toMatchObject({ status: 400, message: "That person's account is disabled." });
+    expect(conv("c1").assignedToId).toBeNull();
+
+    h.db.insert("platformSetting", { key: "routing:extra:t1", value: { setOwnerOnAssign: true } });
+    h.db.insert("contact", { id: "k1", tenantId: "t1", ownerUserId: null });
+    await assignAsActor(ADMIN, "c1", AGENT.userId);
+    expect(conv("c1").assignedToId).toBe(AGENT.userId);
+    expect(h.db.rows("agentAvailability").find((r) => r.userId === AGENT.userId)?.lastAssignedAt).toBeInstanceOf(Date);
+    expect(h.db.rows("contact").find((r) => r.id === "k1")?.ownerUserId).toBe(AGENT.userId);
+    expect(audits("routing.assign")).toEqual([expect.objectContaining({ tenantId: "t1", userId: ADMIN.userId, target: "c1", meta: { assignedToId: AGENT.userId, previousId: null } })]);
+
+    await assignAsActor(AGENT, "c1", "none");
+    expect(audits("routing.unassign")).toEqual([expect.objectContaining({ userId: AGENT.userId, target: "c1", meta: { assignedToId: null, previousId: AGENT.userId } })]);
+  });
+
+  it("reports a change made meanwhile instead of overwriting it", async () => {
+    chat("c1");
+    const delegate = h.db.prisma.conversation as { findFirst: (...a: unknown[]) => Promise<unknown> };
+    const original = delegate.findFirst;
+    delegate.findFirst = async (...a: unknown[]) => {
+      const row = await original(...a);
+      // A teammate takes the chat right after it was read.
+      conv("c1").assignedToId = OTHER.userId;
+      return row;
+    };
+    try {
+      await expect(assignAsActor(ADMIN, "c1", AGENT.userId)).rejects.toMatchObject({ status: 409 });
+    } finally {
+      delegate.findFirst = original;
+    }
+    expect(conv("c1").assignedToId).toBe(OTHER.userId);
+  });
+});
+
+describe("assign for the API and the workspace MCP server", () => {
+  it("makes the same checks and write as the inbox: team pool, disabled accounts, audit row without a person", async () => {
+    h.db.insert("team", { id: "team_a", tenantId: "t1", isDefault: false });
+    h.db.insert("teamMember", { tenantId: "t1", teamId: "team_a", userId: OTHER.userId });
+    chat("c1", { teamId: "team_a" });
+    await expect(assign("t1", "c1", AGENT.userId)).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/not in this chat's team/) });
+    await expect(assign("t1", "c1", "u_stranger")).rejects.toMatchObject({ status: 400, message: "That person is not a member of this workspace." });
+    await expect(assign("t1", "missing", OTHER.userId)).rejects.toMatchObject({ status: 404 });
+    expect(await assign("t1", "c1", OTHER.userId)).toMatchObject({ id: "c1", assignedToId: OTHER.userId });
+    expect(h.db.rows("agentAvailability").find((r) => r.userId === OTHER.userId)?.lastAssignedAt).toBeInstanceOf(Date);
+    expect(audits("routing.assign")).toEqual([expect.objectContaining({ tenantId: "t1", userId: null, target: "c1" })]);
+    h.db.rows("membership").find((m) => m.userId === OTHER.userId)!.user = { disabledAt: new Date() };
+    chat("c2");
+    await expect(assign("t1", "c2", OTHER.userId)).rejects.toMatchObject({ status: 400, message: "That person's account is disabled." });
+    expect(await assign("t1", "c1", null)).toMatchObject({ assignedToId: null });
+  });
+});
+
+describe("getConversation", () => {
+  it("tells the inbox which WhatsApp Business Account the chat's number belongs to, so its picker offers only those templates", async () => {
+    chat("c1", { lastInboundAt: null });
+    const findFirst = vi.spyOn(h.db.prisma.conversation as { findFirst: (a: unknown) => Promise<unknown> }, "findFirst");
+    await getConversation("t1", "c1");
+    expect((findFirst.mock.calls[0][0] as { include: { phoneNumber: unknown } }).include.phoneNumber).toEqual({ select: { id: true, displayPhone: true, verifiedName: true, wabaRefId: true } });
+    findFirst.mockRestore();
   });
 });
 

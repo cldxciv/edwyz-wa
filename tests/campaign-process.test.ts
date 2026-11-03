@@ -137,6 +137,17 @@ describe("per-recipient values at send time", () => {
     expect(inbox.sendTemplateMessage).not.toHaveBeenCalled();
     expect(db.broadcastRecipient.update.mock.calls[0][0].data).toEqual({ status: "skipped" });
   });
+
+  it("skips a contact someone blocked after the audience was frozen, with the code blocked", async () => {
+    db.broadcast.findUnique.mockResolvedValue(broadcast());
+    setup([recipient("1", { conversations: [{ id: "conv1" }] }), recipient("2")]);
+    await processBroadcast("b1", now);
+    expect(db.broadcastRecipient.update).toHaveBeenCalledWith({ where: { id: "r1", tenantId: "t1" }, data: { status: "skipped", errorCode: "blocked" } });
+    expect(inbox.sendTemplateMessage).toHaveBeenCalledTimes(1);
+    expect(inbox.sendTemplateMessage.mock.calls[0][0].contactId).toBe("c2");
+    const batch = db.broadcastRecipient.findMany.mock.calls.map((c: unknown[]) => c[0] as { where: { status?: string }; include?: { contact: { select: { conversations: unknown } } } }).find((q) => q.where.status === "pending");
+    expect(batch?.include?.contact.select.conversations).toEqual({ where: { tenantId: "t1", status: "blocked" }, select: { id: true }, take: 1 });
+  });
 });
 
 describe("throttling by unique recipients across the portfolio", () => {
@@ -212,6 +223,33 @@ describe("template paused or disabled by WhatsApp", () => {
     expect(await syncRecipientFromMessage("m1")).toBe(true);
     expect(db.template.updateMany).toHaveBeenCalledWith({ where: { id: "tpl1", tenantId: "t1", status: "approved" }, data: { status: "paused" } });
     expect(db.broadcast.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { status: "paused" } }));
+  });
+
+  it("a template Meta no longer has (132001) pauses the broadcast and turns the template off instead of failing everyone left", async () => {
+    expect(recipientUpdateFromMessage({ status: "failed", wamid: null, errorCode: "132001", statusTimeline: [] }, now)).toEqual({ status: "pending", messageId: null, errorCode: null });
+    db.broadcastRecipient.findUnique.mockResolvedValue({
+      id: "r1",
+      tenantId: "t1",
+      status: "queued",
+      attempts: 0,
+      broadcast: { id: "b1", name: "Spring sale", templateId: "tpl1", retryDays: 0, startedAt: now },
+    });
+    db.message.findFirst.mockResolvedValue({ status: "failed", wamid: null, errorCode: "132001", statusTimeline: [] });
+    setup([]);
+    expect(await syncRecipientFromMessage("m1")).toBe(true);
+    expect(db.template.updateMany).toHaveBeenCalledWith({ where: { id: "tpl1", tenantId: "t1", status: { in: ["approved", "flagged", "paused"] } }, data: { status: "disabled" } });
+    expect(db.broadcast.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { status: "paused" } }));
+  });
+
+  it("the worker pauses with the template reason when a queued message came back 132001", async () => {
+    db.broadcast.findUnique.mockResolvedValue(broadcast());
+    setup([recipient("1")]);
+    db.broadcastRecipient.findMany.mockImplementation(async ({ where }: { where: { status?: string } }) => (where.status === "queued" ? [{ id: "r9", messageId: "m9", attempts: 0 }] : [recipient("1")]));
+    db.message.findMany.mockResolvedValue([{ id: "m9", status: "failed", wamid: null, errorCode: "132001", statusTimeline: [] }]);
+    await processBroadcast("b1", now);
+    expect(inbox.sendTemplateMessage).not.toHaveBeenCalled();
+    expect(db.template.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { status: "disabled" } }));
+    expect(db.platformSetting.upsert.mock.calls[0][0].create.value.reason).toBe("template_paused");
   });
 
   it("reads back the stored reason for the broadcast page", async () => {

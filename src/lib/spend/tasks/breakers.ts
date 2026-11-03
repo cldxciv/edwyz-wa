@@ -39,6 +39,9 @@ export const BREAKERS_EVERY_MS = 5 * 60_000;
 /** A pass stops starting new workspaces after this long, so it finishes inside its slot. */
 export const BREAKERS_BUDGET_MS = 4 * 60_000;
 export const SUMMARY_BATCH = 100;
+/** Summary rows built side by side, and how long the rotating batch may take; the cursor carries on next run. */
+export const SUMMARY_CONCURRENCY = 4;
+export const SUMMARY_BUDGET_MS = 10_000;
 export const summaryKey = (tenantId: string) => `spend:summary:${tenantId}`;
 const SUMMARY_CURSOR_KEY = "spend:summary:cursor";
 const ADS_BREAKER_KINDS = ["pacing", "efficiency", "spend_jump", "cpm_ctr_anomaly", "account_spike", "daily_limit", "monthly_limit", "budget_change_quota", "sync_stale"];
@@ -271,8 +274,8 @@ export async function writeSummary(tenantId: string, opts: { db?: SpendDb; now?:
   }
 }
 
-/** The next batch of workspaces for the summary cache, round-robin through every workspace. */
-async function summaryBatch(db: SpendDb, skip: Set<string>): Promise<string[]> {
+/** The next batch of workspaces for the summary cache, round-robin through every workspace (in cursor order; the caller saves the cursor). */
+async function summaryBatch(db: SpendDb): Promise<string[]> {
   const cursorRow = (await db.platformSetting.findUnique({ where: { key: SUMMARY_CURSOR_KEY } })) as { value?: unknown } | null;
   const after = typeof (cursorRow?.value as { after?: unknown } | null)?.after === "string" ? String((cursorRow!.value as { after: string }).after) : "";
   const take = SUMMARY_BATCH;
@@ -281,10 +284,12 @@ async function summaryBatch(db: SpendDb, skip: Set<string>): Promise<string[]> {
     const wrap = ((await db.tenant.findMany({ where: { deletedAt: null }, orderBy: { id: "asc" }, take: take - rows.length, select: { id: true } })) ?? []) as { id: string }[];
     rows = [...rows, ...wrap.filter((w) => !rows.some((r) => r.id === w.id))];
   }
-  const last = rows[rows.length - 1]?.id ?? "";
-  const value = { after: last };
+  return rows.map((r) => r.id);
+}
+
+async function saveSummaryCursor(db: SpendDb, after: string): Promise<void> {
+  const value = { after };
   await db.platformSetting.upsert({ where: { key: SUMMARY_CURSOR_KEY }, create: { key: SUMMARY_CURSOR_KEY, value }, update: { value } });
-  return rows.map((r) => r.id).filter((id) => !skip.has(id));
 }
 
 /** The 5-minute pass: breakers for every workspace with ads running or a breaker open, then the summary cache. */
@@ -314,10 +319,18 @@ export async function runAllBreakers(opts: RunOptions & { deadlineMs?: number } 
     console.error(`[spend] expired breakers not cleared: ${describeError(error)}`);
   }
   try {
-    for (const tenantId of await summaryBatch(db, done)) {
-      if (Date.now() - started > budget) break;
-      if (await writeSummary(tenantId, { db, now: opts.now, env: opts.env })) summaries++;
+    // The rest of the workspaces, a few at a time and within the cache's own budget: a cached row is never worth holding the
+    // worker pass (or the tick) for. The cursor moves only past rows this run reached, so a short run skips no workspace.
+    const batch = await summaryBatch(db);
+    const batchStarted = Date.now();
+    let reached = 0;
+    for (let i = 0; i < batch.length; i += SUMMARY_CONCURRENCY) {
+      if (Date.now() - started > budget || (i > 0 && Date.now() - batchStarted > SUMMARY_BUDGET_MS)) break;
+      const chunk = batch.slice(i, i + SUMMARY_CONCURRENCY).filter((tenantId) => !done.has(tenantId));
+      summaries += (await Promise.all(chunk.map((tenantId) => writeSummary(tenantId, { db, now: opts.now, env: opts.env })))).filter(Boolean).length;
+      reached = Math.min(batch.length, i + SUMMARY_CONCURRENCY);
     }
+    if (reached > 0) await saveSummaryCursor(db, batch[reached - 1]);
   } catch (error) {
     console.error(`[spend] summary batch failed: ${describeError(error)}`);
   }

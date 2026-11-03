@@ -11,7 +11,7 @@ export function consentLine(e: Event): string {
   const via = e.source ? (e.kind === "opt_in" ? `, ${e.source}` : ` (${e.source})`) : "";
   if (e.kind === "opt_in") return `Agreed to receive messages${via}${who ? `, recorded ${who}` : ""}`;
   if (e.kind === "withdrawn") return `Permission removed${who ? ` ${who}` : ""}`;
-  return `Opted out${via}${who && e.by !== "contact" ? ` ${who}` : ""}`;
+  return `Opted out of marketing${via}${who && e.by !== "contact" ? ` ${who}` : ""}`;
 }
 
 /** Proof of consent for one contact: when and how they agreed, and who recorded it. */

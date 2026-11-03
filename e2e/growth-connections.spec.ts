@@ -15,7 +15,11 @@ test.describe("Meta connections", () => {
     await signupUser(context, "conn");
     await page.goto("/app/settings/connections");
     await expect(page.getByRole("heading", { level: 1, name: "Connections" })).toBeVisible();
-    await expect(page.getByText("Nothing connected yet")).toBeVisible();
+    await expect(page.getByText("No Facebook account connected yet")).toBeVisible();
+    // WhatsApp is connected on its own page; this page says where it stands and links there instead of reading "nothing connected".
+    await expect(page.getByRole("heading", { name: "WhatsApp", exact: true })).toBeVisible();
+    await expect(page.getByText("No WhatsApp number connected yet.")).toBeVisible();
+    await expect(page.getByRole("main").getByRole("link", { name: "Connect WhatsApp" })).toHaveAttribute("href", "/app/settings/connect");
     // The scopes explanation is shown with a plain-language purpose for every permission.
     await expect(page.getByRole("heading", { name: "What we can access" })).toBeVisible();
     // docs/SPEND-CONTROLS-SPEC.md 5.10: ads_management also covers keeping Meta's spending limit in line with the owner's limits.
@@ -37,7 +41,7 @@ test.describe("Meta connections", () => {
     const cfg = await (await context.request.get("/api/meta-connect/connections")).json();
     test.skip(cfg.configured, "Meta login is configured on this server");
     await page.goto("/app/settings/connections");
-    await expect(page.getByText("Nothing connected yet")).toBeVisible();
+    await expect(page.getByText("No Facebook account connected yet")).toBeVisible();
     // The empty state says to connect a Facebook account but offers nothing to click.
     const actions = page.getByRole("main").getByRole("button");
     expect(await actions.count(), "owner sees no action at all on a page whose only purpose is connecting").toBeGreaterThan(0);
@@ -67,6 +71,10 @@ test.describe("Meta connections", () => {
     await expect(page.getByText(m.adAccount.name)).toBeVisible();
     await expect(page.getByText(/Permission missing:/)).toBeVisible();
     await expect(page.getByText(/Reconnect and approve everything/)).toBeVisible();
+    // docs/IG-PAGE-ADS-SPEC.md 3.2: the posting permissions get their own plain line; ads work without them.
+    await expect(page.getByText("Posting to your Page and Instagram needs one more permission. Ads work without it.")).toBeVisible();
+    // Instagram accounts are shown by their @username.
+    await expect(page.getByText(`@${m.ig!.name}`)).toBeVisible();
     await expect(page.locator("body")).not.toContainText("fake-token");
 
     // Refresh with a token Meta will refuse: a readable error or notice, no raw JSON or stack.
@@ -101,6 +109,23 @@ test.describe("Meta connections", () => {
     await expect(page.getByRole("button", { name: "Reconnect" })).toBeVisible();
   });
 
+  test("the Facebook Login popup's closing page keeps its own policy on the real server, so its one script can run", async ({ request }) => {
+    // No session: a popup attempt still ends on the small closing page (outcome "failed"), never on raw JSON.
+    const res = await request.get("/api/meta-connect/callback?state=x.popup", { maxRedirects: 0 });
+    expect(res.status()).toBe(200);
+    const csp = res.headers()["content-security-policy"] ?? "";
+    // next.config.ts leaves this path out of its /api policy; otherwise Next would keep that one and the script would never run.
+    expect(csp).toMatch(/script-src 'sha256-[A-Za-z0-9+/=]+'/);
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    const body = await res.text();
+    expect(body).toContain("Facebook could not finish connecting. Go back to Edwyz and try again.");
+    expect(body).not.toContain("closes by itself");
+    // Every other /api path keeps the locked-down policy.
+    const other = await request.get("/api/meta-connect/connections");
+    expect(other.headers()["content-security-policy"]).toBe("default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'");
+  });
+
   test("an agent can look but not change; another workspace sees nothing", async ({ context, browser }) => {
     const owner = await signupUser(context, "conn");
     const m = await seedMeta(owner);
@@ -118,7 +143,7 @@ test.describe("Meta connections", () => {
     const bpage = await bctx.newPage();
     await signupUser(bctx, "conn");
     await bpage.goto("/app/settings/connections");
-    await expect(bpage.getByText("Nothing connected yet")).toBeVisible();
+    await expect(bpage.getByText("No Facebook account connected yet")).toBeVisible();
     await expect(bpage.locator("body")).not.toContainText(m.adAccount.name);
     const res = await bctx.request.post("/api/meta-connect/disconnect", { headers: { origin: ORIGIN }, data: { connectionId: m.connId } });
     expect([403, 404]).toContain(res.status());

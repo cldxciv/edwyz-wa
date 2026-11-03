@@ -45,7 +45,7 @@ export default function DataDeletionPage() {
 
       <Sec section={email}>
         <p>
-          Write to <a href={`mailto:${COMPANY.email}?subject=Data%20deletion%20request`}>{COMPANY.email}</a> with the subject &ldquo;Data deletion
+          Write to <a href={`mailto:${COMPANY.email}?subject=Data%20deletion%20request`}>{COMPANY.email}</a>{" "}with the subject &ldquo;Data deletion
           request&rdquo;. Write from the email address on your account, or include your workspace name and the WhatsApp number concerned, so we can confirm
           it is you.
         </p>
@@ -53,7 +53,7 @@ export default function DataDeletionPage() {
 
       <Sec section={status}>
         <p>
-          If your request came from Facebook, open <a href="/data-deletion/status">{siteUrl()}/data-deletion/status</a> and enter the confirmation code, or
+          If your request came from Facebook, open <a href="/data-deletion/status">{siteUrl()}/data-deletion/status</a>{" "}and enter the confirmation code, or
           use the link Facebook shows you. The status is &ldquo;received&rdquo; until the deletion has been carried out (automatically for data connected to your Facebook login, otherwise by our team), then &ldquo;completed&rdquo;.
         </p>
       </Sec>
@@ -72,7 +72,7 @@ export default function DataDeletionPage() {
 
       <Sec section={business}>
         <p>
-          Messages you exchanged with a business through {COMPANY.product} are part of that business&apos;s records, and the business decides how they are
+          Messages you exchanged with a business through {COMPANY.product}{" "}are part of that business&apos;s records, and the business decides how they are
           used. Please ask the business to delete them. If you cannot reach it, email us and we will help.
         </p>
       </Sec>

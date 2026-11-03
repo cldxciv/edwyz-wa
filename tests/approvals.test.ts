@@ -471,11 +471,26 @@ describe("resend", () => {
     expect(db.template.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ tenantId: "t1", status: "approved" }) }));
   });
 
-  it("refuses opted-out contacts and unknown contacts", async () => {
+  it("refuses unknown contacts", async () => {
     await newApproval();
-    db.contact.findFirst.mockResolvedValue({ id: "c1", optIn: true, optedOutAt: new Date() });
-    await expect(resendApproval(actor, store.rows[0].id, { mode: "text", phone: "+919876543210" })).rejects.toMatchObject({ status: 409 });
     db.contact.findFirst.mockResolvedValue(null);
     await expect(resendApproval(actor, store.rows[0].id, { mode: "text", phone: "+919876543210" })).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("an opt-out stops marketing only: the link still goes as a reply in the window or as a utility template, never as marketing", async () => {
+    await newApproval();
+    const optedOut = { id: "c1", optIn: true, optedOutAt: new Date() };
+    db.contact.findFirst.mockResolvedValue(optedOut);
+    db.conversation.findFirst.mockResolvedValue({ id: "cv1", lastInboundAt: new Date() });
+    await resendApproval(actor, store.rows[0].id, { mode: "text", phone: "+919876543210" });
+    expect(inbox.sendText).toHaveBeenCalledTimes(1);
+
+    db.template.findFirst.mockResolvedValue({ name: "approval_link", language: "en", category: "UTILITY" });
+    await resendApproval(actor, store.rows[0].id, { mode: "template", phone: "+919876543210", templateId: "tp1" });
+    expect(inbox.sendTemplateMessage).toHaveBeenCalledTimes(1);
+
+    db.template.findFirst.mockResolvedValue({ name: "offer", language: "en", category: "MARKETING" });
+    await expect(resendApproval(actor, store.rows[0].id, { mode: "template", phone: "+919876543210", templateId: "tp2" })).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/opted out of marketing/) });
+    expect(inbox.sendTemplateMessage).toHaveBeenCalledTimes(1);
   });
 });

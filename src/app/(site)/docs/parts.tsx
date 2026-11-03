@@ -1,5 +1,5 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
+import { NavLink } from "@/components/site/nav-link";
 
 export const DOC_LINKS = [
   { href: "/docs", label: "Overview" },
@@ -21,9 +21,9 @@ export function DocShell({ title, intro, children }: { title: string; intro: str
               {l.label}
             </a>
           ) : (
-            <Link key={l.href} href={l.href} className="underline-offset-2 hover:underline">
+            <NavLink key={l.href} href={l.href} exact className="underline-offset-2 hover:underline" currentClassName="font-semibold text-accent-ink underline">
               {l.label}
-            </Link>
+            </NavLink>
           ),
         )}
       </nav>

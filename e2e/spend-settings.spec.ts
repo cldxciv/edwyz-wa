@@ -80,7 +80,9 @@ test("an admin lowers a limit; a raise gets the owner-only copy, in the page and
   await openSpending(page);
   await expect(page.getByText("You can lower limits or stop spending. Only the owner can raise a limit.")).toBeVisible();
   const ads = page.locator("#ads");
-  await expect(ads.getByLabel("Daily limit")).toHaveAttribute("max", "2000");
+  // Money fields are text inputs (PotCard: a number input drops "20,000" in some browsers), so the cap shows as the value and the hint.
+  await expect(ads.getByLabel("Daily limit")).toHaveValue(/^2,?000$/);
+  await expect(ads.getByText("You can lower this. Only the owner can raise it.").first()).toBeVisible();
   await ads.getByLabel("Daily limit").fill("1500");
   await ads.getByRole("button", { name: "Lower limits" }).click();
   await expect(page.locator("#ads").getByText("Saved. Monthly limit ₹20,000, daily limit ₹1,500.")).toBeVisible();
@@ -123,6 +125,13 @@ test("works with no ad account and no WhatsApp number: limits can be set ahead @
   await openSpending(page);
   await expect(page.getByText("No ad account connected yet. You can set your ads limits now; they apply as soon as you connect one.")).toBeVisible();
   await expect(page.getByText("Connect WhatsApp to use this. You can set a limit now.")).toBeVisible();
+  // With no ad account nothing has synced, but there are no figures to be late: no contradicting "Meta hasn't sent" line.
+  await expect(page.locator("#ads").getByText(/Meta hasn't sent/)).toHaveCount(0);
+  // Assistants that are coming later have nothing to set: only the Ad assistant has a switch, named after it.
+  const assistants = page.locator("#assistants");
+  await expect(assistants.getByText("Not available yet. Its settings will show here when it's ready.")).toHaveCount(3);
+  await expect(assistants.getByRole("switch")).toHaveCount(1);
+  await expect(assistants.getByRole("switch", { name: /Ad assistant/ })).toBeVisible();
   await expect(page.getByText("Days and months follow Asia/Kolkata time.")).toBeVisible();
   await expect(page.locator("#ads").getByLabel("Currency")).toBeVisible();
   await noHorizontalOverflow(page, "spending page at phone width");

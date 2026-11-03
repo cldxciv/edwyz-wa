@@ -34,6 +34,14 @@ test("@mobile automation pages fit a phone, dialogs are usable and the builder c
   await page.getByLabel(/^Message\*?$/).fill("Hello from the phone");
   expect(await overflowsX(page), "new rule form overflows").toBe(false);
   const create = page.getByRole("button", { name: "Create rule" });
+  // mid-page, the sticky Create rule / Cancel bar sits above the bottom menu, so a tap on it reaches the button, not the menu
+  await page.getByRole("heading", { level: 2, name: "If" }).scrollIntoViewIfNeeded();
+  const reachable = await create.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return r.bottom <= window.innerHeight && !!hit && el.contains(hit);
+  });
+  expect(reachable, "Create rule is hidden behind the bottom menu").toBe(true);
   await create.scrollIntoViewIfNeeded();
   const box = await create.boundingBox();
   expect(box!.height, "touch target height").toBeGreaterThanOrEqual(40);

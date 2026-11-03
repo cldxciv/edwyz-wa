@@ -21,7 +21,10 @@ import { adsClient } from "./client";
  *   does not fit is refused with the room that is left (SpendBlockedError carries `left` and `needs`), and the caller may
  *   retry with a smaller value. The other half of a zero-sum shift is named with shiftFromAdSetId, whose cut must already
  *   be applied.
- * - resumeAd goes through reserveAds resume_ad: turning an ad back on is a raise and can be refused.
+ * - resumeAd goes through reserveAds resume_ad: turning an ad back on is a raise and can be refused. resumeAdSet does the same
+ *   for an ad set (reserveAds resume_adset).
+ * - setSplitBudget keeps a fair test's versions at one equal share (IG-PAGE-ADS-SPEC 3.8) through setAdSetBudget: cuts first,
+ *   then raises one by one, and the raised ones are cut back when a later raise is refused.
  * The audit trail keeps its request row first and exactly one outcome row; the money record is the spend ledger.
  */
 
@@ -230,6 +233,61 @@ export async function setAdSetBudget(
   return done(dailyBudgetMinor);
 }
 
+export type SplitBudgetResult = {
+  /** Each version's ad set: its daily budget before and after. */
+  versions: { metaAdSetId: string; fromMinor: number; toMinor: number }[];
+  shareMinor: number;
+};
+
+/** True when a failed raise may still have reached Meta (anything but a refusal or a definite 4xx), so it is put back too. */
+const mayHaveApplied = (e: unknown) => !isSpendError(e) && !(e instanceof HttpError && e.status < 500);
+
+/**
+ * Sets every version of a fair test to the same daily budget (docs/IG-PAGE-ADS-SPEC.md 3.8), one ad set at a time through
+ * setAdSetBudget, so each change keeps its own contract: a cut is a lowering, a raise is reserved in the Spend Book first.
+ * Cuts go first, then raises in turn. When a raise is refused (or fails), the versions already raised are cut back to their
+ * old share, newest first, so the split stays fair and no raise is left holding room; then the original error is thrown,
+ * a refusal with the room that is left. A cut-back that fails is logged and the others still run: what it leaves is a
+ * reserved and applied budget, counted by the book.
+ */
+export async function setSplitBudget(tenantId: string, metaAdSetIds: readonly string[], shareMinor: number, actor: SpendActor, opts: ActionOptions = {}): Promise<SplitBudgetResult> {
+  checkActor(actor);
+  if (!Number.isInteger(shareMinor) || shareMinor <= 0) throw new HttpError(400, "The daily budget must be a positive whole number in minor units.");
+  const ids = [...new Set(metaAdSetIds)];
+  if (ids.length === 0) throw new HttpError(400, "There are no versions to change.");
+  // What each version runs at now, as the book counts it (setAdSetBudget decides raise or cut the same way).
+  const current = new Map<string, number>();
+  for (const id of ids) {
+    const { set, campaign } = await loadAdSet(tenantId, id);
+    current.set(id, (await committedDailyBudget(tenantId, id)) ?? set.dailyBudgetMinor ?? campaign.dailyBudgetMinor);
+  }
+  const reason = opts.reason ?? "Changed the daily budget of every version, split equally.";
+  const versions: SplitBudgetResult["versions"] = [];
+  for (const id of ids.filter((x) => shareMinor < current.get(x)!)) {
+    const r = await setAdSetBudget(tenantId, id, shareMinor, actor, { reason });
+    versions.push({ metaAdSetId: id, fromMinor: Number(r.revertPayload.dailyBudgetMinor), toMinor: shareMinor });
+  }
+  const raised: { metaAdSetId: string; fromMinor: number }[] = [];
+  for (const id of ids.filter((x) => shareMinor > current.get(x)!)) {
+    try {
+      const r = await setAdSetBudget(tenantId, id, shareMinor, actor, { reason, approvalId: opts.approvalId });
+      raised.push({ metaAdSetId: id, fromMinor: Number(r.revertPayload.dailyBudgetMinor) });
+    } catch (e) {
+      const back = [...raised, ...(mayHaveApplied(e) ? [{ metaAdSetId: id, fromMinor: current.get(id)! }] : [])].reverse();
+      for (const b of back) {
+        try {
+          await setAdSetBudget(tenantId, b.metaAdSetId, b.fromMinor, actor, { reason: "Put the budget back, so every version keeps the same share." });
+        } catch (cutBack) {
+          console.error("[ads] could not put a version's budget back after a refused raise", failure(cutBack));
+        }
+      }
+      throw e;
+    }
+  }
+  for (const r of raised) versions.push({ metaAdSetId: r.metaAdSetId, fromMinor: r.fromMinor, toMinor: shareMinor });
+  return { versions, shareMinor };
+}
+
 /**
  * Undoes pauseAd using the revertPayload it returned. Only resumes an ad that was active before; never starts an ad that was
  * not spending. Turning an ad back on is a raise: it is reserved in the Spend Book first and can be refused (limits, a stop,
@@ -272,4 +330,48 @@ export async function resumeAd(tenantId: string, metaAdId: string, nativeRevertP
   await prisma.ad.updateMany({ where: { id: ad.id, tenantId }, data: { status: "active" } });
   await auditOutcome({ tenantId, userId, action: "ads.ad.resumed", target: ad.id, meta: { source: sourceOf(actor) } });
   return { revertPayload: { action: "pause_ad", metaAdId } };
+}
+
+/**
+ * Undoes pauseAdSet using the revertPayload it returned (PRM-12: the undo of [Keep B, pause the others], and an approved
+ * resume_adset request). The same contract as resumeAd: only an ad set that was active before is turned back on, and it is a
+ * raise, reserved in the Spend Book first (reserveAds resume_adset) and refused when it doesn't fit.
+ */
+export async function resumeAdSet(tenantId: string, metaAdSetId: string, nativeRevertPayload: Record<string, unknown>, actor: SpendActor, opts: ActionOptions = {}): Promise<ActionResult> {
+  checkActor(actor);
+  if (nativeRevertPayload?.action !== "resume_adset" || nativeRevertPayload.metaAdSetId !== metaAdSetId) throw new HttpError(400, "That is not a revert payload for this ad set.");
+  const { set, campaign } = await loadAdSet(tenantId, metaAdSetId);
+  if (nativeRevertPayload.previousStatus !== "active") return { revertPayload: { action: "pause_adset", metaAdSetId } };
+  if (campaign.status !== "active") throw new HttpError(409, "The campaign is not active, so the ad set was not resumed.");
+  const userId = userIdOf(actor);
+  await auditStrict({ tenantId, userId, action: "ads.adset.resume_requested", target: set.id, meta: { source: sourceOf(actor) } });
+  let permit: AdsPermit;
+  try {
+    permit = await reserveAds(tenantId, { kind: "resume_adset", adSetId: set.id, metaAdSetId }, actor, {
+      idempotencyKey: opts.idempotencyKey ?? `ads:resume_adset:${metaAdSetId}:${randomUUID()}`,
+      reason: opts.reason ?? "Turned an ad set back on.",
+      approvalId: opts.approvalId,
+    });
+  } catch (e) {
+    await auditOutcome({ tenantId, userId, action: "ads.adset.resume_failed", target: set.id, meta: { source: sourceOf(actor), reason: "refused" } });
+    throw e;
+  }
+  try {
+    const client = await clientFor(tenantId, campaign.adAccountAssetId, actor);
+    await client.setStatus(metaAdSetId, "ACTIVE", permit);
+  } catch (e) {
+    if (isAmbiguous(e)) {
+      await settleAds(permit, "unconfirmed", { error: "ambiguous" });
+      await auditOutcome({ tenantId, userId, action: "ads.adset.resume_unconfirmed", target: set.id, meta: { source: sourceOf(actor) } });
+      throw new HttpError(502, "Meta did not confirm that the ad set is back on, and it may be running. It stays counted against your limits; check it in Ads Manager.");
+    }
+    await settleAds(permit, "failed", { error: failure(e).slice(0, 80) });
+    await auditOutcome({ tenantId, userId, action: "ads.adset.resume_failed", target: set.id, meta: { source: sourceOf(actor) } });
+    if (e instanceof HttpError) throw e;
+    throw new HttpError(502, `Could not resume the ad set on Meta: ${failure(e)}`);
+  }
+  await settleAds(permit, "applied");
+  await prisma.adSet.updateMany({ where: { id: set.id, tenantId }, data: { status: "active" } });
+  await auditOutcome({ tenantId, userId, action: "ads.adset.resumed", target: set.id, meta: { source: sourceOf(actor) } });
+  return { revertPayload: { action: "pause_adset", metaAdSetId } };
 }

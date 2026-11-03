@@ -115,9 +115,15 @@ export function conversationStatusChangedPayload(i: StatusChangedInput) {
   return { conversationId: i.conversationId, contactId: i.contactId, from: i.from, to: i.to, changedBy: i.changedBy, source: i.source, timestamp: iso(i.timestamp) };
 }
 
+/** Where a lead came from: a Meta lead form, or a chat started from a click-to-WhatsApp ad (src/lib/conversions/referral.ts). */
+export const LEAD_SOURCES = ["meta_lead_form", "ctwa"] as const;
+export type LeadSource = (typeof LEAD_SOURCES)[number];
+
+/** source defaults to meta_lead_form, the only kind of lead the event carried before click-to-WhatsApp leads. */
 export type LeadCreatedInput = {
   leadId: string;
   status: string;
+  source?: LeadSource;
   formId: string | null;
   campaignId: string | null;
   adId: string | null;
@@ -130,7 +136,7 @@ export function leadCreatedPayload(i: LeadCreatedInput) {
   return {
     leadId: i.leadId,
     status: i.status,
-    source: "meta_lead_form" as const,
+    source: i.source ?? ("meta_lead_form" as LeadSource),
     formId: i.formId,
     campaignId: i.campaignId,
     adId: i.adId,
@@ -241,7 +247,7 @@ export const EVENT_CATALOG: EventDoc[] = [
   {
     event: "contact.opted_out",
     title: "A contact opts out",
-    when: "When someone sends STOP, an agent marks the contact as opted out, the API marks the contact as opted out, or a chatbot unsubscribe step runs. We stop all marketing messages to them.",
+    when: "When someone sends a STOP word, an agent marks the contact as opted out, the API marks the contact as opted out, or a chatbot unsubscribe step runs. We stop all marketing messages to them; order updates and replies to their own messages can still go, and they can send START to get offers again.",
     fields: [
       ...CONTACT_FIELDS("contact", "the contact"),
       { name: "contactId", type: "string", description: "Same as contact.id, kept for older integrations." },
@@ -269,18 +275,18 @@ export const EVENT_CATALOG: EventDoc[] = [
   {
     event: "lead.created",
     title: "A lead arrives",
-    when: "When a person fills in one of your Meta lead forms and the lead is stored.",
+    when: "When a person fills in one of your Meta lead forms, or starts a WhatsApp chat from one of your click-to-WhatsApp ads (at most once per person per ad in 30 days), and the lead is stored.",
     fields: [
       { name: "leadId", type: "string", description: "Lead id in the app." },
       { name: "status", type: "string", description: "new at creation." },
-      { name: "source", type: "string", description: "Always meta_lead_form for now." },
-      { name: "formId", type: "string or null", description: "Meta lead form id." },
-      { name: "campaignId", type: "string or null", description: "Meta campaign id the lead came from." },
-      { name: "adId", type: "string or null", description: "Meta ad id the lead came from." },
-      { name: "createdAt", type: "string", description: "ISO 8601 time the person submitted the form." },
-      { name: "contact", type: "object or null", description: "The contact created or matched for this lead, when the form had a phone number." },
+      { name: "source", type: "string", description: "meta_lead_form for a Meta lead form, ctwa for a chat started from a click-to-WhatsApp ad." },
+      { name: "formId", type: "string or null", description: "Meta lead form id. Null for ctwa leads." },
+      { name: "campaignId", type: "string or null", description: "Meta campaign id the lead came from, when known." },
+      { name: "adId", type: "string or null", description: "Meta ad id the lead came from (for ctwa, the ad or post the chat started from)." },
+      { name: "createdAt", type: "string", description: "ISO 8601 time the person submitted the form or started the chat." },
+      { name: "contact", type: "object or null", description: "The contact created or matched for this lead: the person who wrote for ctwa leads, or the form's phone number." },
       ...CONTACT_FIELDS("contact", "the contact").map((f) => f),
-      { name: "fields", type: "object", description: "The form answers, as field name to text." },
+      { name: "fields", type: "object", description: "The form answers, as field name to text. For ctwa leads: source (click_to_whatsapp), and ad_headline and ad_link when the ad had them." },
     ],
     sample: leadCreatedPayload({
       leadId: "cklead1",

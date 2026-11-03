@@ -3,8 +3,9 @@
  * offline page (src/app/offline/page.tsx). The Android app is a Trusted Web Activity over the same site, so these are what it shows
  * for its launcher icon, splash screen and status bar.
  *
- * The PNGs in public/icons were made once from web/public/img/logo-edwyz-mini.png and are committed (no build step): "any" icons
- * carry the mark over 80% of the side, maskable ones keep every drawn pixel inside the central 80% circle that launchers never crop.
+ * The PNGs in public/icons (and src/app/favicon.ico) are drawn by scripts/make-icons.mjs from the mark in the site header, so the
+ * tab, the installed app and the pages show one logo; they are committed (no build step). "any" icons fill the tile, maskable ones
+ * keep every drawn pixel inside the central 80% circle that launchers never crop.
  */
 
 /** Light theme tokens from src/app/globals.css (--accent, --background); tests/pwa-manifest.test.ts keeps them equal. */

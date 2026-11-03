@@ -249,7 +249,7 @@ export function BrandKits() {
                   {b.tone && <p className="mt-3 line-clamp-2 text-sm text-muted">Sounds: {b.tone}</p>}
                   {suggested !== "none" && suggested !== b.specialAdCategory && (
                     <Alert tone="warn" className="mt-3">
-                      The business type suggests the {CATEGORY_LABEL[suggested]} category. Please review it.
+                      The business type suggests the {CATEGORY_LABEL[suggested]}{" "}category. Please review it.
                     </Alert>
                   )}
                   <div className="mt-4 flex flex-wrap gap-2">

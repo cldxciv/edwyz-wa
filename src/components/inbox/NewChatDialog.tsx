@@ -1,12 +1,21 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { displayName, displaySubtitle } from "@/lib/contacts/identity";
+import { normalizePhone } from "@/lib/contacts/phone";
 import { apiFetch, Button, Dialog, FormField, Input, Select, toast } from "@/components/ui";
 import { TemplatePanel } from "./TemplatePanel";
 import type { BusinessNumber, TemplateOption } from "./types";
+import { templatesForWaba, wabaOf } from "./ux";
 
 type ContactHit = { id: string; name: string | null; phone: string | null; bsuid?: string | null; username?: string | null; optedOutAt?: string | null };
 type Mode = "phone" | "contact";
+
+const PHONE_ERROR = "Enter a number with country code, like +91 98765 43210.";
+
+/** What is wrong with the typed number, by the server's own rule (normalizePhone), or null when it is empty or fine. */
+export function phoneProblem(value: string): string | null {
+  return value.trim() && !normalizePhone(value) ? PHONE_ERROR : null;
+}
 
 /** Starts a chat by sending an approved template to a phone number or a saved contact. */
 export function NewChatDialog({ isAdmin, onClose, onStarted }: { isAdmin: boolean; onClose: () => void; onStarted: (conversationId: string) => void }) {
@@ -21,6 +30,9 @@ export function NewChatDialog({ isAdmin, onClose, onStarted }: { isAdmin: boolea
   const [templates, setTemplates] = useState<TemplateOption[] | null>(null);
   const [templatesError, setTemplatesError] = useState<string | null>(null);
   const [confirmOptIn, setConfirmOptIn] = useState(false);
+  // The number is checked once the field is left (or on send), then again on every change, so the message goes as soon as it is fixed.
+  const [phoneChecked, setPhoneChecked] = useState(false);
+  const phoneError = phoneChecked ? phoneProblem(phone) : null;
 
   const loadTemplates = useCallback(() => {
     setTemplatesError(null);
@@ -55,6 +67,10 @@ export function NewChatDialog({ isAdmin, onClose, onStarted }: { isAdmin: boolea
 
   async function send(templateId: string, variables: string[]) {
     if (mode === "phone" && !phone.trim()) throw new Error("Enter the customer's number first, with the country code, like +91 98765 43210.");
+    if (mode === "phone" && phoneProblem(phone)) {
+      setPhoneChecked(true);
+      throw new Error(PHONE_ERROR);
+    }
     if (mode === "contact" && !picked) throw new Error("Pick a contact first.");
     if (numbers && numbers.length > 1 && !numberId) throw new Error("Choose which of your numbers to send from.");
     const body = {
@@ -71,12 +87,16 @@ export function NewChatDialog({ isAdmin, onClose, onStarted }: { isAdmin: boolea
   }
 
   const noNumbers = numbers !== null && numbers.length === 0;
+  // Only the chosen number's own WhatsApp Business Account templates can be sent from it. Until a number is chosen (or when the
+  // list does not say which account a number belongs to) every template shows, and the server refuses a mismatch.
+  const numberWaba = wabaOf(numbers?.find((n) => n.id === numberId));
+  const sendable = useMemo(() => templatesForWaba(templates, numberWaba), [templates, numberWaba]);
 
   return (
     <Dialog title="Start a new chat" description="WhatsApp only lets you open a chat with an approved template. The customer can reply once they get it." onClose={onClose} size="lg">
       {noNumbers ? (
         <p role="alert" className="rounded-control border border-warn-line bg-warn-soft p-3 text-sm text-warn-fg">
-          No WhatsApp number is connected yet. <a className="font-semibold underline" href="/app/settings/connect">Connect a number</a> to start chats.
+          No WhatsApp number is connected yet. <a className="font-semibold underline" href="/app/settings/connect">Connect a number</a>{" "}to start chats.
         </p>
       ) : (
         <div className="space-y-4">
@@ -96,8 +116,8 @@ export function NewChatDialog({ isAdmin, onClose, onStarted }: { isAdmin: boolea
 
           {mode === "phone" ? (
             <div className="grid gap-3 sm:grid-cols-2">
-              <FormField label="WhatsApp number" hint="With country code, like +91 98765 43210" required>
-                <Input type="tel" inputMode="tel" autoComplete="off" value={phone} maxLength={40} onChange={(e) => setPhone(e.target.value)} data-autofocus="" />
+              <FormField label="WhatsApp number" hint="With country code, like +91 98765 43210" required error={phoneError}>
+                <Input type="tel" inputMode="tel" autoComplete="off" value={phone} maxLength={40} onChange={(e) => setPhone(e.target.value)} onBlur={() => setPhoneChecked(true)} data-autofocus="" />
               </FormField>
               <FormField label="Name" optional hint="Saved with the contact">
                 <Input value={name} maxLength={100} onChange={(e) => setName(e.target.value)} />
@@ -116,12 +136,11 @@ export function NewChatDialog({ isAdmin, onClose, onStarted }: { isAdmin: boolea
                     <button
                       type="button"
                       aria-pressed={picked?.id === c.id}
-                      disabled={!!c.optedOutAt}
                       onClick={() => setPicked(c)}
                       className={`flex w-full items-center justify-between gap-3 rounded-control border px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60 ${picked?.id === c.id ? "border-accent bg-accent-soft" : "border-border hover:bg-surface-2"}`}
                     >
                       <span className="truncate font-medium">{displayName(c)}</span>
-                      <span className="shrink-0 text-xs text-muted">{c.optedOutAt ? "Opted out" : displaySubtitle(c)}</span>
+                      <span className="shrink-0 text-xs text-muted">{c.optedOutAt ? "Opted out of marketing" : displaySubtitle(c)}</span>
                     </button>
                   </li>
                 ))}
@@ -147,7 +166,7 @@ export function NewChatDialog({ isAdmin, onClose, onStarted }: { isAdmin: boolea
             <p className="mb-1.5 text-sm font-medium">Message</p>
             <div className="rounded-control border border-border p-2">
               <TemplatePanel
-                templates={templates}
+                templates={sendable}
                 error={templatesError}
                 onRetry={loadTemplates}
                 contactName={mode === "contact" ? (picked?.name ?? null) : name.trim() || null}

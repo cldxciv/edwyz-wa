@@ -15,7 +15,7 @@ export const NAV_LINKS = [
 ] as const;
 
 export const SIGN_IN = { href: "/login", label: "Sign in" } as const;
-export const START_TRIAL = { href: "/signup", label: "Start free trial" } as const;
+export const START_TRIAL = { href: "/signup", label: "Start free trial", shortLabel: "Free trial" } as const;
 
 /** The in-page sections of the landing page. The header and footer link to some of these as /#id. */
 export const SECTION = {

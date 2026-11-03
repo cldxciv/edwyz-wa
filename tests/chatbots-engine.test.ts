@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type Row = Record<string, any>;
-const store = vi.hoisted(() => ({ sessions: [] as Row[], chatbots: [] as Row[], contacts: [] as Row[], conversations: [] as Row[], messages: [] as Row[], templates: [] as Row[], clock: 0 }));
+const store = vi.hoisted(() => ({ sessions: [] as Row[], chatbots: [] as Row[], contacts: [] as Row[], conversations: [] as Row[], messages: [] as Row[], templates: [] as Row[], audits: [] as Row[], clock: 0 }));
 
 const matches = (row: Row, where: Row = {}): boolean =>
   Object.entries(where).every(([key, cond]) => {
@@ -77,6 +77,7 @@ beforeEach(() => {
   store.chatbots = [];
   store.messages = [];
   store.templates = [];
+  store.audits = [];
   store.clock = 0;
   store.contacts = [{ id: "k1", tenantId: T, phone: "+911111111111", name: "Asha", attributes: { plan: "pro" }, tags: [], optedOutAt: null }];
   store.conversations = [{ id: "c1", tenantId: T, phoneNumberId: "pn1", contactId: "k1", status: "open", phoneNumber: { wabaRefId: "w1" } }];
@@ -87,6 +88,7 @@ beforeEach(() => {
     conversation: model(() => store.conversations),
     message: model(() => store.messages),
     template: model(() => store.templates),
+    auditLog: model(() => store.audits),
     usageLedger: model(() => []),
     membership: model(() => [{ id: "m1", tenantId: T, userId: "u9" }]),
     tenant: {
@@ -110,17 +112,18 @@ describe("triggers", () => {
     expect(session().status).toBe("completed");
   });
 
-  it("does nothing when no trigger matches, and for opted-out contacts, blocked conversations and STOP", async () => {
+  it("does nothing when no trigger matches, for blocked conversations and for STOP; an opted-out contact is still answered", async () => {
     addBot(flow([node("a", "send_text", { text: "x" })], []));
     expect(await handleInboundForChatbots(inbound("pricing"))).toBe(false);
-    store.contacts[0].optedOutAt = new Date();
-    expect(await handleInboundForChatbots(inbound("hi"))).toBe(false);
-    store.contacts[0].optedOutAt = null;
     store.conversations[0].status = "blocked";
     expect(await handleInboundForChatbots(inbound("hi"))).toBe(false);
     store.conversations[0].status = "open";
     expect(await handleInboundForChatbots(inbound("stop"))).toBe(false);
     expect(inbox.sendText).not.toHaveBeenCalled();
+    // Owner default 1: an opt-out stops marketing only, so a bot still answers a message the customer sent.
+    store.contacts[0].optedOutAt = new Date(0);
+    expect(await handleInboundForChatbots(inbound("hi"))).toBe(true);
+    expect(sent()).toEqual(["x"]);
   });
 
   it("prefers keyword over first_message over any_message, and honours phone number scope and tenant", async () => {
@@ -233,6 +236,14 @@ describe("ask and resume", () => {
     await handleInboundForChatbots(inbound("hi"));
     expect(await handleInboundForChatbots(inbound("STOP"))).toBe(false);
     expect(session().status).toBe("completed");
+  });
+
+  it("a tap on a template button labelled Cancel is an answer, not a STOP: the session goes on", async () => {
+    addBot(askFlow);
+    await handleInboundForChatbots(inbound("hi"));
+    expect(await handleInboundForChatbots(inbound("Cancel", { messageType: "button" }))).toBe(true);
+    expect(session().status).toBe("waiting");
+    expect(sent()).toContain("Numbers only");
   });
 
   it("choice ask accepts a number or title", async () => {
@@ -563,11 +574,201 @@ describe("startChatbot", () => {
     expect(sent()).toEqual(["manual hello"]);
     expect(result.sessionId).toBeTruthy();
   });
+  it("a teammate starting a bot while the AI agent talks pauses the agent, and dates the pause", async () => {
+    addBot(f, { id: "m", triggerType: "manual", triggerKeywords: [] });
+    store.conversations[0].tags = ["vip"];
+    store.conversations[0].lastInboundAt = new Date();
+    db.usageLedger.findFirst.mockResolvedValueOnce({ id: "reply1" });
+    await startChatbot({ tenantId: T }, "m", "c1", { source: "manual" });
+    expect(store.conversations[0].tags).toEqual(["vip", "ai:stopped"]);
+    expect(store.audits).toEqual([expect.objectContaining({ tenantId: T, action: "ai_agent.paused", target: "c1" })]);
+    expect(sent()).toEqual(["manual hello"]);
+  });
+
+  it("starts for a contact who opted out: a bot's replies are not marketing (owner default 1)", async () => {
+    addBot(f, { id: "m", triggerType: "manual", triggerKeywords: [] });
+    store.contacts[0].optedOutAt = new Date(0);
+    store.conversations[0].contact = { optedOutAt: new Date(0) };
+    await startChatbot({ tenantId: T }, "m", "c1", { source: "manual" });
+    expect(sent()).toEqual(["manual hello"]);
+  });
+
   it("rejects drafts, unknown bots, and other tenants", async () => {
     addBot(f, { id: "d", status: "draft" });
     await expect(startChatbot({ tenantId: T }, "d", "c1")).rejects.toMatchObject({ status: 409 });
     await expect(startChatbot({ tenantId: T }, "nope", "c1")).rejects.toMatchObject({ status: 404 });
     addBot(f, { id: "x" });
     await expect(startChatbot({ tenantId: "t2" }, "x", "c1")).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+describe("republishing and waits (P5)", () => {
+  const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000);
+  const later = (h: number) => new Date(Date.now() + h * 3_600_000);
+  const waitFlow = (onReply?: string, then: Row = node("b", "send_text", { text: "after" })) =>
+    flow([node("a", "send_text", { text: "before" }), node("d", "delay", { minutes: 60, ...(onReply ? { onReply } : {}) }), then], [edge("a", "d"), edge("d", then.id)]);
+  let notes: Row[] = [];
+  let seams: Record<string, ReturnType<typeof vi.fn>>;
+
+  beforeEach(() => {
+    notes = [];
+    db.note = model(() => notes);
+    seams = { assign: vi.fn(), assignTeam: vi.fn(), setStatus: vi.fn(), handoff: vi.fn() };
+    registerChatbotSeams(seams as never);
+  });
+
+  it("a customer waiting at a step that was removed on republish is not left unanswered: the message goes on", async () => {
+    const bot = addBot(flow([node("a", "ask", { text: "Your age?", variable: "age", validate: "number", maxRetries: 1 }), node("b", "end")], [edge("a", "b")]));
+    await handleInboundForChatbots(inbound("hi"));
+    expect(session().status).toBe("waiting");
+    bot.publishedFlow = flow([node("z", "send_text", { text: "New welcome" })], []);
+    expect(await handleInboundForChatbots(inbound("42"))).toBe(false);
+    expect(session().status).toBe("completed");
+    expect(sent()).toEqual(["Your age?"]);
+  });
+
+  it("by default the sleeping bot keeps the customer's message, as before", async () => {
+    addBot(waitFlow());
+    await handleInboundForChatbots(inbound("hi"));
+    expect(session().variables.__sleepingAt).toBe("d");
+    expect(await handleInboundForChatbots(inbound("hello?"))).toBe(true);
+    expect(session().status).toBe("active");
+    expect(sent()).toEqual(["before"]);
+  });
+
+  it("'Stop waiting' goes on to the next step as soon as the customer writes", async () => {
+    addBot(waitFlow("continue", node("b", "send_text", { text: "You said: {{last_reply}}" })));
+    await handleInboundForChatbots(inbound("hi"));
+    expect(await handleInboundForChatbots(inbound("I am back"))).toBe(true);
+    expect(sent()).toEqual(["before", "You said: I am back"]);
+    expect(session().status).toBe("completed");
+    expect(session().variables.__sleepingAt).toBeUndefined();
+    // The worker then finds nothing left to wake.
+    expect(await resumeDelayedSessions(later(2))).toBe(0);
+  });
+
+  it("'Let routing and rules handle it' passes the message on while the bot keeps waiting", async () => {
+    addBot(waitFlow("pass"));
+    await handleInboundForChatbots(inbound("hi"));
+    expect(await handleInboundForChatbots(inbound("Any update?"))).toBe(false);
+    expect(session().status).toBe("active");
+    expect(session().wakeAt).toBeTruthy();
+    expect(await resumeDelayedSessions(later(2))).toBe(1);
+    expect(sent()).toEqual(["before", "after"]);
+  });
+
+  it("hands the chat to the team, with a note, when the 24-hour window closed during the wait", async () => {
+    addBot(waitFlow());
+    await handleInboundForChatbots(inbound("hi"));
+    const s = session();
+    // The customer wrote 22 hours before the bot fell asleep (window open then), and 25 hours before now (closed now).
+    s.updatedAt = hoursAgo(3);
+    store.conversations[0].lastInboundAt = hoursAgo(25);
+    expect(await resumeDelayedSessions(later(2))).toBe(1);
+    expect(sent()).toEqual(["before"]);
+    expect(s.status).toBe("handed_off");
+    expect(seams.setStatus).toHaveBeenCalledWith(T, "c1", "open");
+    expect(seams.handoff).toHaveBeenCalledWith(T, "c1", { queueOnly: false });
+    expect(notes[0].body).toMatch(/24-hour window closed while the chatbot was waiting/);
+    expect(store.conversations[0].tags).toContain("ai:stopped");
+    // The hand-over dates the AI agent's pause, which lasts one episode of the chat.
+    expect(store.audits).toEqual([expect.objectContaining({ tenantId: T, action: "ai_agent.paused", target: "c1" })]);
+  });
+
+  describe("after a wait that outlived the 24-hour window, only a free message hands over", () => {
+    const closedWake = async (then: Row[], edges: Row[]) => {
+      addBot(flow([node("a", "send_text", { text: "before" }), node("d", "delay", { minutes: 1440 }), ...then], [edge("a", "d"), ...edges]));
+      await handleInboundForChatbots(inbound("hi"));
+      // The window was open when the session started (the customer wrote 23 hours before that) and has closed by the wake.
+      session().startedAt = hoursAgo(2);
+      store.conversations[0].lastInboundAt = hoursAgo(25);
+      return resumeDelayedSessions(later(25));
+    };
+    const template = () => {
+      store.templates = [{ id: "tp1", tenantId: T, wabaRefId: "w1", status: "approved", name: "follow_up", language: "en", category: "UTILITY", components: [{ type: "BODY", text: "Hello again" }] }];
+      return node("t", "send_template", { templateId: "tp1", variables: {} });
+    };
+
+    it("'Wait 1 day, then mark the chat solved' solves the chat as before", async () => {
+      expect(await closedWake([node("s", "set_status", { status: "solved" })], [edge("d", "s")])).toBe(1);
+      expect(seams.setStatus).toHaveBeenCalledWith(T, "c1", "solved");
+      expect(seams.setStatus).not.toHaveBeenCalledWith(T, "c1", "open");
+      expect(seams.handoff).not.toHaveBeenCalled();
+      expect(session().status).toBe("completed");
+      expect(notes).toEqual([]);
+    });
+
+    it("'Wait 1 day, add a tag, send a template' tags the contact and sends the template", async () => {
+      await closedWake([node("g", "add_tag", { tag: "follow-up" }), template()], [edge("d", "g"), edge("g", "t")]);
+      expect(store.contacts[0].tags).toEqual(["follow-up"]);
+      expect(inbox.sendTemplateMessage).toHaveBeenCalledWith(expect.objectContaining({ templateName: "follow_up" }));
+      expect(seams.handoff).not.toHaveBeenCalled();
+      expect(session().status).toBe("completed");
+    });
+
+    it("runs the silent steps, then hands over at the first free message, also one after a template", async () => {
+      await closedWake([node("g", "add_tag", { tag: "follow-up" }), node("b", "send_text", { text: "Still there?" })], [edge("d", "g"), edge("g", "b")]);
+      expect(store.contacts[0].tags).toEqual(["follow-up"]);
+      expect(sent()).toEqual(["before"]);
+      expect(session().status).toBe("handed_off");
+      expect(notes[0].body).toMatch(/24-hour window closed/);
+
+      // A template opens no window, so a question after it would be refused too.
+      store.sessions = [];
+      store.chatbots = [];
+      notes.length = 0;
+      await closedWake([template(), node("q", "ask", { text: "Shall we book?", variable: "ok", validate: "text" })], [edge("d", "t"), edge("t", "q")]);
+      expect(inbox.sendTemplateMessage).toHaveBeenCalledTimes(1);
+      expect(sent()).toEqual(["before", "before"]);
+      expect(session().status).toBe("handed_off");
+      expect(notes).toHaveLength(1);
+    });
+
+    it("a hand-over step still hands over, without its message, and its note says why", async () => {
+      await closedWake([node("h", "handoff", { message: "A teammate will reply." })], [edge("d", "h")]);
+      expect(sent()).toEqual(["before"]);
+      expect(seams.handoff).toHaveBeenCalledTimes(1);
+      expect(session().status).toBe("handed_off");
+      expect(notes[0].body).toMatch(/Its message was not sent because the 24-hour window had closed/);
+    });
+
+    it("judges the window from when the session started, so a second wait after the first still hands over", async () => {
+      addBot(flow([node("a", "send_text", { text: "before" }), node("d", "delay", { minutes: 1440 }), node("d2", "delay", { minutes: 30 }), node("b", "send_text", { text: "after" })], [edge("a", "d"), edge("d", "d2"), edge("d2", "b")]));
+      await handleInboundForChatbots(inbound("hi"));
+      const s = session();
+      s.startedAt = hoursAgo(25);
+      store.conversations[0].lastInboundAt = hoursAgo(26);
+      // The second wait began after the window had closed; the session started inside it.
+      s.wakeAt = later(0);
+      s.currentNodeId = "b";
+      s.variables = { __sleepingAt: "d2" };
+      s.updatedAt = hoursAgo(0.5);
+      await resumeDelayedSessions(later(1));
+      expect(sent()).toEqual(["before"]);
+      expect(s.status).toBe("handed_off");
+    });
+  });
+
+  it("goes on as usual when the next step is a template, or when the window was already closed when the wait began", async () => {
+    store.templates = [{ id: "tp1", tenantId: T, wabaRefId: "w1", status: "approved", name: "follow_up", language: "en", category: "UTILITY", components: [{ type: "BODY", text: "Hello again" }] }];
+    addBot(waitFlow(undefined, node("t", "send_template", { templateId: "tp1", variables: {} })));
+    await handleInboundForChatbots(inbound("hi"));
+    session().updatedAt = hoursAgo(3);
+    store.conversations[0].lastInboundAt = hoursAgo(25);
+    await resumeDelayedSessions(later(2));
+    expect(inbox.sendTemplateMessage).toHaveBeenCalledWith(expect.objectContaining({ templateName: "follow_up" }));
+    expect(seams.handoff).not.toHaveBeenCalled();
+
+    // A bot a rule started on a customer whose window was long closed: nothing to hand over, it runs its steps as before.
+    store.sessions = [];
+    store.chatbots = [];
+    inbox.sendText.mockClear();
+    addBot(waitFlow());
+    await handleInboundForChatbots(inbound("hi"));
+    session().updatedAt = hoursAgo(3);
+    store.conversations[0].lastInboundAt = hoursAgo(40);
+    await resumeDelayedSessions(later(2));
+    expect(seams.handoff).not.toHaveBeenCalled();
+    expect(sent()).toEqual(["before", "after"]);
   });
 });

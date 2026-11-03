@@ -500,7 +500,7 @@ export function ConnectWhatsApp() {
           {view.name === "waiting" && (
             <div className="mt-2 space-y-3">
               <p className="text-sm">
-                <strong className="font-semibold">Continue in the Facebook window.</strong> It opens in a new window on top of this page. Here is what it will ask:
+                <strong className="font-semibold">Continue in the Facebook window.</strong>{" "}It opens in a new window on top of this page. Here is what it will ask:
               </p>
               <PopupGuide />
               <Alert tone="info">

@@ -3,16 +3,25 @@ import { assertWithinLimit } from "@/lib/billing";
 import { type AutomationEvent, attributeChangeEvents, emitAutomationEvents, tagChangeEvents } from "@/lib/automation/v2/emit";
 import { prisma } from "@/lib/db";
 import { HttpError } from "@/lib/tenancy";
+import { findPhoneColumn, KNOWN_COLUMNS, readPhoneCell } from "./columns";
 import { parseCsv } from "./csv";
-import { normalizePhone } from "./phone";
 
 export const MAX_IMPORT_ROWS = 10_000;
 export const DEFAULT_OPT_IN_SOURCE = "csv_import";
 const CHUNK = 500;
 const TRUE_VALUES = new Set(["yes", "true", "1", "y"]);
-const KNOWN = new Set(["phone", "name", "tags", "opt_in", "opt_in_source"]);
+const KNOWN = new Set(KNOWN_COLUMNS);
 
+/** skipped counts rows left as they were: a number repeated in the file, or (with existing: "skip") a contact already saved. */
 export type ImportReport = { created: number; updated: number; skipped: number; errors: { row: number; reason: string }[] };
+
+/** What an import does with people already in the contacts: "update" merges the file into them, "skip" leaves them untouched. */
+export type ExistingContacts = "update" | "skip";
+
+/** The existing-contacts choice from a request (a query or form value); anything but "skip" keeps the default, update. */
+export function parseExistingContacts(value: unknown): ExistingContacts {
+  return value === "skip" ? "skip" : "update";
+}
 
 type ParsedRow = {
   row: number;
@@ -36,14 +45,14 @@ type Existing = {
 
 function parseRows(table: string[][], report: ImportReport, defaultCountryCode: string): ParsedRow[] {
   const header = table[0].map((h) => h.trim().toLowerCase());
-  const phoneCol = header.indexOf("phone");
-  if (phoneCol < 0) throw new HttpError(400, "CSV must have a phone column.");
+  const phoneCol = findPhoneColumn(header);
+  if (!phoneCol) throw new HttpError(400, "CSV must have a phone column (phone, phone number, mobile, whatsapp or wa_id).");
   const seen = new Set<string>();
   const parsed: ParsedRow[] = [];
 
   table.slice(1).forEach((cells, index) => {
     const row = index + 2;
-    const phone = normalizePhone(cells[phoneCol] ?? "", defaultCountryCode);
+    const phone = readPhoneCell(cells[phoneCol.index] ?? "", phoneCol, defaultCountryCode);
     if (!phone) {
       report.errors.push({ row, reason: "Invalid phone number." });
       return;
@@ -60,7 +69,7 @@ function parseRows(table: string[][], report: ImportReport, defaultCountryCode: 
     const attributes: Record<string, string> = {};
     header.forEach((h, i) => {
       const value = (cells[i] ?? "").trim();
-      if (h && !KNOWN.has(h) && value) attributes[h] = value;
+      if (h && i !== phoneCol.index && !KNOWN.has(h) && value) attributes[h] = value;
     });
     parsed.push({
       row,
@@ -122,7 +131,7 @@ async function recordImportConsent(tenantId: string, userId: string | null, rows
 export async function importContacts(
   tenantId: string,
   csvText: string,
-  options: { defaultCountryCode?: string; now?: Date; recordedByUserId?: string | null } = {},
+  options: { defaultCountryCode?: string; now?: Date; recordedByUserId?: string | null; existing?: ExistingContacts } = {},
 ): Promise<ImportReport> {
   const now = options.now ?? new Date();
   const table = parseCsv(csvText);
@@ -162,6 +171,10 @@ export async function importContacts(
     for (const r of chunk) {
       const match = byPhone.get(r.phone);
       if (!match) continue;
+      if (options.existing === "skip") {
+        report.skipped++;
+        continue;
+      }
       const data = buildUpdate(match, r, now);
       await prisma.contact.update({ where: { id: match.id, tenantId }, data });
       announce.push(...changeEvents(tenantId, match, data));

@@ -154,7 +154,7 @@ export function SetupCard() {
   const headline = summary.remaining > 0 ? "Finish setting up" : "Setup paused";
   const sub =
     summary.remaining > 0
-      ? `${summary.done} of ${summary.done + data.steps.filter((s) => s.state === "todo").length} steps done, about ${summary.minutesLeft} min left`
+      ? `${summary.done} of ${summary.asked} steps done, about ${summary.minutesLeft} min left`
       : "Remaining steps are set aside for now";
 
   return (

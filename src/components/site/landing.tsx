@@ -150,7 +150,7 @@ export function EddySample() {
   return (
     <figure className="space-y-4" aria-labelledby="eddy-sample-caption">
       <figcaption id="eddy-sample-caption" className="text-sm text-muted">
-        <span className="font-semibold text-foreground">Example conversations.</span> Illustrations only: names and numbers are made up.
+        <span className="font-semibold text-foreground">Example conversations.</span>{" "}Illustrations only: names and numbers are made up.
       </figcaption>
       {EDDY_EXAMPLES.map((e) => (
         <Exchange key={e.label} example={e} />

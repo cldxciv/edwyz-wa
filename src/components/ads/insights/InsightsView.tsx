@@ -1,17 +1,19 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import { Alert, Button, Card, DataTable, EmptyState, ErrorState, FormField, Input, ProgressBar, Skeleton, Stat, StatusPill, apiFetch, toast, type Column } from "@/components/ui";
+import { Alert, Button, Card, DataTable, EmptyState, ErrorState, FormField, Input, ProgressBar, Select, Skeleton, Stat, StatusPill, apiFetch, toast, type Column } from "@/components/ui";
 import { PageHeader } from "@/components/app/PageHeader";
 import { canManage, useApi, useRole } from "@/components/contacts/hooks";
 import { PRESETS, presetRange, rangeProblem, rangeText } from "@/components/reports/helpers";
 import { currencyExponent, formatMinor } from "@/lib/ads/insights-money";
-import type { DayPoint, EntityRow, FatigueCandidate, PacingRow, Totals } from "@/lib/ads/insights-queries";
+import type { CurrencyTotals, DayPoint, EntityRow, FatigueCandidate, PacingRow, Totals } from "@/lib/ads/insights-queries";
 import { LinkButton } from "../LinkButton";
 import { friendlyAdsError } from "../helpers";
 import { DailyChart } from "./DailyChart";
-import { compactNumber, deltaView, fatigueReasons, pacingView } from "./insight-helpers";
+import { compactNumber, deltaView, fatigueReasons, futureRangeProblem, latestDay, pacingView } from "./insight-helpers";
+import { accountLabel, chartMetrics, insightsQuery, splitByCurrency, type Metric } from "./account-filter";
 
+type Account = { id: string; name: string | null; currency: string | null };
 type Summary = {
   connected: boolean;
   adAccounts: number;
@@ -19,6 +21,11 @@ type Summary = {
   mixed: boolean;
   current: Totals;
   previous: Totals;
+  /** The ad account the numbers are for, or null for all of them. */
+  adAccount?: string | null;
+  accounts?: Account[];
+  /** Mixed currencies across all ad accounts: one set of totals per currency. */
+  byCurrency?: CurrencyTotals[] | null;
   fatigue: FatigueCandidate[];
   pacing: PacingRow[];
   lastSyncAt: string | null;
@@ -27,13 +34,17 @@ type Summary = {
 };
 type Series = { days: DayPoint[] };
 type Breakdown = { top: EntityRow[]; bottom: EntityRow[] };
-type Metric = "spendMinor" | "results" | "clicks";
+/** Money in the row's own currency, or the page's when the row does not say. */
+type Money = (minor: number, currency?: string | null) => string;
 
-const METRICS: { key: Metric; label: string }[] = [
-  { key: "spendMinor", label: "Spend" },
-  { key: "results", label: "Results" },
-  { key: "clicks", label: "Clicks" },
-];
+/** This browser's time zone, or UTC when it does not say. */
+function browserZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
 
 export function InsightsView() {
   const role = useRole();
@@ -41,9 +52,13 @@ export function InsightsView() {
   const [preset, setPreset] = useState<number | "custom">(30);
   const [custom, setCustom] = useState(() => presetRange(30, "UTC"));
   const [metric, setMetric] = useState<Metric>("spendMinor");
+  const [account, setAccount] = useState("");
   const range = useMemo(() => (preset === "custom" ? custom : presetRange(preset, "UTC")), [preset, custom]);
-  const rangeError = rangeProblem(range.from, range.to);
-  const qs = rangeError ? null : `from=${range.from}&to=${range.to}`;
+  const today = useMemo(() => latestDay(presetRange(1, "UTC").to, presetRange(1, browserZone()).to), []);
+  const orderError = rangeProblem(range.from, range.to);
+  const futureError = !orderError && preset === "custom" ? futureRangeProblem(range.to, today) : null;
+  const rangeError = orderError ?? futureError;
+  const qs = rangeError ? null : insightsQuery(range, account);
 
   return (
     <div>
@@ -57,7 +72,7 @@ export function InsightsView() {
         <legend className="sr-only">Date range</legend>
         {PRESETS.map((d) => (
           <Button key={d} variant={preset === d ? "primary" : "secondary"} size="md" aria-pressed={preset === d} onClick={() => setPreset(d)}>
-            Last {d} days
+            Last {d}{" "}days
           </Button>
         ))}
         <Button variant={preset === "custom" ? "primary" : "secondary"} aria-pressed={preset === "custom"} onClick={() => setPreset("custom")}>
@@ -65,23 +80,39 @@ export function InsightsView() {
         </Button>
         {preset === "custom" && (
           <div className="flex w-full flex-wrap gap-3 sm:w-auto">
-            <FormField label="From" error={rangeError}>
-              <Input type="date" value={custom.from} max={custom.to} onChange={(e) => setCustom({ ...custom, from: e.target.value })} />
+            <FormField label="From" error={orderError}>
+              <Input type="date" value={custom.from} max={custom.to && custom.to < today ? custom.to : today} onChange={(e) => setCustom({ ...custom, from: e.target.value })} />
             </FormField>
-            <FormField label="To">
-              <Input type="date" value={custom.to} min={custom.from} onChange={(e) => setCustom({ ...custom, to: e.target.value })} />
+            <FormField label="To" error={futureError}>
+              <Input type="date" value={custom.to} min={custom.from} max={today} onChange={(e) => setCustom({ ...custom, to: e.target.value })} />
             </FormField>
           </div>
         )}
       </fieldset>
 
-      {rangeError || !qs ? <EmptyState compact title="Choose a valid date range" body={rangeError ?? undefined} /> : <RangeData key={qs} qs={qs} range={range} admin={admin} metric={metric} setMetric={setMetric} />}
+      {rangeError || !qs ? <EmptyState compact title="Choose a valid date range" body={rangeError ?? undefined} /> : <RangeData key={qs} qs={qs} range={range} admin={admin} metric={metric} setMetric={setMetric} account={account} setAccount={setAccount} />}
     </div>
   );
 }
 
 /** Everything that depends on the chosen dates. It is keyed by the date range, so changing the range starts from a clean loading state instead of showing the previous period's numbers. */
-function RangeData({ qs, range, admin, metric, setMetric }: { qs: string; range: { from: string; to: string }; admin: boolean; metric: Metric; setMetric: (m: Metric) => void }) {
+function RangeData({
+  qs,
+  range,
+  admin,
+  metric,
+  setMetric,
+  account,
+  setAccount,
+}: {
+  qs: string;
+  range: { from: string; to: string };
+  admin: boolean;
+  metric: Metric;
+  setMetric: (m: Metric) => void;
+  account: string;
+  setAccount: (id: string) => void;
+}) {
   const summary = useApi<Summary>(`/api/ads/insights/summary?${qs}`);
   const series = useApi<Series>(`/api/ads/insights/series?${qs}`);
   const ads = useApi<Breakdown>(`/api/ads/insights/breakdown?level=ad&${qs}`);
@@ -123,12 +154,30 @@ function RangeData({ qs, range, admin, metric, setMetric }: { qs: string; range:
           We could not refresh these numbers. You are seeing the last version we loaded for {rangeText(range.from, range.to)}.
         </Alert>
       )}
-      {admin && (
-        <div className="flex flex-wrap items-center gap-3">
-          <Button variant="secondary" onClick={sync} loading={syncing} disabled={!!waitUntil}>
-            Update numbers now
-          </Button>
-          {waitUntil && <span className="text-xs text-muted">You can update again at {waitUntil.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.</span>}
+      {(admin || (s.accounts?.length ?? 0) > 1) && (
+        <div className="flex flex-wrap items-end gap-3">
+          {(s.accounts?.length ?? 0) > 1 && (
+            <div className="w-full sm:w-72">
+              <FormField label="Ad account" hint="See one ad account, or all of them together.">
+                <Select value={account} onChange={(e) => setAccount(e.target.value)}>
+                  <option value="">All ad accounts</option>
+                  {s.accounts!.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {accountLabel(a)}
+                    </option>
+                  ))}
+                </Select>
+              </FormField>
+            </div>
+          )}
+          {admin && (
+            <div className="flex flex-wrap items-center gap-3">
+              <Button variant="secondary" onClick={sync} loading={syncing} disabled={!!waitUntil}>
+                Update numbers now
+              </Button>
+              {waitUntil && <span className="text-xs text-muted">You can update again at {waitUntil.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.</span>}
+            </div>
+          )}
         </div>
       )}
       <Body s={s} series={series} ads={ads} metric={metric} setMetric={setMetric} range={range} />
@@ -167,20 +216,30 @@ function Body({
   setMetric: (m: Metric) => void;
   range: { from: string; to: string };
 }) {
-  const money = useCallback((n: number) => formatMinor(n, s.currency), [s.currency]);
+  // With mixed accounts but spend in one currency only, that currency is the page's.
+  const pageCurrency = s.currency ?? (s.byCurrency?.length === 1 ? s.byCurrency[0].currency : null);
+  const money = useCallback<Money>((n, currency) => formatMinor(n, currency ?? pageCurrency), [pageCurrency]);
   const pacingCols = useMemo(() => pacingColumns(money), [money]);
   const c = s.current;
   const p = s.previous;
   const empty = c.spendMinor === 0 && c.impressions === 0 && c.results === 0;
   const count = (n: number) => Math.round(n).toLocaleString();
-  const fmt = metric === "spendMinor" ? money : count;
-  const label = METRICS.find((m) => m.key === metric)!.label;
+  // Different currencies are never added up: their money is shown per currency, and the chart offers results and clicks.
+  const split = splitByCurrency(s.byCurrency);
+  const metrics = chartMetrics(!!split);
+  const shown = metrics.some((m) => m.key === metric) ? metric : metrics[0].key;
+  const fmt = shown === "spendMinor" ? (n: number) => money(n) : count;
+  const label = metrics.find((m) => m.key === shown)!.label;
   const days = series.data?.days ?? null;
-  const axis = metric === "spendMinor" ? (n: number) => compactNumber(n / 10 ** currencyExponent(s.currency)) : compactNumber;
+  const axis = shown === "spendMinor" ? (n: number) => compactNumber(n / 10 ** currencyExponent(pageCurrency)) : compactNumber;
 
   return (
     <div className="space-y-6">
-      {s.mixed && <Alert tone="info">Your ad accounts use different currencies, so money amounts are shown as plain numbers and may not be comparable.</Alert>}
+      {split ? (
+        <Alert tone="info">Your ad accounts use different currencies, so money is totalled for each currency on its own. Choose one ad account above to see its spend day by day.</Alert>
+      ) : (
+        s.mixed && !pageCurrency && <Alert tone="info">Your ad accounts use different currencies. Choose one ad account above to see its money amounts.</Alert>
+      )}
       {s.lastError && (
         <Alert tone="warn" title="The last update from Meta had a problem">
           You are seeing the most recent numbers we could load.
@@ -199,19 +258,23 @@ function Body({
       ) : (
         <>
           <section aria-label="Summary" className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 lg:grid-cols-4">
-            <Stat className="min-w-0" label="Spend" value={wrapValue(money(c.spendMinor))} delta={deltaView(c.spendMinor, p.spendMinor, { neutral: true }) ?? undefined} />
+            {!split && <Stat className="min-w-0" label="Spend" value={wrapValue(money(c.spendMinor))} delta={deltaView(c.spendMinor, p.spendMinor, { neutral: true }) ?? undefined} />}
             <Stat className="min-w-0" label="Results" value={wrapValue(c.results.toLocaleString())} hint="Leads, chats or visits" delta={deltaView(c.results, p.results) ?? undefined} />
-            <Stat className="min-w-0" label="Cost per result" value={wrapValue(c.costPerResultMinor === null ? "Not available" : money(c.costPerResultMinor))} hint={c.costPerResultMinor === null ? "No results yet" : undefined} delta={deltaView(c.costPerResultMinor, p.costPerResultMinor, { lowerIsBetter: true }) ?? undefined} />
+            {!split && (
+              <Stat className="min-w-0" label="Cost per result" value={wrapValue(c.costPerResultMinor === null ? "Not available" : money(c.costPerResultMinor))} hint={c.costPerResultMinor === null ? "No results yet" : undefined} delta={deltaView(c.costPerResultMinor, p.costPerResultMinor, { lowerIsBetter: true }) ?? undefined} />
+            )}
             <Stat className="min-w-0" label="Click rate" value={wrapValue(c.ctr === null ? "Not available" : `${c.ctr}%`)} hint="People who clicked after seeing the ad" delta={deltaView(c.ctr, p.ctr) ?? undefined} />
           </section>
+
+          {split && <CurrencyTable rows={split} money={money} />}
 
           <section aria-labelledby="trend-heading" className="space-y-2">
             <h2 id="trend-heading" className="text-base font-semibold">
               Day by day
             </h2>
             <div role="group" aria-label="Choose what the chart shows" className="flex flex-wrap gap-2">
-              {METRICS.map((m) => (
-                <Button key={m.key} size="sm" variant={metric === m.key ? "primary" : "secondary"} aria-pressed={metric === m.key} onClick={() => setMetric(m.key)}>
+              {metrics.map((m) => (
+                <Button key={m.key} size="sm" variant={shown === m.key ? "primary" : "secondary"} aria-pressed={shown === m.key} onClick={() => setMetric(m.key)}>
                   {m.label}
                 </Button>
               ))}
@@ -219,7 +282,7 @@ function Body({
             {series.error && !days ? (
               <ErrorState title="We could not load the chart" action={<Button variant="secondary" onClick={series.retry}>Try again</Button>} />
             ) : days ? (
-              <DailyChart title={`${label} per day`} name={label} days={days.map((d) => d.day)} values={days.map((d) => d[metric])} format={fmt} axisFormat={axis} />
+              <DailyChart title={`${label} per day`} name={label} days={days.map((d) => d.day)} values={days.map((d) => d[shown])} format={fmt} axisFormat={axis} />
             ) : (
               <Skeleton className="h-64 w-full" />
             )}
@@ -270,11 +333,35 @@ function Body({
   );
 }
 
-function pacingColumns(money: (n: number) => string): Column<PacingRow>[] {
+/** Spend, results and cost per result for each currency, when the ad accounts use different ones. */
+function CurrencyTable({ rows, money }: { rows: CurrencyTotals[]; money: Money }) {
+  const columns = useMemo<Column<CurrencyTotals>[]>(
+    () => [
+      { key: "currency", header: "Currency", primary: true, accessor: (r) => r.currency ?? "Unknown" },
+      { key: "spend", header: "Spend", align: "right", accessor: (r) => r.current.spendMinor, cell: (r) => <span className="tabular-nums">{money(r.current.spendMinor, r.currency)}</span> },
+      { key: "results", header: "Results", align: "right", accessor: (r) => r.current.results, cell: (r) => <span className="tabular-nums">{r.current.results.toLocaleString()}</span> },
+      {
+        key: "cpr",
+        header: "Cost per result",
+        align: "right",
+        accessor: (r) => r.current.costPerResultMinor,
+        cell: (r) => <span className="tabular-nums">{r.current.costPerResultMinor === null ? "No results" : money(r.current.costPerResultMinor, r.currency)}</span>,
+      },
+    ],
+    [money],
+  );
+  return (
+    <Card title="Money by currency" description="Each currency is totalled on its own, so amounts are never mixed." headingLevel="h2" padded={false}>
+      <DataTable caption="Spend by currency" columns={columns} rows={rows} rowKey={(r) => r.currency ?? "unknown"} className="px-5 pb-5" />
+    </Card>
+  );
+}
+
+function pacingColumns(money: Money): Column<PacingRow>[] {
   return [
     { key: "name", header: "Campaign", primary: true, accessor: (r) => r.name },
-    { key: "budget", header: "Daily budget", align: "right", accessor: (r) => r.dailyBudgetMinor, cell: (r) => <span className="tabular-nums">{money(r.dailyBudgetMinor)}</span> },
-    { key: "spend", header: "Average spend a day", align: "right", accessor: (r) => r.avgDailySpendMinor, cell: (r) => <span className="tabular-nums">{money(r.avgDailySpendMinor)}</span> },
+    { key: "budget", header: "Daily budget", align: "right", accessor: (r) => r.dailyBudgetMinor, cell: (r) => <span className="tabular-nums">{money(r.dailyBudgetMinor, r.currency)}</span> },
+    { key: "spend", header: "Average spend a day", align: "right", accessor: (r) => r.avgDailySpendMinor, cell: (r) => <span className="tabular-nums">{money(r.avgDailySpendMinor, r.currency)}</span> },
     {
       key: "pace",
       header: "Pace",
@@ -292,16 +379,16 @@ function pacingColumns(money: (n: number) => string): Column<PacingRow>[] {
   ];
 }
 
-function adColumns(money: (n: number) => string): Column<EntityRow>[] {
+function adColumns(money: Money): Column<EntityRow>[] {
   return [
     { key: "name", header: "Ad", primary: true, accessor: (r) => r.name },
-    { key: "spend", header: "Spend", align: "right", accessor: (r) => r.spendMinor, cell: (r) => <span className="tabular-nums">{money(r.spendMinor)}</span> },
+    { key: "spend", header: "Spend", align: "right", accessor: (r) => r.spendMinor, cell: (r) => <span className="tabular-nums">{money(r.spendMinor, r.currency)}</span> },
     { key: "results", header: "Results", align: "right", accessor: (r) => r.results, cell: (r) => <span className="tabular-nums">{r.results.toLocaleString()}</span> },
-    { key: "cpr", header: "Cost per result", align: "right", accessor: (r) => r.costPerResultMinor, cell: (r) => <span className="tabular-nums">{r.costPerResultMinor === null ? "No results" : money(r.costPerResultMinor)}</span> },
+    { key: "cpr", header: "Cost per result", align: "right", accessor: (r) => r.costPerResultMinor, cell: (r) => <span className="tabular-nums">{r.costPerResultMinor === null ? "No results" : money(r.costPerResultMinor, r.currency)}</span> },
   ];
 }
 
-function AdsTable({ title, description, rows, money, empty }: { title: string; description: string; rows: EntityRow[] | null; money: (n: number) => string; empty: string }) {
+function AdsTable({ title, description, rows, money, empty }: { title: string; description: string; rows: EntityRow[] | null; money: Money; empty: string }) {
   const columns = useMemo(() => adColumns(money), [money]);
   return (
     <Card title={title} description={description} headingLevel="h3" padded={false}>

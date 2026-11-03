@@ -92,6 +92,10 @@ describe("list previews", () => {
     expect(previewText({ direction: "outbound", type: "image", body: "look" })).toBe("You: Photo: look");
     expect(previewText({ direction: "inbound", type: "audio", body: null })).toBe("Voice message");
     expect(previewText({ direction: "outbound", type: "template", body: "[template] order_update" })).toBe("You: order_update");
+    expect(previewText({ direction: "inbound", type: "image", body: "[image] look" })).toBe("Photo: look");
+    expect(previewText({ direction: "inbound", type: "document", body: "[document: bill.pdf]" })).toBe("Document");
+    expect(previewText({ direction: "inbound", type: "contacts", body: "[contacts] Ravi Kumar: +91 98765 43210" })).toBe("Contact card: Ravi Kumar: +91 98765 43210");
+    expect(previewText({ direction: "inbound", type: "order", body: ["[order] 3 items, total 1598 INR", "2 x SKU-1 at 499 INR"].join("\n") })).toMatch(/^Order: 3 items, total 1598 INR/);
   });
 });
 

@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Card, EmptyState, FormField, Input, Select, Textarea, apiFetch, buttonSizes, buttonVariants, cn, confirm, toast } from "@/components/ui";
 import { PageHeader } from "@/components/app/PageHeader";
-import { MAX_BUTTONS } from "@/lib/templates/validate";
-import { canManage, useRole } from "@/components/contacts/hooks";
+import { MAX_BUTTONS, MAX_CODE_EXPIRY_MINUTES, MAX_PHONE_BUTTONS, MAX_URL_BUTTONS } from "@/lib/templates/validate";
+import { canManage, useApi, useRole } from "@/components/contacts/hooks";
 import { friendlyError } from "@/components/contacts/helpers";
 import { Preview } from "./Preview";
 import {
@@ -20,6 +20,7 @@ import {
   type TemplateDraft,
   buildComponents,
   buttonErrorTarget,
+  buttonTypeAllowed,
   countErrors,
   countText,
   detectVariables,
@@ -31,16 +32,30 @@ import {
   nextVariable,
   requiredExamples,
   slugifyTemplateName,
+  templateStatusView,
   validateDraft,
 } from "./helpers";
 
 const linkButton = cn("inline-flex items-center justify-center gap-2 rounded-full font-semibold whitespace-nowrap transition-colors duration-(--dur-fast)", buttonVariants.primary, buttonSizes.md);
 const blankButton = (): ButtonDraft => ({ type: "QUICK_REPLY", text: "", url: "", urlExample: "", phone: "" });
 
-export function TemplateEditor() {
+/** A saved draft or rejected template opened for changes. Meta keeps the name and language of one it has reviewed (`atMeta`). */
+export type EditTarget = { id: string; draft: TemplateDraft; status: string; rejectionReason: string | null; atMeta: boolean };
+
+/** One of the workspace's WhatsApp Business accounts (GET /api/templates/accounts). A template belongs to one account. */
+export type TemplateAccount = { id: string; name: string | null; numbers: string[]; isDefault: boolean };
+
+/** How an account is named in the account choice: its name, then its numbers. */
+export function accountLabel(a: TemplateAccount): string {
+  const numbers = a.numbers.length ? a.numbers.slice(0, 3).join(", ") + (a.numbers.length > 3 ? ` and ${a.numbers.length - 3} more` : "") : "no number yet";
+  return `${a.name ?? "WhatsApp account"} (${numbers})`;
+}
+
+export function TemplateEditor({ editing }: { editing?: EditTarget } = {}) {
   const router = useRouter();
   const role = useRole();
-  const [draft, setDraft] = useState<TemplateDraft>(emptyDraft);
+  const start = useMemo(() => editing?.draft ?? emptyDraft(), [editing]);
+  const [draft, setDraft] = useState<TemplateDraft>(start);
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState<null | "draft" | "submit">(null);
   const [showHeader, setShowHeader] = useState(false);
@@ -50,10 +65,21 @@ export function TemplateEditor() {
   const shown = touched ? errors : {};
   const set = <K extends keyof TemplateDraft>(key: K, value: TemplateDraft[K]) => setDraft((d) => ({ ...d, [key]: value }));
   const examplesNeeded = requiredExamples(draft.body);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(emptyDraft());
+  // One sample box per placeholder actually written, so {{1}} and {{3}} ask for samples of {{1}} and {{3}}.
+  const placeholders = detectVariables(draft.body);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(start);
+  const auth = draft.category === "AUTHENTICATION";
+  const lockedIdentity = !!editing?.atMeta;
+  const pageTitle = editing ? "Edit template" : "New template";
+  const crumbs = [{ label: "Templates", href: "/app/templates" }, { label: editing ? editing.draft.name : "New template" }];
   const headerOpen = showHeader || draft.header !== "" || draft.headerKind !== "TEXT";
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  // A new template goes to one WhatsApp Business account; with more than one the person chooses (the default number's account first).
+  const accounts = useApi<{ accounts: TemplateAccount[] }>(editing ? null : "/api/templates/accounts");
+  const accountList = accounts.data?.accounts ?? [];
+  const [wabaRefId, setWabaRefId] = useState("");
+  const chosenAccount = wabaRefId || accountList.find((a) => a.isDefault)?.id || accountList[0]?.id || "";
 
   function changeHeaderKind(kind: HeaderKind) {
     setDraft((d) => ({ ...d, headerKind: kind, headerMedia: null, ...(kind === "TEXT" ? {} : { header: "", headerExample: "" }) }));
@@ -106,7 +132,8 @@ export function TemplateEditor() {
       if (!path) return;
       e.preventDefault();
       e.stopPropagation();
-      void confirm({ title: "Leave without saving?", body: "This template has not been saved. What you have written will be lost.", confirmLabel: "Leave page", cancelLabel: "Keep editing", tone: "danger" }).then((ok) => {
+      const body = editing ? "Your changes to this template have not been saved. They will be lost." : "This template has not been saved. What you have written will be lost.";
+      void confirm({ title: "Leave without saving?", body, confirmLabel: "Leave page", cancelLabel: "Keep editing", tone: "danger" }).then((ok) => {
         if (ok) router.push(path);
       });
     };
@@ -116,7 +143,7 @@ export function TemplateEditor() {
       window.removeEventListener("beforeunload", warn);
       document.removeEventListener("click", guardLinks, true);
     };
-  }, [dirty, busy, router]);
+  }, [dirty, busy, router, editing]);
 
   // After the form adds or removes a part, focus moves to a named control so keyboard users keep their place.
   const pendingFocus = useRef<string | null>(null);
@@ -146,7 +173,10 @@ export function TemplateEditor() {
   }
 
   async function cancel() {
-    if (dirty && !(await confirm({ title: "Discard this template?", body: "What you have written so far will be lost.", confirmLabel: "Discard template", cancelLabel: "Keep editing", tone: "danger" }))) return;
+    const ask = editing
+      ? { title: "Discard your changes?", body: "The template stays as it was last saved.", confirmLabel: "Discard changes" }
+      : { title: "Discard this template?", body: "What you have written so far will be lost.", confirmLabel: "Discard template" };
+    if (dirty && !(await confirm({ ...ask, cancelLabel: "Keep editing", tone: "danger" }))) return;
     router.push("/app/templates");
   }
 
@@ -159,14 +189,15 @@ export function TemplateEditor() {
     setBusy(submit ? "submit" : "draft");
     let id: string;
     try {
-      const { template } = await apiFetch<{ template: { id: string } }>("/api/templates", {
-        method: "POST",
+      const { template } = await apiFetch<{ template: { id: string } }>(editing ? `/api/templates/${editing.id}` : "/api/templates", {
+        method: editing ? "PATCH" : "POST",
         body: {
           name: draft.name,
           language: draft.language,
           category: draft.category,
           components: buildComponents(draft),
           ...(draft.headerKind !== "TEXT" && draft.headerMedia ? { headerMedia: { mime: draft.headerMedia.mime, filename: draft.headerMedia.filename } } : {}),
+          ...(!editing && accountList.length > 1 && chosenAccount ? { wabaRefId: chosenAccount } : {}),
         },
       });
       id = template.id;
@@ -182,6 +213,8 @@ export function TemplateEditor() {
       } catch (e) {
         toast.error("Saved as a draft, but we could not send it for review", { description: `${friendlyError(e, "Check your connection.")} You can send it from the Templates page.` });
       }
+    } else if (editing) {
+      toast.success("Changes saved", { description: editing.status === "rejected" ? "Send it again from the Templates page when you are ready." : "Send it for review from the Templates page when you are ready." });
     } else {
       toast.success("Draft saved", { description: "Send it for review from the Templates page when you are ready." });
     }
@@ -191,9 +224,9 @@ export function TemplateEditor() {
   if (role && !canManage(role)) {
     return (
       <div>
-        <PageHeader title="New template" breadcrumbs={[{ label: "Templates", href: "/app/templates" }, { label: "New template" }]} />
+        <PageHeader title={pageTitle} breadcrumbs={crumbs} />
         <EmptyState
-          title="Only owners and admins can create templates"
+          title={editing ? "Only owners and admins can change templates" : "Only owners and admins can create templates"}
           body="Ask an owner or admin to create one. You can use it in broadcasts once Meta approves it."
           action={
             <Link href="/app/templates" className={linkButton}>
@@ -210,10 +243,19 @@ export function TemplateEditor() {
   return (
     <div>
       <PageHeader
-        title="New template"
-        breadcrumbs={[{ label: "Templates", href: "/app/templates" }, { label: "New template" }]}
-        description="Write the message once, send it to Meta for approval, then reuse it in broadcasts. Review usually takes minutes to a day."
+        title={pageTitle}
+        breadcrumbs={crumbs}
+        description={
+          editing
+            ? "Change the template, then send it for review. Meta checks it again before it can be used."
+            : "Write the message once, send it to Meta for approval, then reuse it in broadcasts. Review usually takes minutes to a day."
+        }
       />
+      {editing?.status === "rejected" && (
+        <Alert tone="warn" className="mb-5 max-w-3xl" title="Meta did not approve this template">
+          {templateStatusView("rejected", editing.rejectionReason).detail}{" "}Fix the parts Meta pointed out, then choose Save and send for review.
+        </Alert>
+      )}
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <form
           className="min-w-0 space-y-5"
@@ -224,12 +266,28 @@ export function TemplateEditor() {
           }}
         >
           <Card title="Basics" className="space-y-4">
-            <FormField label="Template name" required error={shown.name} hint="Only you see this. Spaces turn into underscores, for example order_update.">
-              <Input value={draft.name} onChange={(e) => set("name", slugifyTemplateName(e.target.value))} autoComplete="off" spellCheck={false} />
+            <FormField
+              label="Template name"
+              required
+              error={shown.name}
+              hint={lockedIdentity ? "Meta does not allow changing the name or language once it has reviewed a template. Make a copy to use a new name." : "Only you see this. Spaces turn into underscores, for example order_update."}
+            >
+              <Input value={draft.name} onChange={(e) => set("name", slugifyTemplateName(e.target.value))} autoComplete="off" spellCheck={false} disabled={lockedIdentity} />
             </FormField>
+            {!editing && accountList.length > 1 && (
+              <FormField label="WhatsApp account" hint="The template can only be sent from numbers in this account. Meta reviews it there.">
+                <Select value={chosenAccount} onChange={(e) => setWabaRefId(e.target.value)}>
+                  {accountList.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {accountLabel(a)}
+                    </option>
+                  ))}
+                </Select>
+              </FormField>
+            )}
             <div className="grid gap-4 sm:grid-cols-2">
               <FormField label="Language" hint="The language your message is written in.">
-                <Select value={draft.language} onChange={(e) => set("language", e.target.value)}>
+                <Select value={draft.language} onChange={(e) => set("language", e.target.value)} disabled={lockedIdentity}>
                   {LANGUAGES.map(([code, label]) => (
                     <option key={code} value={code}>
                       {label}
@@ -249,6 +307,26 @@ export function TemplateEditor() {
             </div>
           </Card>
 
+          {auth ? (
+            <Card title="Message" className="space-y-4">
+              <p className="text-sm">
+                Meta writes login-code messages itself, so the wording is fixed: <span className="font-medium">&quot;123456 is your verification code.&quot;</span>{" "}
+                The real code is filled in each time you send it. You choose the three things below.
+              </p>
+              <div className="flex items-start gap-3">
+                <input id="tpl-security-note" type="checkbox" className="mt-1 h-4 w-4 shrink-0 accent-accent" checked={draft.securityNote} onChange={(e) => set("securityNote", e.target.checked)} />
+                <label htmlFor="tpl-security-note" className="text-sm">
+                  Add &quot;For your security, do not share this code.&quot;
+                </label>
+              </div>
+              <FormField label="Code expires after (minutes)" optional error={shown.codeExpiry} hint={`Shown under the message, from 1 to ${MAX_CODE_EXPIRY_MINUTES} minutes. Leave it empty to leave the line out.`}>
+                <Input inputMode="numeric" value={draft.codeExpiry} onChange={(e) => set("codeExpiry", e.target.value.replace(/[^\d]/g, "").slice(0, 3))} autoComplete="off" className="max-w-32" />
+              </FormField>
+              <FormField label="Copy-code button label" required error={shown.copyCodeLabel} hint={`The button copies the code for the customer. ${countText(draft.copyCodeLabel, 25)}.`}>
+                <Input value={draft.copyCodeLabel} onChange={(e) => set("copyCodeLabel", e.target.value)} autoComplete="off" />
+              </FormField>
+            </Card>
+          ) : (
           <Card title="Message" className="space-y-4">
             {headerOpen ? (
               <div className="space-y-4 rounded-lg border border-border p-3">
@@ -277,7 +355,7 @@ export function TemplateEditor() {
                     label="Sample file for review"
                     required
                     error={shown.headerMedia}
-                    hint={`${MEDIA_ACCEPT[draft.headerKind].help} Meta looks at it when it reviews your template. When you send a broadcast you choose the real file for each person.`}
+                    hint={`${MEDIA_ACCEPT[draft.headerKind].help} Meta looks at it when it reviews your template. When you send a broadcast, you upload the real file or give a link to it.`}
                   >
                     <div className="space-y-2">
                       <input
@@ -343,14 +421,14 @@ export function TemplateEditor() {
               <fieldset className="space-y-3 rounded-lg border border-border p-3">
                 <legend className="px-1 text-sm font-medium">Sample values</legend>
                 <p className="text-sm text-muted">Meta asks for an example of each placeholder so it can review your message. Customers never see these.</p>
-                {Array.from({ length: examplesNeeded }, (_, i) => (
-                  <FormField key={i} label={`Sample for {{${i + 1}}}`} required error={shown.bodyExamples?.[i]}>
+                {placeholders.map((n) => (
+                  <FormField key={n} label={`Sample for {{${n}}}`} required error={shown.bodyExamples?.[n - 1]}>
                     <Input
-                      value={draft.bodyExamples[i] ?? ""}
+                      value={draft.bodyExamples[n - 1] ?? ""}
                       onChange={(e) => {
                         const next = [...draft.bodyExamples];
-                        next[i] = e.target.value;
-                        set("bodyExamples", next);
+                        next[n - 1] = e.target.value;
+                        set("bodyExamples", Array.from(next, (v) => v ?? ""));
                       }}
                     />
                   </FormField>
@@ -395,6 +473,7 @@ export function TemplateEditor() {
               </div>
             )}
           </Card>
+          )}
 
           <details className="rounded-card border border-border bg-raised p-4 shadow-raised lg:hidden">
             <summary className="min-h-6 cursor-pointer text-sm font-semibold">Preview your message</summary>
@@ -403,9 +482,10 @@ export function TemplateEditor() {
             </div>
           </details>
 
+          {!auth && (
           <Card
             title="Buttons"
-            description={`Optional. Let customers reply or act with one tap. ${draft.buttons.length} of ${MAX_BUTTONS} added.`}
+            description={`Optional. Let customers reply or act with one tap. Up to ${MAX_URL_BUTTONS} website buttons and ${MAX_PHONE_BUTTONS} call button; quick replies are shown together. ${draft.buttons.length} of ${MAX_BUTTONS} added.`}
             actions={
               <Button type="button" size="sm" variant="secondary" className="max-sm:min-h-10" disabled={draft.buttons.length >= MAX_BUTTONS}
                 data-focus-key="add-button"
@@ -431,8 +511,12 @@ export function TemplateEditor() {
                     <FormField label="What it does">
                       <Select value={b.type} onChange={(e) => setButton(i, { type: e.target.value as ButtonDraft["type"] })}>
                         <option value="QUICK_REPLY">Sends a quick reply</option>
-                        <option value="URL">Opens a website</option>
-                        <option value="PHONE_NUMBER">Calls a phone number</option>
+                        <option value="URL" disabled={b.type !== "URL" && !buttonTypeAllowed(draft.buttons, i, "URL")}>
+                          {buttonTypeAllowed(draft.buttons, i, "URL") || b.type === "URL" ? "Opens a website" : `Opens a website (${MAX_URL_BUTTONS} already added)`}
+                        </option>
+                        <option value="PHONE_NUMBER" disabled={b.type !== "PHONE_NUMBER" && !buttonTypeAllowed(draft.buttons, i, "PHONE_NUMBER")}>
+                          {buttonTypeAllowed(draft.buttons, i, "PHONE_NUMBER") || b.type === "PHONE_NUMBER" ? "Calls a phone number" : "Calls a phone number (1 already added)"}
+                        </option>
                       </Select>
                     </FormField>
                     <FormField label="Button label" required error={target === "text" ? message : null} hint={countText(b.text, 25)}>
@@ -452,8 +536,8 @@ export function TemplateEditor() {
                     </>
                   )}
                   {b.type === "PHONE_NUMBER" && (
-                    <FormField label="Phone number to call" required error={target === "phone" ? message : null} hint="With country code.">
-                      <Input type="tel" inputMode="tel" value={b.phone} onChange={(e) => setButton(i, { phone: e.target.value })} placeholder="+919876543210" />
+                    <FormField label="Phone number to call" required error={target === "phone" ? message : null} hint="Start with + and the country code. Spaces are fine.">
+                      <Input type="tel" inputMode="tel" value={b.phone} onChange={(e) => setButton(i, { phone: e.target.value })} placeholder="+91 98765 43210" />
                     </FormField>
                   )}
                   <Button
@@ -474,6 +558,7 @@ export function TemplateEditor() {
               );
             })}
           </Card>
+          )}
 
           {touched && errorCount > 0 && (
             <Alert tone="bad" title={`Fix ${errorCount} ${errorCount === 1 ? "thing" : "things"} before saving`}>

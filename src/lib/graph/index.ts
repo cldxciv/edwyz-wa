@@ -1,7 +1,34 @@
 import { createHmac } from "node:crypto";
 import { getAccessToken } from "@/lib/crypto/tokens";
 import { GRAPH_API_VERSION } from "@/lib/config";
+import { testGraphBaseUrl } from "@/lib/env-rules.mjs";
 import { tripwire, type TripwireVia } from "@/lib/spend/tripwire";
+
+const GRAPH_ORIGIN = "https://graph.facebook.com";
+
+/**
+ * The fake Meta server's address for tests (docs/IG-PAGE-ADS-SPEC.md 9.3, PRM-03), or null when every call goes to Meta.
+ * GRAPH_BASE_URL counts only where SPEND_DRY_RUN may count (never with NODE_ENV=production) and only on a loopback address
+ * (127.0.0.1, localhost or [::1]); env-rules refuses any other value at startup and this ignores it. Read on every call. Only
+ * the host changes: the tripwire runs on the caller's path before the URL is built, so a request is classified the same way
+ * whichever host it goes to. Health checks and the end-to-end guards read it from here.
+ */
+export function graphBaseOverride(env: Record<string, string | undefined> = process.env): string | null {
+  return testGraphBaseUrl(env);
+}
+
+/** Optional per-call hooks for callers that pace themselves (src/lib/promote/throttle.ts). */
+export type GraphCallOptions = {
+  /** Called with each response's headers (Meta's usage headers), success or error. A throw here is ignored. */
+  onHeaders?: (headers: Headers, status: number) => void;
+  /** Aborts the call: an attempt in flight fails, and no retry starts after it fires. */
+  signal?: AbortSignal;
+  /**
+   * Each attempt's own time limit, in ms (default 20 s, at most 2 minutes). A caller with a longer deadline of its own (a large
+   * image upload) sets it past that deadline, so the transport does not cut the call off first.
+   */
+  timeoutMs?: number;
+};
 
 export class GraphError extends Error {
   constructor(
@@ -41,7 +68,15 @@ const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const NOT_SENT_CODES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"]);
 const MAX_ATTEMPTS = 4;
 const TIMEOUT_MS = 20_000;
+/** The longest per-attempt limit a caller may ask for (GraphCallOptions.timeoutMs). */
+const MAX_TIMEOUT_MS = 120_000;
 const BASE_DELAY_MS = 500;
+
+/** The per-attempt time limit: the caller's, when it gives a usable one (capped), else 20 s. */
+function attemptTimeoutMs(opts?: GraphCallOptions): number {
+  const asked = opts?.timeoutMs;
+  return typeof asked === "number" && Number.isFinite(asked) && asked > 0 ? Math.min(Math.ceil(asked), MAX_TIMEOUT_MS) : TIMEOUT_MS;
+}
 
 export function isRetryable(status: number, code?: number): boolean {
   if (code !== undefined && NEVER_RETRY_CODES.has(code)) return false;
@@ -73,24 +108,32 @@ export function withAppSecretProof(token: string, query?: Record<string, string>
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 function buildUrl(path: string, query?: Record<string, string>): string {
-  const url = new URL(`https://graph.facebook.com/${GRAPH_API_VERSION}/${path.replace(/^\/+/, "")}`);
+  const url = new URL(`${graphBaseOverride() ?? GRAPH_ORIGIN}/${GRAPH_API_VERSION}/${path.replace(/^\/+/, "")}`);
   for (const [key, value] of Object.entries(query ?? {})) url.searchParams.set(key, value);
   return url.toString();
 }
 
-async function attemptOnce<T>(url: string, method: string, headers: Record<string, string>, body: unknown): Promise<T> {
+async function attemptOnce<T>(url: string, method: string, headers: Record<string, string>, body: unknown, opts?: GraphCallOptions): Promise<T> {
   let response: Response;
   try {
+    const timeout = AbortSignal.timeout(attemptTimeoutMs(opts));
     response = await fetch(url, {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: opts?.signal ? AbortSignal.any([timeout, opts.signal]) : timeout,
     });
   } catch (error) {
     const code = (error as { cause?: { code?: string } } | null)?.cause?.code;
     const notSent = code !== undefined && NOT_SENT_CODES.has(code);
     throw new GraphError("Network error calling the WhatsApp API", 0, undefined, undefined, true, !notSent);
+  }
+  if (opts?.onHeaders) {
+    try {
+      opts.onHeaders(response.headers, response.status);
+    } catch {
+      // A pacing hook never changes the call's outcome.
+    }
   }
   const text = await response.text();
   let json: unknown = null;
@@ -124,18 +167,26 @@ function guardSend(e: GraphError) {
  * with SpendGuardBypassError (enforce). It checks the caller's own path, query and body, never the added credentials, and
  * counts one permit use per request (retries below do not count again).
  */
-async function run<T>(request: AppGraphRequest, headers: Record<string, string>, query: Record<string, string> | undefined, guardAllPosts: boolean, via: TripwireVia): Promise<T> {
+async function run<T>(
+  request: AppGraphRequest,
+  headers: Record<string, string>,
+  query: Record<string, string> | undefined,
+  guardAllPosts: boolean,
+  via: TripwireVia,
+  opts?: GraphCallOptions,
+): Promise<T> {
   tripwire({ method: request.method ?? "GET", path: request.path, query: request.query, body: request.body }, via);
   const url = buildUrl(request.path, query);
   const hasBody = request.body !== undefined;
   const allHeaders = { Accept: "application/json", ...(hasBody ? { "Content-Type": "application/json" } : {}), ...headers };
   for (let attempt = 1; ; attempt++) {
     try {
-      return await attemptOnce<T>(url, request.method ?? "GET", allHeaders, request.body);
+      return await attemptOnce<T>(url, request.method ?? "GET", allHeaders, request.body, opts);
     } catch (e) {
       if (e instanceof GraphError && (isMessageSend(request) || (guardAllPosts && request.method === "POST"))) guardSend(e);
-      if (!(e instanceof GraphError) || !e.retryable || attempt >= MAX_ATTEMPTS) throw e;
+      if (!(e instanceof GraphError) || !e.retryable || attempt >= MAX_ATTEMPTS || opts?.signal?.aborted) throw e;
       await sleep(backoffDelay(attempt));
+      if (opts?.signal?.aborted) throw e;
     }
   }
 }
@@ -155,9 +206,9 @@ export async function appGraphFetch<T = unknown>(request: AppGraphRequest): Prom
 }
 
 /** For tokens that are not the tenant's WhatsApp token (Marketing API, Pages, Instagram, Conversions). The caller decrypts the token and never logs it. Every POST is guarded like a message send: an ambiguous failure (5xx or a lost connection) is never retried, so posts, ads and events cannot be created twice. */
-export async function graphFetchAs<T = unknown>(token: string, request: AppGraphRequest): Promise<T> {
+export async function graphFetchAs<T = unknown>(token: string, request: AppGraphRequest, opts?: GraphCallOptions): Promise<T> {
   if (!token) throw new Error("A Meta access token is required");
-  return run<T>(request, { Authorization: `Bearer ${token}` }, withAppSecretProof(token, request.query), true, { via: "token" });
+  return run<T>(request, { Authorization: `Bearer ${token}` }, withAppSecretProof(token, request.query), true, { via: "token" }, opts);
 }
 
 export type GraphUploadRequest = {

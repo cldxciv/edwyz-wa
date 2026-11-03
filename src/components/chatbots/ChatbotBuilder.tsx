@@ -17,11 +17,11 @@ import { GROUPS, NODE_META, describeStep, handlesOf } from "./catalog";
 import { TRIGGER_HELP, TRIGGER_LABEL, docFromChatbot, docToPayload, hasUnpublishedChanges, isDirty, newDoc, unwrapChatbot, type Doc } from "./editor";
 import { addNode, connect, duplicateNode, moveNode, nodeById, reconnectEdge, removeEdge, removeNode, restoreNode, setStart, snapshotNode, updateNode, type DeletedStep } from "./flow";
 import { canRedo, canUndo, commit, createHistory, endBatch, redo, undo, type History } from "./history";
-import { NODE_W, autoLayout } from "./layout";
+import { NODE_W, autoLayout, freeSpot, nodeHeight } from "./layout";
 import { getStarter, starterDoc, type Starter } from "./starters";
 import { COMPACT_QUERY, WIDE_QUERY, matches, useMediaQuery } from "./useMedia";
 import { hasErrors, serverIssuesOf, validateFlowIssues, validateTrigger, validateTriggerConflicts, type Issue } from "./validation";
-import { fitView, screenToCanvas, zoomAt, type View } from "./viewport";
+import { fitView, reveal, screenToCanvas, zoomAt, type View } from "./viewport";
 import { NODE_TYPES, type Chatbot, type ChatbotSummary, type FlowDefinition, type FlowNode, type NodeType, type Point, type TriggerType } from "./types";
 
 type Tab = "step" | "settings" | "checks" | "preview" | "sessions";
@@ -245,14 +245,18 @@ export function ChatbotBuilder({ id, starter }: { id?: string; starter?: string 
     if (!editable) return;
     const center = screenToCanvas(view, size.current.w / 2, size.current.h / 2);
     const n = flow.nodes.length % 6;
-    const pos: Point = { x: Math.round(center.x - NODE_W / 2 + n * 24), y: Math.round(center.y - 40 + n * 24) };
-    const r = addNode(flow, type, pos);
+    const want: Point = { x: Math.round(center.x - NODE_W / 2 + n * 24), y: Math.round(center.y - 40 + n * 24) };
+    const r = addNode(flow, type, want);
     if (!r.id) {
       toast.error("A chatbot can have at most 100 steps. Remove one to add another.");
       return;
     }
     const newId = r.id;
-    let next = r.flow;
+    // Never on top of another step: move it below the ones in the way, then pan so it is in view.
+    const height = nodeHeight(nodeById(r.flow, newId) as FlowNode);
+    const pos = freeSpot(flow, want, height);
+    let next = moveNode(r.flow, newId, pos);
+    setView((v) => reveal(v, { x: pos.x, y: pos.y, w: NODE_W, h: height }, size.current.w, size.current.h));
     const from = selected;
     if (from) {
       const free = handlesOf(from).find((h) => !next.edges.some((e) => e.from === from.id && e.label === h.label));
@@ -337,7 +341,8 @@ export function ChatbotBuilder({ id, starter }: { id?: string; starter?: string 
     setKeywordText("");
   }
 
-  async function save(): Promise<string | null> {
+  /** publishing: the save is the first half of Publish, so the "still the published version" reminder would only confuse. */
+  async function save(opts: { publishing?: boolean } = {}): Promise<string | null> {
     commitKeywords();
     if (!doc.name.trim()) {
       setAttempted(true);
@@ -372,7 +377,8 @@ export function ChatbotBuilder({ id, starter }: { id?: string; starter?: string 
         return targetId;
       }
       remote.reload();
-      toast.success("Draft saved.");
+      // Saving never changes a live bot, its trigger included: customers keep the published version until Publish changes.
+      toast.success(meta?.status === "published" && !opts.publishing ? "Draft saved. Customers keep getting the published version until you publish the changes." : "Draft saved.");
       return targetId;
     } catch (e) {
       toast.error(humanError(e, "save this chatbot"));
@@ -390,7 +396,7 @@ export function ChatbotBuilder({ id, starter }: { id?: string; starter?: string 
       toast.error("Fix the problems under Checks before publishing.", { key: "fix-first" });
       return;
     }
-    const target = dirty || !id ? await save() : id;
+    const target = dirty || !id ? await save({ publishing: true }) : id;
     if (!target) return;
     setBusy("publish");
     try {
@@ -506,7 +512,7 @@ export function ChatbotBuilder({ id, starter }: { id?: string; starter?: string 
           )}
           {editable && (
             <span className="text-xs text-muted max-sm:hidden">
-              Press <KeyboardKey keys={["Ctrl", "S"]} /> to save
+              Press <KeyboardKey keys={["Ctrl", "S"]} />{" "}to save
             </span>
           )}
         </div>
@@ -601,8 +607,9 @@ export function ChatbotBuilder({ id, starter }: { id?: string; starter?: string 
           </div>
 
           {paletteOpen && editable && (
-            <Card id="cb-palette" title="Add a step" description="The new step connects to the step you have selected, if it has a free exit.">
-              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            // The columns follow the card's own width (a container query), not the window's: next to the side panel the canvas column is narrow.
+            <Card id="cb-palette" className="@container" title="Add a step" description="The new step connects to the step you have selected, if it has a free exit.">
+              <div className="grid gap-4 @md:grid-cols-2 @4xl:grid-cols-4">
                 {GROUPS.map((g) => (
                   <div key={g}>
                     <h3 className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted">{g}</h3>
@@ -678,7 +685,7 @@ export function ChatbotBuilder({ id, starter }: { id?: string; starter?: string 
           <details className="text-sm text-muted">
             <summary className="min-h-10 cursor-pointer font-medium leading-10 text-foreground">How to use the canvas</summary>
             <ul className="mt-1 list-disc space-y-1 pl-5">
-              <li>Drag a step to move it. Drag the background to look around, and scroll to zoom.</li>
+              <li>Drag a step to move it. Drag the background to look around. To zoom, hold Ctrl (Cmd on a Mac) and scroll, pinch on a trackpad, or use the zoom buttons.</li>
               <li>To connect steps, drag from the round dot on the right of a step onto another step.</li>
               <li>With a keyboard, select a step, move it with the arrow keys, and choose what comes next in the Step tab.</li>
               <li>On a phone or small touch screen the canvas is for viewing: scroll to look around and tap a step to edit it in the Step tab.</li>
@@ -829,7 +836,7 @@ function SettingsPanel({
       <legend className="sr-only">Chatbot settings</legend>
       <h2 className="text-base font-semibold">Name and start</h2>
       <FormField label="Chatbot name" required hint="Only your team sees this." error={nameError}>
-        <Input ref={nameRef} value={doc.name} maxLength={80} placeholder="Welcome menu" onBlur={() => setTouchedName(true)} onChange={(e) => apply((d) => ({ ...d, name: e.target.value }), "name")} />
+        <Input ref={nameRef} value={doc.name} maxLength={80} placeholder="e.g. Welcome menu" onBlur={() => setTouchedName(true)} onChange={(e) => apply((d) => ({ ...d, name: e.target.value }), "name")} />
       </FormField>
       <FormField label="When should this chatbot start?" hint={TRIGGER_HELP[doc.triggerType]}>
         <Select value={doc.triggerType} onChange={(e) => apply((d) => ({ ...d, triggerType: e.target.value as TriggerType }))}>
@@ -849,7 +856,7 @@ function SettingsPanel({
                   ref={keywordRef}
                   value={keywordText}
                   maxLength={200}
-                  placeholder="price, pricing"
+                  placeholder="e.g. price, pricing"
                   onChange={(e) => setKeywordText(e.target.value)}
                   onBlur={add}
                   onKeyDown={(e) => {

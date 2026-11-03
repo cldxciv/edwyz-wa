@@ -8,24 +8,58 @@ import {
   campaignStatusView,
   capUsagePercent,
   checkBudget,
+  DRAFT_NEW_CHOICES,
+  DRAFT_ON_META,
+  draftBlockedText,
+  draftEditProblem,
+  draftNotesText,
   friendlyAdsError,
   isMetaLoginProblem,
+  isNotFoundError,
   META_LOGIN_FIX,
+  MESSENGER_PLACEMENT_NOTE,
   isCategoryTermsMismatch,
   minorToText,
   parseCountries,
   pictureCovered,
   pictureLinkError,
   pictureReady,
+  PLACEMENTS as WIZARD_PLACEMENTS,
   toMinor,
   typedTotalMatches,
+  UNKNOWN_PLACEMENT_NOTE,
+  wizardPlacements,
 } from "@/components/ads/helpers";
-import { compactNumber, deltaView, fatigueReasons, nearestIndex, pacingView, qualityLabel } from "@/components/ads/insights/insight-helpers";
+import { emptyTargeting, MESSENGER_CHANGED, validateTargeting } from "@/lib/ads/targeting";
+import { PLACEMENTS as CATALOG_PLACEMENTS } from "@/lib/promote/catalog/placements";
+import { compactNumber, deltaView, fatigueReasons, futureRangeProblem, latestDay, nearestIndex, pacingView, qualityLabel } from "@/components/ads/insights/insight-helpers";
 import { BudgetSummary, CategoryGuidance, Stepper, TermsAckBox } from "@/components/ads/wizard-parts";
 import { DailyChart } from "@/components/ads/insights/DailyChart";
 import { monthEndInput, wizardWorstCase, worstCaseLines, WorstCaseNote } from "@/components/ads/CampaignWizard";
-import { CampaignsView, CapSummary, capHelpText, capSummaryLines } from "@/components/ads/CampaignsView";
+import { CampaignsView, CapSummary, PromoteArea, capHelpText, capSummaryLines } from "@/components/ads/CampaignsView";
 import { readFileSync } from "node:fs";
+import { budgetChangeKind, draftToForm, endChangeKind, endProblem, toDateTimeLocal } from "@/components/ads/campaign-edit";
+import {
+  addCity,
+  addInterest,
+  adPictures,
+  audienceText,
+  CITY_RADII,
+  cityLabel,
+  cityRadiusKm,
+  creativePictureText,
+  DEFAULT_RADIUS_KM,
+  MAX_CITY_RADIUS_KM,
+  MAX_PICKED,
+  MIN_CITY_RADIUS_KM,
+  pickerPath,
+  pictureFileProblem,
+  postLabel,
+  SPECIAL_MIN_RADIUS_KM,
+} from "@/components/ads/picker-helpers";
+import { accountLabel, chartMetrics, insightsQuery, splitByCurrency } from "@/components/ads/insights/account-filter";
+import { CityPicker, InterestPicker, LeadFormPicker, PicturePicker, PostPicker } from "@/components/ads/pickers-ui";
+import { feedbackReasons, readAdReview, reviewChanged, reviewFromMeta, reviewView } from "@/lib/ads/review";
 
 describe("budget helpers", () => {
   it("converts typed amounts to minor units and back", () => {
@@ -74,6 +108,45 @@ describe("audience helpers", () => {
   });
 });
 
+describe("the old wizard's placement choices (docs/IG-PAGE-ADS-SPEC.md 4.5, D10)", () => {
+  const simpleValid = CATALOG_PLACEMENTS.filter((p) => p.tier === "simple" && p.state !== "hidden").map((p) => p.key);
+
+  it("offers exactly the valid simple keys, and never messenger_inbox", () => {
+    const keys = WIZARD_PLACEMENTS.map((p) => p.key);
+    expect([...keys].sort()).toEqual([...simpleValid].sort());
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys).not.toContain("messenger_inbox");
+  });
+
+  it("every choice has a plain label and passes validation, Facebook stories only with a feed or Instagram stories (4.5)", () => {
+    const check = (placements: string[]) => validateTargeting({ ...emptyTargeting(), geo: { countries: ["IN"], cities: [] }, placements: placements as never }, "none");
+    for (const p of WIZARD_PLACEMENTS) {
+      expect(p.label).toMatch(/^(Facebook|Instagram) (feed|stories|reels)$/);
+      expect(check([p.key, "facebook_feed"]).ok, p.key).toBe(true);
+      if (p.key !== "facebook_stories") expect(check([p.key]).ok, p.key).toBe(true);
+    }
+    expect(check(["facebook_stories"]).errors).toEqual(["Facebook Stories needs Facebook Feed or Instagram Stories too."]);
+    expect(check(["facebook_stories", "instagram_stories"]).ok).toBe(true);
+    // Every combination of the six choices that Meta takes passes; the only refused ones are Facebook stories without its companion.
+    for (let mask = 1; mask < 1 << WIZARD_PLACEMENTS.length; mask++) {
+      const keys = WIZARD_PLACEMENTS.filter((_, i) => mask & (1 << i)).map((p) => p.key);
+      const lonelyStory = keys.includes("facebook_stories") && !keys.includes("facebook_feed") && !keys.includes("instagram_stories");
+      expect(check(keys).ok, keys.join(",")).toBe(!lonelyStory);
+    }
+  });
+
+  it("a stored messenger_inbox reopens without it, with a note the member sees (no box to untick)", () => {
+    expect(MESSENGER_PLACEMENT_NOTE).toBe(MESSENGER_CHANGED);
+    expect(wizardPlacements(["facebook_feed", "messenger_inbox"])).toEqual({ placements: ["facebook_feed"], notes: [MESSENGER_PLACEMENT_NOTE] });
+    expect(wizardPlacements(["messenger_inbox"])).toEqual({ placements: [], notes: [MESSENGER_PLACEMENT_NOTE] });
+    // A key Meta no longer has is dropped with its own note; valid keys pass through (draftEditProblem judges them).
+    expect(wizardPlacements(["facebook_video_feeds", "instagram_feed", "instagram_feed", 7])).toEqual({ placements: ["instagram_feed"], notes: [UNKNOWN_PLACEMENT_NOTE] });
+    expect(wizardPlacements(undefined)).toEqual({ placements: [], notes: [] });
+    expect(draftNotesText([MESSENGER_PLACEMENT_NOTE])).toBe(`${MESSENGER_PLACEMENT_NOTE}. Change it in step 3, Who should see it, under More targeting options.`);
+    expect(draftNotesText([UNKNOWN_PLACEMENT_NOTE])).not.toContain("..");
+  });
+});
+
 describe("plain-language errors", () => {
   it("hides field names and units", () => {
     expect(friendlyAdsError("dailyBudgetMinor must be a positive whole number in minor units.")).toBe("Enter a daily budget above zero.");
@@ -102,6 +175,16 @@ describe("plain-language errors", () => {
     expect(friendly).toMatch(/housing/);
     expect(friendly).not.toMatch(/acknowledgeSpecialCategoryTerms/);
     expect(isCategoryTermsMismatch("Ad account not found.")).toBe(false);
+  });
+
+  it("tells a missing record (404) apart from a failed request, so the page offers a way back instead of Try again", () => {
+    expect(isNotFoundError("Campaign not found.")).toBe(true);
+    expect(isNotFoundError("Brief not found.")).toBe(true);
+    expect(isNotFoundError("  Campaign not found  ")).toBe(true);
+    expect(isNotFoundError("We could not reach the server.")).toBe(false);
+    expect(isNotFoundError("Something went wrong.")).toBe(false);
+    expect(isNotFoundError("")).toBe(false);
+    expect(isNotFoundError(null)).toBe(false);
   });
 });
 
@@ -150,6 +233,14 @@ describe("insight helpers", () => {
     expect(nearestIndex(900, 50, 250, 5)).toBe(4);
     expect(nearestIndex(10, 50, 250, 1)).toBe(0);
     expect(compactNumber(1200)).toBe("1.2K");
+  });
+
+  it("keeps a custom range from ending after today, on the later of the UTC and the browser's own today", () => {
+    expect(latestDay("2026-10-30", "2026-10-31")).toBe("2026-10-31");
+    expect(latestDay("2026-10-30", "2026-10-29")).toBe("2026-10-30");
+    expect(futureRangeProblem("2026-12-31", "2026-10-30")).toMatch(/on or before today/);
+    expect(futureRangeProblem("2026-10-30", "2026-10-30")).toBeNull();
+    expect(futureRangeProblem("2026-10-01", "2026-10-30")).toBeNull();
   });
 });
 
@@ -371,5 +462,320 @@ describe("the CapPanel on /app/ads (docs/SPEND-CONTROLS-SPEC.md 8.2)", () => {
     expect(capHelpText(100_000, "INR")).toBe("Up to ₹1,000 a day in ad budgets. Because Meta can spend 75% more on a busy day, this sets your daily ads limit to ₹1,750.");
     expect(capHelpText(114_200, "INR")).toBe("Up to ₹1,142 a day in ad budgets. Because Meta can spend 75% more on a busy day, this sets your daily ads limit to ₹1,998.50.");
     expect(capHelpText(null, "INR")).toBe("Because Meta can spend up to 75% more than a daily budget on a busy day, your daily ads limit is set to 1.75 times the amount you enter.");
+  });
+});
+
+describe("the Promote tiles on /app/ads (docs/IG-PAGE-ADS-SPEC.md 7.1, D5)", () => {
+  const campaigns = [
+    { id: "1", name: "Diwali boost", template: "boost_post", status: "active", currency: "INR", totalDailyBudgetMinor: 30_000, surface: "promote" },
+    { id: "2", name: "Chats", template: "click_to_whatsapp", status: "draft", currency: "INR", totalDailyBudgetMinor: 30_000, surface: "promote" },
+    { id: "3", name: "Old wizard one", template: "traffic", status: "active", currency: "INR", totalDailyBudgetMinor: 30_000, surface: "wizard" },
+  ];
+  const area = (access: Parameters<typeof PromoteArea>[0]["access"]) => renderToStaticMarkup(createElement(PromoteArea, { access, campaigns }));
+
+  it("render only when promoteAccess makes the feature visible", () => {
+    // GET /api/promote/access answers 404 while the feature is hidden, which leaves the access null.
+    expect(area(null)).toBe("");
+    expect(area(undefined)).toBe("");
+    expect(area({ visible: false })).toBe("");
+    const shown = area({ visible: true, canWrite: true });
+    expect(shown).toContain('data-testid="promote-tiles"');
+    expect(shown).toContain('data-testid="promote-running-1"');
+    // Old-wizard campaigns stay in the table only.
+    expect(shown).not.toContain("Old wizard one");
+    // The page as first rendered (the member's access not loaded yet) shows no tiles and keeps the CapPanel.
+    const page = renderToStaticMarkup(createElement(CampaignsView));
+    expect(page).not.toContain('data-testid="promote-tiles"');
+    expect(page).toContain('data-testid="cap-status"');
+  });
+
+  it("'All settings (advanced)' links to the old wizard at /app/ads/new", () => {
+    const tile = area({ visible: true }).match(/<a\b[^>]*data-testid="promote-tile-advanced"[^>]*>([\s\S]*?)<\/a>/);
+    expect(tile?.[0]).toContain('href="/app/ads/new"');
+    expect(tile?.[1]).toContain("All settings (advanced)");
+  });
+
+  it("names nothing e2e/growth-ads.spec.ts looks for, so its locators find exactly what they did before", () => {
+    const out = area({ visible: true, canWrite: true });
+    const text = out.replace(/<[^>]+>/g, " ").replace(/&quot;/g, '"').replace(/&#x27;/g, "'");
+    const labels = [...out.matchAll(/aria-label="([^"]*)"/g)].map((m) => m[1]);
+    // Playwright matches a name or a text as a case-insensitive substring by default.
+    const SPEC = /new campaign|create a campaign|connect ad account|all spending limits|save limit|try again|no campaigns yet|no limit set yet|daily limit|only an owner can change the limit|back to ad campaigns|campaign not found/i;
+    for (const s of [text, ...labels]) expect(s).not.toMatch(SPEC);
+    expect(out).not.toMatch(/<h1\b/);
+    // The tiles sit above the CapPanel, whose words and cap-status region are unchanged.
+    const source = readFileSync("src/components/ads/CampaignsView.tsx", "utf8");
+    expect(source.indexOf("<PromoteArea")).toBeGreaterThan(-1);
+    expect(source.indexOf("<PromoteArea")).toBeLessThan(source.indexOf("<CapPanel role"));
+  });
+});
+
+describe("changing a campaign on Meta", () => {
+  it("tells raises and cuts, later and earlier ends, apart", () => {
+    expect(budgetChangeKind(50000, 70000)).toBe("raise");
+    expect(budgetChangeKind(50000, 30000)).toBe("cut");
+    expect(budgetChangeKind(50000, 50000)).toBe("same");
+    const end = new Date("2026-11-10T10:00:00Z");
+    expect(endChangeKind(end, new Date("2026-11-20T10:00:00Z"))).toBe("later");
+    expect(endChangeKind(end, new Date("2026-11-05T10:00:00Z"))).toBe("earlier");
+    expect(endChangeKind(null, new Date("2026-11-05T10:00:00Z"))).toBe("earlier");
+    expect(endChangeKind(end, new Date(end))).toBe("same");
+  });
+
+  it("checks the new end date like the server does", () => {
+    const now = new Date("2026-10-30T10:00:00Z");
+    expect(endProblem("", now, null)).toMatch(/Choose the new end/);
+    expect(endProblem("not a date", now, null)).toMatch(/date and time/);
+    expect(endProblem("2026-10-30T10:30:00Z", now, null)).toMatch(/an hour from now/);
+    expect(endProblem("2026-11-01T10:00:00Z", now, new Date("2026-11-02T00:00:00Z"))).toMatch(/after the start/);
+    expect(endProblem("2026-11-03T10:00:00Z", now, null)).toBeNull();
+  });
+
+  it("writes a date for a datetime-local field in local time", () => {
+    const d = new Date(2026, 9, 5, 7, 3);
+    expect(toDateTimeLocal(d)).toBe("2026-10-05T07:03");
+  });
+
+  it("rebuilds the wizard answers from a saved draft, and refuses anything already on Meta", () => {
+    const campaign = {
+      id: "c1",
+      name: "Diwali",
+      template: "traffic",
+      status: "draft",
+      adAccountAssetId: "acc1",
+      currency: "INR",
+      dailyBudgetMinor: 50000,
+      startsAt: null,
+      endsAt: "2026-11-30T18:29:00.000Z",
+      specialAdCategory: "none",
+      editable: true,
+      adSets: [
+        {
+          targeting: { geo: { countries: [], cities: [{ key: "1035921", name: "Pune", radiusKm: 25 }] }, ageMin: 25, ageMax: 45, genders: ["female"], interests: [{ id: "6003", name: "Yoga" }], placements: ["instagram_feed"] },
+          dailyBudgetMinor: 50000,
+          ads: [{ creativeAssetId: null, creative: { pageId: "p1", instagramId: "ig1", message: "Hello", headline: "Hi", link: "https://e.com", imageUrl: "https://wa.edwyz.com/api/content/media-public/t1/k.jpg?exp=1", mediaKey: "k.jpg" } }],
+        },
+      ],
+    };
+    const form = draftToForm(campaign)!;
+    expect(form).toMatchObject({ template: "traffic", name: "Diwali", accountId: "acc1", budgetMinor: 50000, noEnd: false, category: "none", ageMin: "25", ageMax: "45", gender: "female", pageId: "p1", instagramId: "ig1", message: "Hello", mediaKey: "k.jpg", imageUrl: "" });
+    expect(form.cities).toEqual([{ key: "1035921", name: "Pune", radiusKm: 25 }]);
+    expect(form.interests).toEqual([{ id: "6003", name: "Yoga" }]);
+    expect(form.placements).toEqual(["instagram_feed"]);
+    expect(form.endsAt).toBe(toDateTimeLocal(new Date("2026-11-30T18:29:00.000Z")));
+    expect(draftToForm({ ...campaign, status: "paused" })).toBeNull();
+    expect(draftToForm({ ...campaign, editable: false })).toBeNull();
+    const ab = draftToForm({ ...campaign, adSets: [{ ...campaign.adSets[0], ads: [{ creativeAssetId: "a", creative: { message: "" } }, { creativeAssetId: "b", creative: { message: "" } }] }] })!;
+    expect(ab.creativeIds).toEqual(["a", "b"]);
+    expect(ab.message).toBe("");
+    expect(form.notes).toEqual([]);
+  });
+
+  describe("drafts the old wizard can't edit without losing or widening them", () => {
+    const draft = (targeting: Record<string, unknown>, over: Record<string, unknown> = {}) => ({
+      id: "c1",
+      name: "Shop",
+      template: "click_to_whatsapp",
+      status: "draft",
+      adAccountAssetId: "acc1",
+      currency: "INR",
+      dailyBudgetMinor: 50000,
+      startsAt: null,
+      endsAt: null,
+      specialAdCategory: "none",
+      editable: true,
+      adSets: [{ targeting: { geo: { countries: ["IN"], cities: [] }, ageMin: 18, ageMax: 65, genders: [], interests: [], placements: [], lookalikeAudienceIds: [], ...targeting }, dailyBudgetMinor: 50000, ads: [{ creativeAssetId: null, creative: { pageId: "p1", message: "Hi" } }] }],
+      ...over,
+    });
+
+    it("a draft aimed only at a pin is not reopened (it would be saved as all of India)", () => {
+      const pinOnly = draft({ geo: { countries: [], cities: [], customLocations: [{ lat: 19.07, lng: 72.87, radiusKm: 2, label: "Shop" }] } });
+      expect(draftToForm(pinOnly)).toBeNull();
+      expect(draftBlockedText(pinOnly)).toBe(DRAFT_NEW_CHOICES);
+    });
+
+    it.each([
+      ["postal codes", { geo: { countries: ["IN"], cities: [], zips: [{ key: "IN:110001" }] } }],
+      ["audiences to include", { customAudienceIds: ["aud_1"] }],
+      ["audiences to leave out", { excludedAudienceIds: ["aud_2"] }],
+      ["lookalikes", { lookalikeAudienceIds: ["aud_3"] }],
+      ["Let Meta find people", { advantageAudience: true }],
+      ["a place the wizard doesn't offer", { placements: ["facebook_feed", "audience_network"] }],
+    ])("a draft with %s is not reopened", (_, targeting) => {
+      expect(draftToForm(draft(targeting))).toBeNull();
+      expect(draftEditProblem({ template: "traffic", targeting: draft(targeting).adSets[0].targeting })).toBe(DRAFT_NEW_CHOICES);
+    });
+
+    it("a draft with a newer goal is not reopened (no goal box would be ticked)", () => {
+      for (const template of ["awareness", "website_sales", "multi_destination"]) {
+        expect(draftToForm(draft({}, { template })), template).toBeNull();
+        expect(draftBlockedText(draft({}, { template }))).toBe(DRAFT_NEW_CHOICES);
+      }
+    });
+
+    it("a stored messenger_inbox reopens without it and with the note", () => {
+      const form = draftToForm(draft({ placements: ["facebook_feed", "messenger_inbox"] }))!;
+      expect(form.placements).toEqual(["facebook_feed"]);
+      expect(form.notes).toEqual([MESSENGER_PLACEMENT_NOTE]);
+    });
+
+    it("plain drafts still reopen, and the on-Meta copy is kept for campaigns already on Meta", () => {
+      expect(draftToForm(draft({ placements: ["facebook_feed", "instagram_stories"], genders: ["female"] }))).toMatchObject({ template: "click_to_whatsapp", countries: "IN", placements: ["facebook_feed", "instagram_stories"], notes: [] });
+      expect(draftEditProblem({ template: "boost_post", targeting: null })).toBeNull();
+      expect(draftBlockedText(draft({}, { status: "paused" }))).toBe(DRAFT_ON_META);
+      expect(draftBlockedText(draft({ advantageAudience: true }, { editable: false }))).toBe(DRAFT_ON_META);
+      for (const text of [DRAFT_ON_META, DRAFT_NEW_CHOICES]) expect(text).toMatch(/^[A-Z].*\.$/);
+    });
+
+    it("the wizard shows why a draft can't open, and the notes of one that did", () => {
+      const source = readFileSync("src/components/ads/CampaignWizard.tsx", "utf8");
+      for (const part of ["setDraftProblem(draftBlockedText(campaign))", "setDraftNotes(form.notes)", "draftNotesText(draftNotes)"]) expect(source).toContain(part);
+    });
+  });
+
+  it("the campaign page offers the budget, end date, draft edit and client approval", () => {
+    const source = readFileSync("src/components/ads/CampaignDetail.tsx", "utf8");
+    for (const label of ["Change budget", "Change end date", "Edit draft", "/app/ads/new?draft=", "ApprovalsPanel", 'subjectType="ad_campaign"', 'run("budget"', 'run("end"', "confirmTotalMinor"]) expect(source).toContain(label);
+    expect(source).not.toContain("A draft cannot be edited here");
+  });
+});
+
+describe("Meta's ad review", () => {
+  const now = new Date("2026-10-30T10:00:00Z");
+
+  it("maps Meta's status and reasons", () => {
+    expect(reviewFromMeta({ effective_status: "PENDING_REVIEW" }, now)).toEqual({ state: "in_review", metaStatus: "PENDING_REVIEW", reasons: [], checkedAt: now.toISOString() });
+    expect(reviewFromMeta({ effective_status: "disapproved", ad_review_feedback: { global: { A: "Too much text\u0007", B: "Too much text" }, placement_specific: { instagram: { C: "Wrong crop" } } } }, now)).toMatchObject({ state: "rejected", reasons: ["Too much text", "Wrong crop"] });
+    expect(reviewFromMeta({ effective_status: "ACTIVE", ad_review_feedback: { global: { A: "ignored" } } }, now)!.reasons).toEqual([]);
+    expect(reviewFromMeta({ effective_status: "WHO_KNOWS" }, now)).toBeNull();
+    expect(feedbackReasons({ a: "1", b: "2", c: "3", d: "4" })).toEqual(["1", "2", "3"]);
+    expect(feedbackReasons("x".repeat(400))[0]).toHaveLength(300);
+  });
+
+  it("reads the stored review and notices a real change only", () => {
+    const r = reviewFromMeta({ effective_status: "DISAPPROVED", ad_review_feedback: { global: { A: "No" } } }, now)!;
+    expect(readAdReview({ pageId: "p", metaReview: r })).toEqual(r);
+    expect(readAdReview({ metaReview: { state: "bogus" } })).toBeNull();
+    expect(readAdReview(null)).toBeNull();
+    expect(reviewChanged(r, { ...r, checkedAt: "later" })).toBe(false);
+    expect(reviewChanged(r, { ...r, state: "approved", metaStatus: "ACTIVE", reasons: [] })).toBe(true);
+    expect(reviewChanged(null, r)).toBe(true);
+  });
+
+  it("says it in plain words, with the reason", () => {
+    const rejected = reviewView({ state: "rejected", metaStatus: "DISAPPROVED", reasons: ["Ads must not imply personal attributes"], checkedAt: "" })!;
+    expect(rejected).toMatchObject({ label: "Not approved", tone: "bad" });
+    expect(rejected.detail).toMatch(/^Not approved: Ads must not imply personal attributes\. Change the ad/);
+    expect(reviewView({ state: "in_review", metaStatus: "PENDING_REVIEW", reasons: [], checkedAt: "" })!.label).toBe("Meta is reviewing");
+    expect(reviewView({ state: "paused", metaStatus: "PAUSED", reasons: [], checkedAt: "" })).toBeNull();
+    expect(reviewView(null)).toBeNull();
+  });
+});
+
+describe("wizard pickers", () => {
+  it("builds picker requests and keeps chosen items unique and capped", () => {
+    expect(pickerPath("cities", { account: "acc1", q: "Pune", country: null })).toBe("/api/ads/pickers?kind=cities&account=acc1&q=Pune");
+    const one = addInterest([], { id: "1", name: "Yoga" });
+    expect(addInterest(one, { id: "1", name: "Yoga" })).toBe(one);
+    const full = Array.from({ length: MAX_PICKED }, (_, i) => ({ id: String(i), name: "x" }));
+    expect(addInterest(full, { id: "999", name: "y" })).toHaveLength(MAX_PICKED);
+    expect(addCity([], { key: "k1", name: "Pune", region: "Maharashtra", countryCode: "IN" }, 25)).toEqual([{ key: "k1", name: "Pune, Maharashtra, IN", radiusKm: 25 }]);
+    expect(cityLabel({ key: "k", name: "Dubai", region: null, countryCode: "AE" })).toBe("Dubai, AE");
+    expect(audienceText(1_200_000, 1_500_000)).toBe("About 1.2M to 1.5M people");
+    expect(audienceText(null, null)).toBe("");
+  });
+
+  it("offers only city radii Meta takes: 17 to 80 km, and at least 15 miles for a special category", () => {
+    expect(MIN_CITY_RADIUS_KM).toBe(17);
+    expect(MAX_CITY_RADIUS_KM).toBe(80);
+    for (const r of CITY_RADII) {
+      expect(r).toBeGreaterThanOrEqual(17);
+      expect(r).toBeLessThanOrEqual(80);
+    }
+    expect(CITY_RADII).toContain(DEFAULT_RADIUS_KM);
+    // 15 miles is 24.14 km, so 24 km would be refused for housing, jobs, credit and social issues.
+    expect(SPECIAL_MIN_RADIUS_KM).toBeGreaterThanOrEqual(15 * 1.609344);
+    expect(CITY_RADII).toContain(SPECIAL_MIN_RADIUS_KM);
+    expect(cityRadiusKm(10)).toBe(17);
+    expect(cityRadiusKm(40)).toBe(40);
+    expect(cityRadiusKm(120)).toBe(80);
+    expect(cityRadiusKm(Number.NaN)).toBe(DEFAULT_RADIUS_KM);
+    expect(cityRadiusKm(17, SPECIAL_MIN_RADIUS_KM)).toBe(25);
+    expect(cityRadiusKm(40, SPECIAL_MIN_RADIUS_KM)).toBe(40);
+  });
+
+  it("the city picker shows the radius the campaign is sent with", () => {
+    const html = (minRadiusKm?: number) =>
+      renderToStaticMarkup(createElement(CityPicker, { accountId: "acc1", country: "IN", value: [{ key: "k1", name: "Pune", radiusKm: 10 }], onChange: () => undefined, minRadiusKm }));
+    const plain = html();
+    expect(plain).not.toContain(">10 km<");
+    expect(plain).toMatch(/<option value="17" selected="">17 km<\/option>/);
+    const special = html(SPECIAL_MIN_RADIUS_KM);
+    expect(special).not.toContain(">17 km<");
+    expect(special).toMatch(/<option value="25" selected="">25 km<\/option>/);
+  });
+
+  it("accepts only JPG and PNG pictures up to 8 MB, and names WebP creatives", () => {
+    expect(pictureFileProblem({ type: "image/webp", size: 10 })).toMatch(/JPG or PNG/);
+    expect(pictureFileProblem({ type: "image/png", size: 9 * 1024 * 1024 })).toMatch(/too large/);
+    expect(pictureFileProblem({ type: "image/jpeg", size: 1000 })).toBeNull();
+    expect(adPictures([{ key: "a.jpg", kind: "image" }, { key: "b.mp4", kind: "video" }, { key: "c.png" }]).map((m) => m.key)).toEqual(["a.jpg", "c.png"]);
+    expect(creativePictureText({ kind: "image", hasImage: false, imageProblem: "format" })).toBe("Picture needs a JPG or PNG (add a picture below)");
+    expect(creativePictureText({ kind: "image", hasImage: true })).toBe("Picture");
+    expect(creativePictureText({ kind: "image", hasImage: false, imageProblem: "placeholder" })).toBe("Picture preview (add a picture below)");
+    expect(creativePictureText({ kind: "copy" })).toBe("Text");
+  });
+
+  it("labels posts plainly", () => {
+    expect(postLabel({ text: "Big sale", createdAt: null })).toBe("Big sale");
+    expect(postLabel({ caption: "", createdAt: null })).toBe("Post without text");
+    expect(postLabel({ text: "x".repeat(120) }).length).toBe(90);
+  });
+
+  it("renders the pickers with labels and no raw ids", () => {
+    const html = renderToStaticMarkup;
+    const interests = html(createElement(InterestPicker, { accountId: "acc1", value: [{ id: "6003", name: "Yoga" }], onChange: () => undefined }));
+    expect(interests).toContain("Search interests");
+    expect(interests).toContain('aria-label="Remove Yoga"');
+    expect(interests).not.toContain("6003");
+    expect(html(createElement(PostPicker, { pageAssetId: "", instagramAssetId: "", postId: "", instagramMediaId: "", onPick: () => undefined }))).toContain("Choose the Facebook Page above");
+    expect(html(createElement(PostPicker, { pageAssetId: "pg1", instagramAssetId: "ig1", postId: "", instagramMediaId: "", onPick: () => undefined }))).toContain("Instagram");
+    expect(html(createElement(LeadFormPicker, { pageAssetId: "", value: "", onChange: () => undefined }))).toContain("Choose a Page first");
+    const picture = html(createElement(PicturePicker, { mediaKey: "", imageUrl: "", onMediaKey: () => undefined, onImageUrl: () => undefined, required: true }));
+    expect(picture).toContain("Upload a picture");
+    expect(picture).toContain('accept="image/jpeg,image/png"');
+    // The file input sits behind the "Upload a picture" button: named, but out of the tab order and the accessibility tree.
+    expect(picture).toMatch(/<input[^>]*type="file"[^>]*aria-label="Upload a picture"[^>]*aria-hidden="true"[^>]*tabindex="-1"/i);
+    expect(picture).toContain("Choose from your media library");
+    expect(html(createElement(PicturePicker, { mediaKey: "abc.jpg", imageUrl: "", onMediaKey: () => undefined, onImageUrl: () => undefined, required: true }))).toContain("/api/content/media/abc.jpg");
+  });
+
+  it("the wizard uses the pickers instead of asking for Meta ids, and edits drafts in place", () => {
+    const source = readFileSync("src/components/ads/CampaignWizard.tsx", "utf8");
+    for (const part of ["<PostPicker", "<LeadFormPicker", "<InterestPicker", "<CityPicker", "<PicturePicker", 'method: "PATCH"', "draftToForm"]) expect(source).toContain(part);
+    expect(source).not.toContain("the interest ID from Meta");
+    // Cities are sent when chosen (the old wizard always sent none).
+    expect(source).not.toContain("geo: { countries: parsedCountries.codes, cities: [] }");
+    expect(source).toContain('geo: where === "cities" ? { countries: [], cities: cities.map(');
+    expect(source).not.toContain("/archive`, { method: \"POST\" }).catch");
+    // getByLabel("Countries") must find only the Countries field, so no other label in the wizard says "countries".
+    expect(source.match(/countries\s*<\/label>/gi) ?? []).toEqual([]);
+    expect(source).toContain("Whole country");
+    expect(source).toContain("cityRadiusKm(c.radiusKm, restricted ? SPECIAL_MIN_RADIUS_KM : undefined)");
+  });
+});
+
+describe("insights by ad account", () => {
+  it("adds the ad account to the query and never draws mixed currencies as one spend line", () => {
+    expect(insightsQuery({ from: "2026-10-01", to: "2026-10-30" }, "")).toBe("from=2026-10-01&to=2026-10-30");
+    expect(insightsQuery({ from: "2026-10-01", to: "2026-10-30" }, "acc 1")).toBe("from=2026-10-01&to=2026-10-30&adAccount=acc%201");
+    expect(accountLabel({ name: "Main", currency: "INR" })).toBe("Main (INR)");
+    expect(accountLabel({ name: null, currency: null })).toBe("Ad account");
+    const t = { spendMinor: 1, impressions: 1, clicks: 1, results: 1, ctr: null, costPerResultMinor: null };
+    expect(splitByCurrency([{ currency: "INR", current: t, previous: t }])).toBeNull();
+    expect(splitByCurrency(null)).toBeNull();
+    expect(splitByCurrency([{ currency: "INR", current: t, previous: t }, { currency: "USD", current: t, previous: t }])).toHaveLength(2);
+    expect(chartMetrics(true).map((m) => m.key)).toEqual(["results", "clicks"]);
+    expect(chartMetrics(false).map((m) => m.key)).toEqual(["spendMinor", "results", "clicks"]);
   });
 });

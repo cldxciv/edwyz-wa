@@ -17,6 +17,8 @@ import { EXPLAINED_CODES, act, dedupe } from "../kinds";
 import type { NoticeProducer } from "../scan";
 
 const DEFAULT_TZ = "Asia/Kolkata";
+/** The pre-check's window: the start of yesterday is at most 48 hours back in any time zone. */
+const DUE_LOOKBACK_MS = 49 * 60 * 60_000;
 /** Messages read per scan (the newest are kept when there are more). */
 const MAX_ROWS = 5000;
 const CODE = /^[A-Za-z0-9_.-]{1,24}$/;
@@ -34,6 +36,11 @@ export const producer: NoticeProducer = {
   name: "failures",
   kinds: ["failed_sends"],
   numberBased: true,
+  /** Workspaces with a failed outbound message in the window. */
+  async due(tenantIds, now) {
+    const rows = await prisma.message.groupBy({ by: ["tenantId"], where: { tenantId: { in: [...tenantIds] }, direction: "outbound", status: "failed", createdAt: { gte: new Date(now.getTime() - DUE_LOOKBACK_MS) } } });
+    return rows.map((r) => r.tenantId);
+  },
   async run(ctx) {
     const tz = await workspaceTimezone(ctx.tenantId);
     const today = dayKey(ctx.now, tz);

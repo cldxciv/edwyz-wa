@@ -66,40 +66,50 @@ describe("who is signed in", () => {
 });
 
 describe("auth pages tell a signed-in person that they are signed in", () => {
-  it("login shows who is signed in, a link to the workspace (honouring ?next=) and a sign-out, above the usual form", async () => {
+  it("login shows only who is signed in, Continue to the app (honouring ?next=) and Sign in as someone else: no form, so no autofocus", async () => {
     signedIn();
     const out = await login("/app/inbox");
     expect(out).toContain("You are already signed in as <strong");
     expect(out).toContain("owner@shop.in");
-    expect(out).toMatch(/<a[^>]+href="\/app\/inbox"[^>]*>Go to your workspace</);
-    expect(out).toMatch(/<button[^>]*>Sign out</);
-    expect(out).toContain("<form");
     expect(out).toContain("Welcome back");
-    expect(out.indexOf("already signed in")).toBeLessThan(out.indexOf("<form"));
+    // An autofilled form plus a stray Enter must not be able to sign this browser in to another account.
+    expect(out).not.toContain("<form");
+    expect(out).not.toContain("<input");
+    expect(out).not.toMatch(/autofocus/i);
+    const primary = out.indexOf(">Continue to the app<");
+    const secondary = out.search(/<button[^>]+type="button"[^>]*>Sign in as someone else</);
+    expect(out).toMatch(/<a[^>]+href="\/app\/inbox"[^>]*>Continue to the app</);
+    expect(primary).toBeGreaterThan(-1);
+    expect(secondary).toBeGreaterThan(primary);
   });
 
   it("login never sends ?next= off the signed-in areas", async () => {
     signedIn();
-    expect(await login("https://evil.example/")).toMatch(/<a[^>]+href="\/app"[^>]*>Go to your workspace</);
+    expect(await login("https://evil.example/")).toMatch(/<a[^>]+href="\/app"[^>]*>Continue to the app</);
   });
 
-  it("signup and forgot password show the same notice", async () => {
+  it("signup gates its form the same way; forgot password keeps its form under the notice", async () => {
     signedIn("asha@shop.in");
     const signup = html(await SignupPage());
     expect(signup).toContain("asha@shop.in");
-    expect(signup).toMatch(/sign out first/);
-    expect(signup).toContain("<form");
+    expect(signup).not.toContain("<form");
+    expect(signup).toMatch(/<a[^>]+href="\/app"[^>]*>Continue to the app</);
+    expect(signup).toMatch(/<button[^>]+type="button"[^>]*>Sign up with a different email</);
     const forgot = html(await ForgotPasswordPage());
     expect(forgot).toContain("asha@shop.in");
+    expect(forgot).toMatch(/sign out first/);
     expect(forgot).toContain("<form");
+    expect(forgot).toMatch(/<button[^>]*>Sign out</);
   });
 
-  it("shows nothing extra to a visitor who is not signed in", async () => {
+  it("shows nothing extra to a visitor who is not signed in, and the form with its autofocus as before", async () => {
     for (const out of [await login(), html(await SignupPage()), html(await ForgotPasswordPage())]) {
       expect(out).not.toContain("already signed in");
       expect(out).not.toContain("Sign out");
+      expect(out).not.toContain("Continue to the app");
       expect(out).toContain("<form");
     }
+    expect(await login()).toMatch(/<input[^>]+autofocus/i);
   });
 
   it("the notice is a client component that posts to the logout route", () => {
@@ -107,6 +117,14 @@ describe("auth pages tell a signed-in person that they are signed in", () => {
     expect(out).toContain('href="/app"');
     expect(out).toContain("a@b.co");
     expect(out).toContain('type="button"');
+  });
+
+  it("with a form as children it renders the form only after the switch button, which a server render never presses", () => {
+    const child = createElement("form", { id: "the-form" });
+    const out = html(createElement(SignedInNotice, { email: "a@b.co", switchLabel: "Sign in as someone else", switchNote: "x" }, child));
+    expect(out).not.toContain("the-form");
+    expect(out).toMatch(/<button[^>]*>Sign in as someone else</);
+    expect(out).not.toContain("Sign out");
   });
 });
 

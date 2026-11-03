@@ -19,6 +19,7 @@ export const ASSISTANTS_DESCRIPTION = "Assistants watch your ads and messages an
 export const SUGGEST_ONLY_FOR_NOW = "Assistants only make suggestions for now.";
 export const ASSISTANT_ON_LABEL = "Assistant on";
 export const ASSISTANT_ON_HINT = "Off, it makes no changes of its own. Turning it on the first time starts its 14-day learning period, when it only suggests.";
+export const COMING_LATER_TEXT = "Not available yet. Its settings will show here when it's ready.";
 
 /**
  * What a save sends for `enabled`: only a change made with the on/off switch, never a side effect of saving other settings
@@ -60,7 +61,9 @@ function AssistantRow({ assistant: a, capabilities, currency, onChanged }: { ass
   const cur = m?.currency ?? currency;
   const configured = (m?.level ?? 0) as AutonomyLevel;
   const owner = capabilities.canRaiseAssistants;
-  const canEdit = owner || (capabilities.canLowerAssistants && !!m);
+  // A planned assistant does not exist yet, so nothing it is given would do anything: no form, no switch (registry phase).
+  const planned = a.phase === "planned";
+  const canEdit = !planned && (owner || (capabilities.canLowerAssistants && !!m));
   const [level, setLevel] = useState<number>(configured);
   const [target, setTarget] = useState(toMajorInput(m?.targetCostPerLead));
   const [daily, setDaily] = useState(toMajorInput(m?.maxDaily));
@@ -134,18 +137,22 @@ function AssistantRow({ assistant: a, capabilities, currency, onChanged }: { ass
   return (
     <div>
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="text-sm font-semibold">{a.label}</h3>
+        <h3 id={`${a.assistantKey}-name`} className="text-sm font-semibold">
+          {a.label}
+        </h3>
         {a.shadow.learning && (
           <Badge tone="info" dot>
             Learning
           </Badge>
         )}
-        {a.phase === "planned" && <Badge tone="neutral">Coming later</Badge>}
-        {!m && <Badge tone="neutral">Suggestions only</Badge>}
+        {planned && <Badge tone="neutral">Coming later</Badge>}
+        {!planned && !m && <Badge tone="neutral">Suggestions only</Badge>}
       </div>
       {a.shadow.text && <p className="mt-1 text-sm text-muted">{a.shadow.text}</p>}
 
-      {canEdit ? (
+      {planned ? (
+        <p className="mt-1 text-sm text-muted">{COMING_LATER_TEXT}</p>
+      ) : canEdit ? (
         <form className="mt-3 grid gap-3 sm:grid-cols-2" onSubmit={save} noValidate>
           <div className="flex flex-wrap items-start justify-between gap-3 sm:col-span-2">
             <div className="min-w-0 flex-1">
@@ -160,7 +167,7 @@ function AssistantRow({ assistant: a, capabilities, currency, onChanged }: { ass
               type="button"
               role="switch"
               aria-checked={on}
-              aria-labelledby={`${a.assistantKey}-on`}
+              aria-labelledby={`${a.assistantKey}-name ${a.assistantKey}-on`}
               aria-describedby={`${a.assistantKey}-on-hint`}
               disabled={!owner && !on}
               onClick={() => setOn((v) => !v)}

@@ -1,4 +1,7 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { StoreSection } from "@/components/commerce/StoreSection";
 import {
   DEFAULT_GAPS_MIN,
   WEBHOOKS,
@@ -154,5 +157,23 @@ describe("Admin API access token", () => {
     expect(needsAccessToken(new Error("Paste the store's Admin API access token to verify it."))).toBe(true);
     expect(needsAccessToken(new Error("Another workspace is verifying this store right now."))).toBe(false);
     expect(needsAccessToken("nope")).toBe(false);
+  });
+});
+
+describe("Shopify connect form", () => {
+  it("keeps password managers out: no saved login lands in the store address or the secrets", () => {
+    const html = renderToStaticMarkup(createElement(StoreSection, { stores: [], editable: true, webhookUrl: "https://wa.example.com/api/commerce/shopify/webhook", onSelect: () => {}, onChange: () => {} }));
+    const inputs = [...html.matchAll(/<input[^>]*>/g)].map((m) => m[0]);
+    const store = inputs.find((i) => i.includes('name="shopify-store"'));
+    const secrets = inputs.filter((i) => i.includes('type="password"'));
+    expect(store).toBeDefined();
+    expect(store).toMatch(/autoComplete="off"|autocomplete="off"/i);
+    expect(store).toContain('data-1p-ignore=""');
+    expect(secrets).toHaveLength(2);
+    for (const input of secrets) {
+      expect(input).toMatch(/autocomplete="new-password"/i);
+      expect(input).toContain('data-1p-ignore=""');
+      expect(input).toContain('data-lpignore="true"');
+    }
   });
 });

@@ -246,7 +246,9 @@ describe("SetupGuideView renders from setup data with the AI off", () => {
   it("says the setup list's own heading and progress, and the later steps sit under one disclosure", () => {
     const markup = guide(CLINIC, "owner");
     expect(textOf(markup)).toContain("Your setup list");
-    expect(textOf(markup)).toContain(`0 of 9 done`);
+    // The same count as the setup page: the four steps asked of the owner, not every optional extra.
+    expect(textOf(markup)).toContain(`0 of 4 done`);
+    expect((markup.match(/data-step-state=/g) ?? []).length).toBe(4);
     expect(markup).toContain("data-guide-later");
     expect(markup).toContain('aria-current="step"');
   });
@@ -823,9 +825,16 @@ describe("StepCard: Do this with Eddy opens Eddy with the member's request for t
   const step = computeSteps(FACTS)[0];
 
   it("renders the button with a full-sentence label next to the step's own action", () => {
-    const markup = html(h(StepCard, { step, index: 1, blocker: null, canDismiss: true, busy: false, onDismiss: noop }));
+    const markup = html(h(StepCard, { step, index: 1, blocker: null, canDismiss: true, busy: false, onDismiss: noop, eddyReady: true }));
     expect(markup).toContain(`aria-label="${DO_WITH_EDDY}: ${step.title}"`);
     expect(textOf(markup)).toContain("Do this with Eddy");
+    expect(markup).toContain(`href="${step.href}"`);
+  });
+
+  it("is not offered while Eddy cannot chat (off, paused or not loaded yet): the step's own button stays", () => {
+    const markup = html(h(StepCard, { step, index: 1, blocker: null, canDismiss: true, busy: false, onDismiss: noop }));
+    expect(textOf(markup)).not.toContain("Do this with Eddy");
+    expect(markup).not.toContain("data-do-with-eddy");
     expect(markup).toContain(`href="${step.href}"`);
   });
 

@@ -14,6 +14,7 @@ import { ceilingFieldErrors, PlanCeilingFields } from "@/components/admin/PlanFo
 import { PlatformSpendSwitch, SWITCH_COPY, switchActions } from "@/components/admin/PlatformSpendSwitch";
 import { asOfLabel, SpendingTable } from "@/components/admin/SpendingTable";
 import { ActionFields } from "@/components/admin/ActionForm";
+import { AuditTable } from "@/components/admin/AdminTables";
 import { bindingText, ceilingFields, lowerAssistantFields, lowerLimitFields, TenantSpendCard } from "@/components/admin/TenantSpendCard";
 import {
   actionMode,
@@ -32,6 +33,7 @@ import {
   newWorkspaceLimitsInfo,
   onboardingInfo,
   paymentEventLabel,
+  planCodeFrom,
   paymentEventStatus,
   QUEUED_WARN_AFTER_MS,
   qualityInfo,
@@ -267,7 +269,7 @@ describe("admin spending wording", () => {
   it("never shows a missing limit as zero", () => {
     expect(moneyText(null)).toBe("Not set");
     expect(cellText({ spent: m(100), setAside: m(0), limit: null })).toBe("₹1 / ₹0 / Not set");
-    expect(cellText(null)).toBe("No ad account");
+    expect(cellText(null)).toBe("No spending ad account");
   });
   it("names states and tones", () => {
     expect(spendStateInfo("stopped")).toEqual({ label: "Stopped", tone: "bad" });
@@ -310,7 +312,7 @@ describe("admin spending components", () => {
     expect(out).toContain("Not checked yet");
     expect(out).toContain("as of 06:25 UTC");
     expect(out).toContain("₹1,000 / ₹500 / Not set");
-    expect(out).toContain("No ad account");
+    expect(out).toContain("No spending ad account");
     expect(out).toContain("Waiting for owner");
     expect(out).toContain("Assistants stopped");
     expect(out).toContain("Highest use 85%");
@@ -533,5 +535,50 @@ describe("admin spending components", () => {
       expect(src, file).not.toMatch(/\bmin-w-\[\d{3,}/);
       expect(src, file).not.toMatch(/\bw-\[\d{3,}px\]/);
     }
+  });
+});
+
+describe("planCodeFrom (QA 2026-10-30: the required plan code was hidden under Advanced options)", () => {
+  it("makes a valid code from the plan name", () => {
+    expect(planCodeFrom("Growth Plus")).toBe("growth-plus");
+    expect(planCodeFrom("  Starter (monthly) ")).toBe("starter-monthly");
+    expect(planCodeFrom("Pro 2026")).toBe("pro-2026");
+    expect(validatePlanCode(planCodeFrom("Growth Plus"))).toBeNull();
+    expect(planCodeFrom("A".repeat(60)).length).toBe(40);
+  });
+
+  it("gives nothing when the name has too few usable characters", () => {
+    expect(planCodeFrom("")).toBe("");
+    expect(planCodeFrom("x")).toBe("");
+    expect(planCodeFrom("₹₹₹")).toBe("");
+  });
+});
+
+describe("audit log readability (QA 2026-10-30: only ids and machine names)", () => {
+  it("labels the workspace actions an admin sees most in plain words", () => {
+    expect(auditActionLabel("auth.login")).toBe("Signed in");
+    expect(auditActionLabel("export.contact")).toBe("Downloaded contacts");
+    expect(auditActionLabel("ai_agent.create")).toBe("Created an AI agent");
+    expect(auditActionLabel("meta_connect.connected")).toBe("Connected Facebook");
+  });
+
+  it("shows the workspace name and the person's email, keeping the ids as titles and links", () => {
+    const out = html(
+      createElement(AuditTable, {
+        rows: [
+          { id: "a1", at: "2026-10-30T05:40:00Z", action: "auth.login", tenantId: "t1", tenantName: "edwyz-test", userId: "u1", userEmail: "boss@x.com", target: null, meta: "" },
+          { id: "a2", at: "2026-10-30T05:41:00Z", action: "admin.view", tenantId: null, userId: "u9", userEmail: null, target: null, meta: "" },
+        ],
+      }),
+    );
+    expect(out).toContain('href="/admin/tenants/t1"');
+    expect(out).toContain(">edwyz-test<");
+    expect(out).toContain('title="t1"');
+    expect(out).toContain('href="/admin/audit?userId=u1"');
+    expect(out).toContain(">boss@x.com<");
+    // A deleted user has no email: the id still shows and still filters.
+    expect(out).toContain('href="/admin/audit?userId=u9"');
+    expect(out).toContain(">u9<");
+    expect(out).toContain(">Signed in<");
   });
 });

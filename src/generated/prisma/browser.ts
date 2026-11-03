@@ -497,3 +497,49 @@ export type NoticeReceipt = Prisma.NoticeReceiptModel
  * 
  */
 export type NoticeScanState = Prisma.NoticeScanStateModel
+/**
+ * Model AdMedia
+ * The ad media library: one row per file per ad account. Files count in the 500 MB content media quota.
+ */
+export type AdMedia = Prisma.AdMediaModel
+/**
+ * Model AdAudience
+ * Saved, customer-list, engagement, website and lookalike audiences. No personal data: the name, the spec and the lawful basis.
+ */
+export type AdAudience = Prisma.AdAudienceModel
+/**
+ * Model AdAudienceUpload
+ * One customer-list upload session. Counts only: no hashes, no identifiers.
+ */
+export type AdAudienceUpload = Prisma.AdAudienceUploadModel
+/**
+ * Model AdTest
+ * Compare versions: at most one per campaign.
+ */
+export type AdTest = Prisma.AdTestModel
+/**
+ * Model InsightBreakdown
+ * Results by placement, asset, age and gender, region and the run total. Aggregates only. spendMinor is written with
+ * decimalToMinorBig and the ad account currency's exponent (Phase 0 3.1).
+ */
+export type InsightBreakdown = Prisma.InsightBreakdownModel
+/**
+ * Model StudioItem
+ * Where a Library file made or imported by Studio came from. The file itself lives in the content media Library.
+ */
+export type StudioItem = Prisma.StudioItemModel
+/**
+ * Model StudioJob
+ * Canva imports, autofills and returns run by the worker (queue "studio").
+ */
+export type StudioJob = Prisma.StudioJobModel
+/**
+ * Model CanvaConnection
+ * One Canva account per member per workspace.
+ */
+export type CanvaConnection = Prisma.CanvaConnectionModel
+/**
+ * Model CanvaReturnState
+ * Correlation ids for Canva's Return button.
+ */
+export type CanvaReturnState = Prisma.CanvaReturnStateModel

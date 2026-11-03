@@ -65,6 +65,26 @@ describe("getActor workspace state", () => {
     await expect(getActor(req("POST", "/api/eddy/settings"))).rejects.toMatchObject({ status: 402 });
   });
 
+  it("keeps a member's own account (password, name) usable when locked", async () => {
+    findUnique.mockResolvedValue(membership());
+    assertTenantCanWrite.mockRejectedValue(new HttpError(402, "Subscription required"));
+    await expect(getActor(req("POST", "/api/account/password"))).resolves.toBeTruthy();
+    await expect(getActor(req("PATCH", "/api/account/profile"))).resolves.toBeTruthy();
+    expect(assertTenantCanWrite).not.toHaveBeenCalled();
+    // Renaming the workspace is a workspace setting and keeps the paywall.
+    await expect(getActor(req("PATCH", "/api/workspace"))).rejects.toMatchObject({ status: 402 });
+  });
+
+  it("skips the workspace check only when the caller asks (the admin console), and still checks the person", async () => {
+    findUnique.mockResolvedValue(membership());
+    assertTenantCanWrite.mockRejectedValue(new HttpError(402, "Subscription required"));
+    await expect(getActor(req("POST", "/api/admin/verify"))).rejects.toMatchObject({ status: 402 });
+    await expect(getActor(req("POST", "/api/admin/verify"), { skipWorkspaceState: true })).resolves.toEqual({ userId: "u1", tenantId: "t1", role: "admin" });
+    expect(assertTenantCanWrite).toHaveBeenCalledTimes(1);
+    findUnique.mockResolvedValue(membership({ user: { disabledAt: new Date() } }));
+    await expect(getActor(req("POST", "/api/admin/verify"), { skipWorkspaceState: true })).rejects.toMatchObject({ status: 401 });
+  });
+
   it("refuses a disabled user and a deleted workspace", async () => {
     findUnique.mockResolvedValue(membership({ user: { disabledAt: new Date() } }));
     await expect(getActor(req("GET"))).rejects.toMatchObject({ status: 401 });

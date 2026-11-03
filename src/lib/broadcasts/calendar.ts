@@ -56,3 +56,9 @@ export function statusColour(status: string): StatusColour {
 }
 
 export const isPastDay = (date: Date, now = new Date()) => dayKey(date) < dayKey(now);
+
+/** True when something can still be planned on the day: today or later, and not past the last day of a `maxDays` window from now. */
+export const canPlanDay = (date: Date, maxDays: number, now = new Date()) => !isPastDay(date, now) && dayKey(date) <= dayKey(new Date(now.getTime() + maxDays * 86_400_000));
+
+/** "Friday, 30 October 2026" in the viewer's locale, for labels that name a calendar day. */
+export const longDate = (date: Date) => date.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" });

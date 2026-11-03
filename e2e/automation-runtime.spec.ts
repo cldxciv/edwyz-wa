@@ -23,10 +23,11 @@ async function outboundBodies(tenantId: string, conversationId: string): Promise
 }
 
 async function settle(request: Page["request"], fn: () => Promise<boolean>, what: string) {
+  // each round runs one tick, which the helper allows up to 60 s when the scheduled sweeps fall due, so the poll allows as much
   await expect.poll(async () => {
     await tick(request, 1);
     return fn();
-  }, { message: what, timeout: 30_000, intervals: [500, 1000, 2000] }).toBe(true);
+  }, { message: what, timeout: 60_000, intervals: [500, 1000, 2000] }).toBe(true);
 }
 
 test.describe.serial("a published chatbot answers a customer who writes a keyword", () => {
@@ -129,13 +130,14 @@ test.describe.serial("a published chatbot answers a customer who writes a keywor
     await page.goto("/app/automation/chatbots");
     await page.getByRole("button", { name: "Publish Business hours reply" }).click();
     await expect(page.getByText('"Business hours reply" is live.')).toBeVisible();
-    await deliverInbound(page.request, fx, "919800000014", "STOP hours", "Stop Customer");
+    // The whole message must be a STOP word (owner default 1): "STOP hours" would be an ordinary message now.
+    await deliverInbound(page.request, fx, "919800000014", "STOP", "Stop Customer");
     await tick(page.request, 3);
     const conv = (await conversationFor(user.tenantId, "919800000014"))!;
     expect(conv.optedOutAt).not.toBeNull();
     // The only thing sent back is the workspace's standard opt-out confirmation: no bot answer and no auto-reply.
     const bodies = await outboundBodies(user.tenantId, conv.id);
-    expect(bodies).toEqual(["You have been unsubscribed and will not get marketing messages from us. Reply START to subscribe again."]);
+    expect(bodies).toEqual(["You will not get marketing messages from us any more. Order updates and replies to your own messages can still arrive. Send START to get offers again."]);
     expect(bodies.join(" ")).not.toMatch(/Our hours are|Hello and welcome|anything else we can help/i);
     const sessions = (await (await db()).query(`select count(*)::int c from "ChatbotSession" where "conversationId"=$1`, [conv.id])).rows[0].c;
     expect(sessions, "no chatbot session starts for an opted-out contact").toBe(0);

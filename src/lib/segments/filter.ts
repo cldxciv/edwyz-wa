@@ -147,10 +147,10 @@ const days = (n: string, now: Date) => new Date(now.getTime() - Number(n) * DAY_
 
 function textWhere(column: string, c: Condition): Prisma.ContactWhereInput {
   const v = c.value ?? "";
-  const nullable = column !== "phone";
   const eq = { [column]: { equals: v, mode: insensitive } } as Prisma.ContactWhereInput;
   const has = { [column]: { contains: v, mode: insensitive } } as Prisma.ContactWhereInput;
-  const withNull = (neg: Prisma.ContactWhereInput): Prisma.ContactWhereInput => (nullable ? { OR: [{ [column]: null } as Prisma.ContactWhereInput, { NOT: neg }] } : { NOT: neg });
+  // Every text column can be NULL (phone too, for a contact known only by BSUID), and NOT (NULL) never matches.
+  const withNull = (neg: Prisma.ContactWhereInput): Prisma.ContactWhereInput => ({ OR: [{ [column]: null } as Prisma.ContactWhereInput, { NOT: neg }] });
   switch (c.op) {
     case "is":
       return eq;
@@ -201,9 +201,18 @@ function countryWhere(c: Condition): Prisma.ContactWhereInput {
   return { AND: [{ OR: [{ phone: null }, { NOT: { OR: starts } }] }, { OR: [{ phone: { not: null } }, { bsuid: null }, { NOT: { bsuid: bsuidPrefix } }] }] };
 }
 
+/**
+ * Contacts created without tags (most inbound ones) have a NULL tags column, and NOT (NULL) is never true in SQL, so
+ * "is not tagged" also takes the NULL rows explicitly. Prisma reads that NULL back as [], so this matches conditionMatches.
+ */
+function tagWhere(c: Condition): Prisma.ContactWhereInput {
+  const has: Prisma.ContactWhereInput = { tags: { has: c.value! } };
+  return c.op === "has" ? has : { OR: [{ tags: { equals: null } }, { NOT: has }] };
+}
+
 export function conditionWhere(c: Condition, now = new Date()): Prisma.ContactWhereInput {
   const kind = kindOf(c.field);
-  if (kind === "tag") return c.op === "has" ? { tags: { has: c.value! } } : { NOT: { tags: { has: c.value! } } };
+  if (kind === "tag") return tagWhere(c);
   if (kind === "country") return countryWhere(c);
   if (kind === "lastInbound") return lastInboundWhere(c, now);
   if (kind === "date") return dateWhere(FIELDS[c.field].column!, c, now);
@@ -308,7 +317,7 @@ function attributeText(attributes: unknown, key: string): string | null {
 export function conditionMatches(contact: ContactSnapshot, c: Condition, now = new Date()): boolean {
   const kind = kindOf(c.field);
   if (kind === "attribute") return textMatches(attributeText(contact.attributes, attributeKey(c.field)), c);
-  if (kind === "tag") return c.op === "has" ? contact.tags.includes(c.value!) : !contact.tags.includes(c.value!);
+  if (kind === "tag") return c.op === "has" ? (contact.tags ?? []).includes(c.value!) : !(contact.tags ?? []).includes(c.value!);
   if (kind === "country") {
     const iso = (c.value ?? "").toUpperCase();
     const hit = contact.phone ? callingCodesFor(iso).some((code) => contact.phone!.startsWith(`+${code}`)) : countryOfBsuid(contact.bsuid ?? "") === iso;

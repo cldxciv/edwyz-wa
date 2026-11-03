@@ -81,10 +81,15 @@ describe("central gate: sendTemplateMessage", () => {
     nothingQueued();
   });
 
-  it("refuses everything for a contact who sent STOP, even one with an old opt-in", async () => {
-    arrange({ optIn: true, optedOutAt: new Date() }, { ...marketing, category: "UTILITY" });
+  it("refuses marketing to a contact who sent STOP, even one with an old opt-in", async () => {
+    arrange({ optIn: true, optedOutAt: new Date() }, marketing);
     await expect(send()).rejects.toMatchObject({ status: 422 });
     nothingQueued();
+  });
+
+  it("lets a utility template through to a contact who sent STOP: an opt-out stops marketing only (owner default 1)", async () => {
+    arrange({ optIn: false, optedOutAt: new Date() }, { ...marketing, category: "UTILITY" });
+    await expect(send()).resolves.toBeTruthy();
   });
 
   it("fails closed for a template the workspace has no row for", async () => {
@@ -183,12 +188,19 @@ describe("path: public API, compat API and MCP (all call sendMessageV1)", () => 
     nothingQueued();
   });
 
-  it("422 for a contact who sent STOP, whatever the category", async () => {
+  it("422 for a marketing template to a contact who sent STOP, even with an old opt-in", async () => {
     db.phoneNumber.findFirst.mockResolvedValue({ id: "ph1", wabaRefId: "w1" });
-    db.template.findFirst.mockResolvedValue({ category: "UTILITY" });
+    db.template.findFirst.mockResolvedValue({ category: "MARKETING" });
     db.contact.findFirst.mockResolvedValue({ id: "c1", phone: "+919876543210", optIn: true, optedOutAt: new Date() });
     await expect(sendMessageV1(actor, body)).rejects.toMatchObject({ status: 422 });
     nothingQueued();
+  });
+
+  it("a utility template still reaches a contact who sent STOP", async () => {
+    db.phoneNumber.findFirst.mockResolvedValue({ id: "ph1", wabaRefId: "w1" });
+    db.template.findFirst.mockResolvedValue({ category: "UTILITY" });
+    db.contact.findFirst.mockResolvedValue({ id: "c1", phone: "+919876543210", optIn: false, optedOutAt: new Date() });
+    await expect(sendMessageV1(actor, body)).resolves.toBeTruthy();
   });
 });
 

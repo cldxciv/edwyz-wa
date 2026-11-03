@@ -3,6 +3,7 @@
 import { Card, DataTable, EmptyState, Stat, type Column } from "@/components/ui";
 import type { ResponseTimes } from "@/lib/reports/response-times";
 import { formatDuration } from "@/lib/reports/stats";
+import { plural } from "./helpers";
 
 type Person = NonNullable<ResponseTimes["byAgent"]>[number];
 type Team = NonNullable<ResponseTimes["byTeam"]>[number];
@@ -29,14 +30,15 @@ export function ReplyTimes({ data }: { data: ResponseTimes | null | undefined })
   return (
     <section aria-label="Reply times" className="space-y-4">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="Typical reply time" value={wait(data.medianSeconds)} hint={data.replies ? `Across ${data.replies.toLocaleString()} customer messages${data.capped ? " (most recent)" : ""}` : "Appears after your first reply"} />
+        <Stat label="Typical reply time" value={wait(data.medianSeconds)} hint={data.replies ? `Across ${plural(data.replies, "customer message")}${data.capped ? " (most recent)" : ""}` : "Appears after your first reply"} />
         <Stat label="Average reply time" value={wait(data.averageSeconds)} hint="Long waits pull this up more than the typical time" />
         <Stat label="9 in 10 replies within" value={wait(data.p90Seconds)} />
-        <Stat label="Typical first reply" value={wait(data.firstMedianSeconds)} hint={data.firstReplies ? `Across ${data.firstReplies.toLocaleString()} new customers` : "Appears after a new customer gets a reply"} />
+        <Stat label="Typical first reply" value={wait(data.firstMedianSeconds)} hint={data.firstReplies ? `Across ${plural(data.firstReplies, "new customer")}` : "Appears after a new customer gets a reply"} />
       </div>
       <p className="text-xs text-muted">A wait starts when a customer writes and ends when a team member answers. Automatic replies do not stop the clock.</p>
       {data.byAgent && data.byTeam && (
-        <div className="grid gap-6 md:grid-cols-2">
+        // Side by side only where a four-column table fits in half the width (at 1280 px it scrolled sideways).
+        <div className="grid gap-6 2xl:grid-cols-2">
           <Card title="Reply times by team member" padded={false}>
             <DataTable
               className="max-sm:p-3"

@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { Prisma } from "@/generated/prisma/client";
 import { getRateCard } from "@/lib/admin/ratecard";
-import { broadcastSupportReason } from "@/lib/broadcasts/components";
+import { broadcastSupportReason, isLoginCodeButton, isLoginCodeTemplate } from "@/lib/broadcasts/components";
 import { API_HOLD_TTL_MS, bulkEstimateMinor, bulkGateStep, holdForBulk, releaseBulkHold, type BulkHold } from "@/lib/broadcasts/cost";
 import { countryOfBsuid, countryOfPhone } from "@/lib/broadcasts/country";
-import { buildRecipientComponents, templateSlots, type VariableMap } from "@/lib/broadcasts/mapping";
+import { MAX_COUPON, buildRecipientComponents, templateSlots, type Slot, type VariableMap } from "@/lib/broadcasts/mapping";
 import { NO_ADDRESS_MESSAGE, normalizeBsuid, recipientAddress } from "@/lib/contacts/identity";
 import { prisma } from "@/lib/db";
 import { sendMessageV1 } from "@/lib/integrations/v1-service";
@@ -56,18 +56,23 @@ function requireAddress(contact: { phone: string | null; bsuid: string | null })
   return address;
 }
 
-/** Values fill {{1}}, {{2}}... in the order given, or by number when every name is a digit string. */
-function orderedValues(customParams: unknown): string[] {
-  if (customParams === undefined) return [];
-  if (!Array.isArray(customParams) || customParams.length > 20) throw new HttpError(400, "custom_params must be an array of { name, value }.");
-  const items = customParams.map((p) => {
+type Param = { name: string; value: string };
+
+function customParams(raw: unknown): Param[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw) || raw.length > 20) throw new HttpError(400, "custom_params must be an array of { name, value }.");
+  return raw.map((p) => {
     if (!isObject(p) || typeof p.name !== "string" || (typeof p.value !== "string" && typeof p.value !== "number")) {
       throw new HttpError(400, "Every custom_params item needs a name and a text value.");
     }
     return { name: p.name, value: String(p.value) };
   });
-  if (items.length > 0 && items.every((i) => /^\d+$/.test(i.name))) items.sort((a, b) => Number(a.name) - Number(b.name));
-  return items.map((i) => i.value);
+}
+
+/** Values fill {{1}}, {{2}}... in the order given, or by number when every name is a digit string. */
+function orderedValues(items: Param[]): string[] {
+  const sorted = items.length > 0 && items.every((i) => /^\d+$/.test(i.name)) ? [...items].sort((a, b) => Number(a.name) - Number(b.name)) : items;
+  return sorted.map((i) => i.value);
 }
 
 type Tpl = { name: string; language: string; components: unknown; category?: string | null };
@@ -91,7 +96,7 @@ function paramText(value: unknown, field: string): string {
   return value;
 }
 
-/** Button link values: an array of { index, value }, where index counts the template's buttons from 0. */
+/** Button values (a link placeholder or a coupon code): an array of { index, value }, where index counts the template's buttons from 0. */
 function buttonValues(raw: unknown): Map<number, string> {
   const out = new Map<number, string>();
   if (raw === undefined) return out;
@@ -103,34 +108,78 @@ function buttonValues(raw: unknown): Map<number, string> {
   return out;
 }
 
-type RecipientValues = { body: string[]; header: string | undefined; buttons: Map<number, string> };
+type RecipientValues = { body: Param[]; header: string | undefined; buttons: Map<number, string> };
+
+/** Body values by slot key: in order for {{1}}, {{2}}..., by name for a template with named placeholders ({{first_name}}). */
+function bodyMap(bodySlots: Slot[], params: Param[]): VariableMap {
+  const map: VariableMap = {};
+  const named = bodySlots.filter((s): s is Extract<Slot, { kind: "body" }> => s.kind === "body" && !!s.name);
+  if (named.length === 0) {
+    const values = orderedValues(params);
+    if (values.length !== bodySlots.length) throw new HttpError(400, `This template takes ${bodySlots.length} parameter(s); got ${values.length}.`);
+    bodySlots.forEach((slot, i) => (map[slot.key] = { source: "static", value: values[i] }));
+    return map;
+  }
+  const byName = new Map(params.map((p) => [p.name, p.value]));
+  for (const p of params) if (!named.some((s) => s.name === p.name)) throw new HttpError(400, `This template has no placeholder named ${p.name.slice(0, 60)}. It uses: ${named.map((s) => s.name).join(", ")}.`);
+  for (const slot of named) {
+    const value = byName.get(slot.name as string);
+    if (value === undefined) throw new HttpError(400, `This template uses named placeholders; send custom_params with { name: "${slot.name}", value }.`);
+    map[slot.key] = { source: "static", value };
+  }
+  return map;
+}
+
+/** Stands in for the copy-code link Meta lists for a synced login-code template. Only read to find the slot, never sent. */
+const OTP_LINK = "https://www.whatsapp.com/otp/code/?otp_type=COPY_CODE&code=otp{{1}}";
 
 /**
- * Builds the send components from the values one recipient brought: custom_params for the message text in order, header_param for a
- * header placeholder or the https link of an image, video or document header, and button_params for link buttons.
+ * A login-code template saved here and not synced since has a body with no text and an OTP button. Meta sends every login-code
+ * template the same way (the code in the body's {{1}} and in the copy-code button), so it is read in the shape Meta lists after a sync.
+ */
+function sendShape(components: unknown): unknown {
+  if (!Array.isArray(components) || !isLoginCodeTemplate(components)) return components;
+  return components.map((c) => {
+    if (!isObject(c)) return c;
+    if (c.type === "BODY" && typeof c.text !== "string") return { ...c, text: "{{1}}" };
+    if (c.type !== "BUTTONS" || !Array.isArray(c.buttons)) return c;
+    return { ...c, buttons: c.buttons.map((b) => (isObject(b) && isLoginCodeButton(b) && b.type !== "URL" ? { ...b, type: "URL", url: OTP_LINK } : b)) };
+  });
+}
+
+/**
+ * Builds the send components from the values one recipient brought: custom_params for the message text (in order, or by name when
+ * the template uses named placeholders), header_param for a header placeholder or the https link of an image, video or document
+ * header, and button_params for link buttons and coupon-code buttons. A login-code template takes the code in custom_params; its
+ * copy-code button gets the same code unless button_params gives one.
  */
 function templateComponents(tpl: Tpl, values: RecipientValues): unknown[] {
-  const unsupported = broadcastSupportReason(tpl.components);
+  const unsupported = broadcastSupportReason(tpl.components, { allowLoginCode: true });
   if (unsupported) throw new HttpError(422, unsupported);
-  const slots = templateSlots(tpl.components);
-  const bodySlots = slots.filter((s) => s.kind === "body");
-  if (values.body.length !== bodySlots.length) throw new HttpError(400, `This template takes ${bodySlots.length} parameter(s); got ${values.body.length}.`);
-  const map: VariableMap = {};
-  bodySlots.forEach((slot, i) => (map[slot.key] = { source: "static", value: values.body[i] }));
+  const components = sendShape(tpl.components);
+  const loginCode = isLoginCodeTemplate(components);
+  const slots = templateSlots(components);
+  const map = bodyMap(
+    slots.filter((s) => s.kind === "body"),
+    values.body,
+  );
   for (const slot of slots) {
     if (slot.kind === "header_text" || slot.kind === "header_media") {
       if (values.header === undefined) throw new HttpError(400, slot.kind === "header_media" ? `This template has a ${slot.mediaType} header; send header_param with a public https link.` : "This template has a header placeholder; send header_param.");
       map.header = { source: "static", value: values.header };
-    } else if (slot.kind === "button_url") {
-      const value = values.buttons.get(slot.buttonIndex);
-      if (value === undefined) throw new HttpError(400, `This template has a link button at position ${slot.buttonIndex}; send button_params with { index: ${slot.buttonIndex}, value }.`);
+    } else if (slot.kind === "button_url" || slot.kind === "button_copy_code") {
+      const value = values.buttons.get(slot.buttonIndex) ?? (loginCode ? map["1"]?.value : undefined);
+      const what = slot.kind === "button_copy_code" ? "coupon-code button" : loginCode ? "copy-code button" : "link button";
+      if (value === undefined) throw new HttpError(400, `This template has a ${what} at position ${slot.buttonIndex}; send button_params with { index: ${slot.buttonIndex}, value }.`);
       map[slot.key] = { source: "static", value };
     }
   }
   if (values.header !== undefined && !slots.some((s) => s.kind === "header_text" || s.kind === "header_media")) throw new HttpError(400, "This template has no header placeholder; remove header_param.");
-  for (const index of values.buttons.keys()) if (!slots.some((s) => s.kind === "button_url" && s.buttonIndex === index)) throw new HttpError(400, `This template has no link placeholder on button ${index}.`);
-  const built = buildRecipientComponents(tpl.components, { name: null, attributes: {} }, map, "fail");
-  if (!built.ok) throw new HttpError(400, `A value is missing or not valid for: ${built.missing.join(", ")}. Header media needs a public https link.`);
+  for (const index of values.buttons.keys()) {
+    if (!slots.some((s) => (s.kind === "button_url" || s.kind === "button_copy_code") && s.buttonIndex === index)) throw new HttpError(400, `This template has no link placeholder on button ${index}, and no coupon code there either.`);
+  }
+  const built = buildRecipientComponents(components, { name: null, attributes: {} }, map, "fail");
+  if (!built.ok) throw new HttpError(400, `A value is missing or not valid for: ${built.missing.join(", ")}. Header media needs a public https link; a coupon code is up to ${MAX_COUPON} letters and numbers.`);
   return built.components;
 }
 
@@ -182,7 +231,7 @@ async function sendOneTemplate(actor: Actor, tpl: Tpl, channel: string | undefin
   const who: Who = phone ? { phone } : { bsuid: bsuid as string };
   const localId = parseLocalMessageId(item.local_message_id);
   const components = templateComponents(tpl, {
-    body: orderedValues(item.custom_params),
+    body: customParams(item.custom_params),
     header: item.header_param === undefined || item.header_param === null ? undefined : paramText(item.header_param, "header_param"),
     buttons: buttonValues(item.button_params),
   });

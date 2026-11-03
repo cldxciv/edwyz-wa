@@ -20,7 +20,8 @@ export function WeekChart({ days }: { days: DayPoint[] }) {
   const slot = (W - PAD.l - PAD.r) / Math.max(1, days.length);
   const bar = Math.min(34, slot * 0.6);
   const y = (v: number) => PAD.t + (1 - v / max) * (H - PAD.t - PAD.b);
-  const ticks = [0, 0.5, 1].map((f) => Math.round(max * f));
+  // A small maximum (1) rounds the middle tick onto the top one; keep each value once.
+  const ticks = [...new Set([0, 0.5, 1].map((f) => Math.round(max * f)))];
   const text = summary(days);
   return (
     <figure>
@@ -52,10 +53,10 @@ export function WeekChart({ days }: { days: DayPoint[] }) {
       </svg>
       <figcaption className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
         <span className="flex items-center gap-1.5">
-          <span aria-hidden className="h-2.5 w-2.5 rounded-sm bg-accent" /> Sent by you
+          <span aria-hidden className="h-2.5 w-2.5 rounded-sm bg-accent" />{" "}Sent by you
         </span>
         <span className="flex items-center gap-1.5">
-          <span aria-hidden className="h-2.5 w-2.5 rounded-sm bg-foreground/25" /> Received from customers
+          <span aria-hidden className="h-2.5 w-2.5 rounded-sm bg-foreground/25" />{" "}Received from customers
         </span>
         <span className="sr-only">{text}</span>
       </figcaption>

@@ -32,7 +32,9 @@ import { GET as cartsRoute } from "@/app/api/commerce/carts/route";
 import { normalizeShopDomain, verifyShopifyHmac } from "@/lib/commerce/shop";
 import { parseCheckout } from "@/lib/commerce/cart";
 import { nextReminderAfter, firstReminderAt, isExpired } from "@/lib/commerce/schedule";
-import { buildReminderComponents, formatTotal, processDueReminders } from "@/lib/commerce/reminders";
+import { buildReminderComponents, checkoutSuffix, formatTotal, processDueReminders } from "@/lib/commerce/reminders";
+import { bodyVariableCount, reminderSupportReason } from "@/lib/commerce/settings";
+import { GET as optionsRoute } from "@/app/api/commerce/options/route";
 import { worker } from "@/lib/commerce/worker";
 import { resetWebhookGuard } from "@/lib/commerce/webhook-guard";
 import { resetOwnershipChecks } from "@/lib/commerce/stores";
@@ -143,6 +145,32 @@ describe("shopify webhook", () => {
   });
 });
 
+describe("a Shopify marketing consent is never a WhatsApp opt-in (owner default 2)", () => {
+  const consenting = {
+    ...checkout,
+    buyer_accepts_marketing: true,
+    accepts_marketing: true,
+    customer: { ...(checkout as { customer?: object }).customer, accepts_marketing: true, email_marketing_consent: { state: "subscribed" }, sms_marketing_consent: { state: "subscribed", opt_in_level: "confirmed_opt_in" } },
+    sms_marketing_phone: "+919876543210",
+  };
+
+  it("the parsed checkout carries no consent at all", () => {
+    const parsed = parseCheckout(consenting);
+    expect(parsed).not.toBeNull();
+    expect(Object.keys(parsed!).sort()).toEqual(["altIds", "checkoutUrl", "completed", "currency", "eventAt", "externalId", "firstName", "lines", "phone", "stage", "totalMinor"]);
+    expect(JSON.stringify(parsed)).not.toMatch(/marketing|consent|optIn/i);
+  });
+
+  it("a checkout webhook with the buyer's marketing consent never writes a contact or an opt-in", async () => {
+    db.contact.findFirst.mockResolvedValue({ id: "c1" });
+    expect((await webhook(hook("checkouts/create", consenting))).status).toBe(200);
+    expect(db.contact.create).not.toHaveBeenCalled();
+    expect(db.contact.updateMany).not.toHaveBeenCalled();
+    expect(db.contact.upsert).not.toHaveBeenCalled();
+    expect(JSON.stringify(db.abandonedCart.create.mock.calls[0][0].data)).not.toMatch(/optIn|marketing/i);
+  });
+});
+
 describe("parsing and schedule", () => {
   it("falls back to other phone fields and detects the checkout stage", () => {
     const parsed = parseCheckout({ id: 5, shipping_address: { phone: "+14155550123", address1: "1 Main St" } });
@@ -171,9 +199,32 @@ describe("parsing and schedule", () => {
       { type: "body", parameters: [{ type: "text", text: "Asha" }, { type: "text", text: "INR 10" }, { type: "text", text: "https://x" }] },
     ]);
     const two = [{ type: "BODY", text: "Hi {{1}}, total {{2}}" }];
-    expect(buildReminderComponents(two, { firstName: "A", total: "T", url: "U" })[0].parameters.map((p) => p.text)).toEqual(["A", "T"]);
+    expect((buildReminderComponents(two, { firstName: "A", total: "T", url: "U" })[0].parameters as { text: string }[]).map((p) => p.text)).toEqual(["A", "T"]);
     expect(buildReminderComponents([{ type: "BODY", text: "Hello" }], { firstName: "A", total: "T", url: "U" })).toEqual([]);
     expect(formatTotal(129950, "INR")).toContain("1,299.50");
+  });
+  it("fills a website button with the checkout link, through the broadcast value mapping", () => {
+    const url = "https://shop.example/123/checkouts/abc/recover?key=k1";
+    const withButton = [{ type: "BODY", text: "Hi {{1}}, your cart is waiting" }, { type: "BUTTONS", buttons: [{ type: "URL", text: "Complete order", url: "https://shop.example/{{1}}" }] }];
+    expect(buildReminderComponents(withButton, { firstName: "Asha", total: "T", url })).toEqual([
+      { type: "body", parameters: [{ type: "text", text: "Asha" }] },
+      { type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: "123/checkouts/abc/recover?key=k1" }] },
+    ]);
+    expect(checkoutSuffix("https://shop.example/123/checkouts/{{1}}", url)).toBe("abc/recover?key=k1");
+    // A custom domain on the button still gets the checkout's path; a button with its own path that does not match cannot be filled.
+    expect(checkoutSuffix("https://mystore.in/{{1}}", "https://x.myshopify.com/1/checkouts/c/recover")).toBe("1/checkouts/c/recover");
+    expect(checkoutSuffix("https://mystore.in/orders/{{1}}", url)).toBeNull();
+    const mismatch = [{ type: "BODY", text: "Hi" }, { type: "BUTTONS", buttons: [{ type: "URL", text: "Go", url: "https://mystore.in/orders/{{1}}" }] }];
+    expect(() => buildReminderComponents(mismatch, { firstName: "A", total: "T", url })).toThrow(/could not be filled/);
+  });
+  it("tells why a template cannot be a reminder, in shop words, and never throws on named placeholders", () => {
+    expect(reminderSupportReason([{ type: "BODY", text: "Hi {{first_name}}" }])).toMatch(/named placeholders/);
+    expect(bodyVariableCount([{ type: "BODY", text: "Hi {{first_name}}" }])).toBeNull();
+    expect(reminderSupportReason([{ type: "HEADER", format: "IMAGE" }, { type: "BODY", text: "Hi" }])).toMatch(/picture/);
+    expect(reminderSupportReason([{ type: "BODY", text: "Hi" }, { type: "BUTTONS", buttons: [{ type: "COPY_CODE", example: "SAVE" }] }])).toMatch(/coupon/);
+    expect(reminderSupportReason([{ type: "BODY", text: "{{1}} {{2}} {{3}} {{4}}" }])).toMatch(/more than 3/);
+    expect(reminderSupportReason([{ type: "BODY", text: "Hi {{1}}" }, { type: "BUTTONS", buttons: [{ type: "URL", text: "Go", url: "https://s.example/{{1}}" }] }])).toBeNull();
+    for (const reason of [reminderSupportReason([{ type: "HEADER", format: "IMAGE" }, { type: "BODY", text: "Hi" }])]) expect(reason).not.toMatch(/broadcast/i);
   });
 });
 
@@ -230,6 +281,17 @@ describe("reminder worker", () => {
   it("does not send when another worker won the claim", async () => {
     db.abandonedCart.updateMany.mockResolvedValue({ count: 0 });
     expect((await processDueReminders(now)).lost_claim).toBe(1);
+    expect(send.sendTemplateMessage).not.toHaveBeenCalled();
+  });
+  it("a cart from a checkout whose buyer accepted Shopify marketing still needs the WhatsApp opt-in recorded in Edwyz (owner default 2)", async () => {
+    db.contact.findFirst.mockResolvedValue({ id: "c1", name: null, optIn: false, optedOutAt: null });
+    expect((await processDueReminders(now)).opted_out).toBe(1);
+    expect(send.sendTemplateMessage).not.toHaveBeenCalled();
+  });
+  it("a cart reminder is marketing whatever its template category, so an opt-out stops it", async () => {
+    db.template.findFirst.mockResolvedValue({ ...template, category: "UTILITY" });
+    db.contact.findFirst.mockResolvedValue({ id: "c1", name: null, optIn: true, optedOutAt: now });
+    expect((await processDueReminders(now)).opted_out).toBe(1);
     expect(send.sendTemplateMessage).not.toHaveBeenCalled();
   });
   it("stops for contacts without opt-in, who opted out, or who replied", async () => {
@@ -374,6 +436,30 @@ describe("commerce routes", () => {
     expect(ok.status).toBe(200);
     expect(db.template.findFirst.mock.calls.at(-1)![0].where).toMatchObject({ tenantId: "t1" });
     expect(db.platformSetting.upsert).toHaveBeenCalled();
+  });
+  it("refuses a template reminders cannot fill with a shop-worded reason, not a broadcast one", async () => {
+    db.shopifyStore.findFirst.mockResolvedValue({ id: "s1", shopDomain: "a.myshopify.com", status: "active", webhookSecretEnc: "x", createdAt: new Date() });
+    db.platformSetting.findUnique.mockResolvedValue(null);
+    const put = (body: unknown) => putSettings(call("/api/commerce/stores/s1/settings", "PUT", body), { params: Promise.resolve({ id: "s1" }) });
+    db.template.findFirst.mockResolvedValue({ status: "approved", components: [{ type: "HEADER", format: "IMAGE" }, { type: "BODY", text: "Hi {{1}}" }] });
+    const res = await put({ templateId: "tp1" });
+    expect(res.status).toBe(400);
+    const { error } = await res.json();
+    expect(error).toMatch(/cannot be a reminder/);
+    expect(error).not.toMatch(/broadcast/i);
+  });
+  it("one approved template with named placeholders does not break the reminder options; it is listed as hidden with the reason", async () => {
+    db.template.findMany.mockResolvedValue([
+      { id: "a", name: "cart_named", language: "en", category: "MARKETING", components: [{ type: "BODY", text: "Hi {{first_name}}, your cart" }] },
+      { id: "b", name: "cart_plain", language: "en", category: "MARKETING", components: [{ type: "BODY", text: "Hi {{1}}, total {{2}}" }] },
+    ]);
+    db.phoneNumber.findMany.mockResolvedValue([{ id: "ph1", displayPhone: "+91 98000 00001" }]);
+    const res = await optionsRoute(call("/api/commerce/options", "GET"));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.templates).toEqual([{ id: "b", name: "cart_plain", language: "en", category: "MARKETING" }]);
+    expect(body.hidden).toEqual([{ id: "a", name: "cart_named", language: "en", reason: expect.stringMatching(/named placeholders/) }]);
+    expect(db.template.findMany.mock.calls[0][0].where).toEqual({ tenantId: "t1", status: "approved" });
   });
   it("lists carts filtered by tenant and rejects unknown filters", async () => {
     db.abandonedCart.findMany.mockResolvedValue([]);

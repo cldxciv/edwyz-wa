@@ -11,18 +11,30 @@ export const initials = (name: string, email: string) => {
   return (parts.length > 1 ? parts[0][0] + parts[parts.length - 1][0] : source.slice(0, 2)).toUpperCase();
 };
 
-export function UserMenu({ name, email, role }: { name: string; email: string; role: Role }) {
-  const { signOut } = useShell();
-  const items: DropdownItem[] = [
+/**
+ * The account menu: every member reaches their own name and password and every project they belong to; owners and admins also
+ * get team and billing.
+ */
+export function accountMenuItems(role: Role, signOut: () => void): DropdownItem[] {
+  return [
+    // Every member: their own name and password (and, for an owner, the workspace name).
+    { label: "Your account", icon: "user", href: "/app/account" },
     ...(hasRole(role, "admin")
       ? ([
           { label: "Team and roles", icon: "team", href: "/app/settings/team" },
           { label: "Billing", icon: "card", href: "/app/billing" },
-          { separator: true },
         ] as DropdownItem[])
       : []),
-    { label: "Sign out", icon: "logout", onSelect: () => void signOut() },
+    // Every member: the overview of all their projects (workspaces), where they switch or start a new one.
+    { label: "All projects", icon: "grid", href: "/app/projects" },
+    { separator: true },
+    { label: "Sign out", icon: "logout", onSelect: signOut },
   ];
+}
+
+export function UserMenu({ name, email, role }: { name: string; email: string; role: Role }) {
+  const { signOut } = useShell();
+  const items = accountMenuItems(role, () => void signOut());
   return (
     <Dropdown
       label="Account"

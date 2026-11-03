@@ -1,11 +1,14 @@
 import { assertSameOrigin } from "@/lib/auth/csrf";
 import { getActor } from "@/lib/auth";
-import { addSource, listSources } from "@/lib/ai-agent/agents";
+import { addSource, listSources, refreshSource } from "@/lib/ai-agent/agents";
 import { readJsonLimited } from "@/lib/http/body";
-import { errorResponse, requireRole } from "@/lib/tenancy";
+import { errorResponse, HttpError, requireRole } from "@/lib/tenancy";
 
 export const dynamic = "force-dynamic";
 type Ctx = { params: Promise<{ id: string }> };
+
+/** 100 000 characters of Hindi or another Indian script take up to 3 bytes each, plus JSON escaping. */
+const SOURCE_BODY_LIMIT = 512 * 1024;
 
 /** GET -> { sources: [{ id, kind, title, sourceUrl, status, chars, createdAt }] }. Content is never returned. */
 export async function GET(request: Request, { params }: Ctx) {
@@ -17,14 +20,33 @@ export async function GET(request: Request, { params }: Ctx) {
   }
 }
 
-/** POST { kind: "text", title?, content } | { kind: "faq", title?, faq: [{ q, a }] } | { kind: "url", title?, url } (admin or owner) -> 201 { source }. URLs are fetched once now. */
+/**
+ * POST { kind: "text", title?, content } | { kind: "faq", title?, faq: [{ q, a }] } | { kind: "url", title?, url }
+ * | { kind: "file", title?, fileName, content } (a .txt or .md file read in the browser) (admin or owner) -> 201 { source }.
+ * A url is read now and stored; PATCH reads it again.
+ */
 export async function POST(request: Request, { params }: Ctx) {
   try {
     assertSameOrigin(request);
     const actor = await getActor(request);
     requireRole(actor, "admin");
-    const body = await readJsonLimited(request, 256 * 1024);
+    const body = await readJsonLimited(request, SOURCE_BODY_LIMIT);
     return Response.json({ source: await addSource(actor.tenantId, actor.userId, (await params).id, body) }, { status: 201 });
+  } catch (e) {
+    return errorResponse(e);
+  }
+}
+
+/** PATCH { sourceId } (admin or owner) -> { source }. Refresh: reads a web page source again and replaces its stored text. */
+export async function PATCH(request: Request, { params }: Ctx) {
+  try {
+    assertSameOrigin(request);
+    const actor = await getActor(request);
+    requireRole(actor, "admin");
+    const body = await readJsonLimited(request, 4 * 1024);
+    const sourceId = typeof body.sourceId === "string" && body.sourceId.length <= 64 ? body.sourceId : "";
+    if (!sourceId) throw new HttpError(400, "sourceId is required.");
+    return Response.json({ source: await refreshSource(actor.tenantId, actor.userId, (await params).id, sourceId) });
   } catch (e) {
     return errorResponse(e);
   }

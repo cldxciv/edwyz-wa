@@ -7,13 +7,22 @@
  * Reaching 100% resolves that period's 80% notice; a new period, or a raised limit, resolves the old ones.
  *
  * Only workspaces that already have their SpendControl row are read, so this producer never makes Phase 0 create one.
+ *
+ * The hourly notice (owner decision 3): the AI agent raises "AI replies reached this hour's limit" itself, the moment the plan's
+ * AI replies per hour hold a message back (src/lib/billing/ai-hourly.ts noteHourlyCapHit: kind ai_limit_100, period "hour", one
+ * dedupe key per UTC hour). This producer keeps this hour's and the last hour's open and resolves anything older, with or
+ * without a SpendControl row.
  */
 import { prisma } from "@/lib/db";
 import { aiHeadroom, type AiHeadroom } from "@/lib/actions/spend-bridge";
+import { AI_HOUR_NOTICE_PREFIX, openAiHourKeys } from "@/lib/billing/ai-hourly";
 import { aiNoticeKey } from "@/lib/spend/exec/ai";
 import { dayKey, monthKey } from "@/lib/spend/periods";
 import { act } from "../kinds";
 import type { NoticeProducer } from "../scan";
+
+/** The pre-check's window: this month's counters, in any time zone, were written inside it. */
+const USE_LOOKBACK_MS = 32 * 24 * 60 * 60_000;
 
 export type HeadroomReader = (tenantId: string, now: Date) => Promise<AiHeadroom>;
 let read: HeadroomReader = (tenantId, now) => aiHeadroom(tenantId, { now });
@@ -32,15 +41,28 @@ export function aiLevel(used: number, limit: number | null): 80 | 100 | null {
 export const producer: NoticeProducer = {
   name: "ai-limit",
   kinds: ["ai_limit_80", "ai_limit_100"],
+  /** Workspaces that used AI credits in a counter written in the last 32 days (no use, no level to report). */
+  async due(tenantIds, now) {
+    const rows = await prisma.spendCounter.groupBy({
+      by: ["tenantId"],
+      where: { tenantId: { in: [...tenantIds] }, pot: "ai", updatedAt: { gte: new Date(now.getTime() - USE_LOOKBACK_MS) }, OR: [{ spentMinor: { gt: 0 } }, { reservedMinor: { gt: 0 } }] },
+    });
+    return rows.map((r) => r.tenantId);
+  },
   async run(ctx) {
+    // The hourly notices of this hour and the last stay open; Phase 0's counters do not decide them.
+    const hourKeys = openAiHourKeys(ctx.now);
     const control = await prisma.spendControl.findUnique({ where: { tenantId: ctx.tenantId }, select: { tenantId: true } });
-    if (!control) return {};
+    if (!control) {
+      const resolved = await ctx.resolve({ kinds: ["ai_limit_100"], prefix: AI_HOUR_NOTICE_PREFIX, except: hourKeys });
+      return resolved > 0 ? { resolved } : {};
+    }
     const h = await read(ctx.tenantId, ctx.now);
     const periods = [
       { period: "month" as const, key: monthKey(ctx.now, h.timezone), used: h.usedMonth, limit: h.limitMonth },
       { period: "day" as const, key: dayKey(ctx.now, h.timezone), used: h.usedToday, limit: h.limitToday },
     ];
-    const keep: string[] = [];
+    const keep: string[] = [...hourKeys];
     let published = 0;
     for (const p of periods) {
       const level = aiLevel(p.used, p.limit);

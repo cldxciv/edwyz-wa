@@ -51,6 +51,7 @@ function SegmentDialog({ segment, attributeKeys, tags, onClose, onSaved }: { seg
     <Dialog
       title={segment ? "Edit segment" : "New segment"}
       description="A segment is a saved group of contacts that updates itself. Use it for broadcasts, or to look at the group in Contacts."
+      size="lg"
       onClose={onClose}
       dismissible={!busy}
       footer={

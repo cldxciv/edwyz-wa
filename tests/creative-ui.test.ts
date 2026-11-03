@@ -266,5 +266,8 @@ describe("first paint", () => {
     }
     expect(screens[0][1]).toContain("<h1");
     expect(screens[1][1]).toContain("Creative Studio");
+    // The title column has a real basis (not flex-1's 0): on a 390 px phone Brand kits and New brief wrap below the title
+    // instead of squeezing it and its description into a 103 px column.
+    expect(screens[1][1]).toMatch(/class="min-w-0 grow basis-64"><h1/);
   });
 });

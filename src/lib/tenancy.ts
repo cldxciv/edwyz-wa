@@ -1,4 +1,4 @@
-import { describeError } from "@/lib/safe-error";
+import { getRequestId, log, newRequestId, REQUEST_ID_HEADER } from "@/lib/log";
 import type { Role } from "@/generated/prisma/client";
 
 /** The authenticated caller. Produced by the auth module (src/lib/auth/*) and consumed by every tenant-scoped route. */
@@ -29,9 +29,25 @@ export function requireRole(actor: Actor, minimum: Role): void {
   if (!hasRole(actor, minimum)) throw new HttpError(403, "You do not have permission to do this.");
 }
 
-/** Converts a thrown HttpError (or unknown error) into a JSON Response. Use in every route handler. */
-export function errorResponse(error: unknown): Response {
+/**
+ * Converts a thrown HttpError (or unknown error) into a JSON Response. Use in every route handler.
+ * An unexpected error is logged as `api.unexpected` through @/lib/log (class name and code, a scrubbed message, never a Prisma
+ * message, and the error tracker sees it too) with a request id that is also sent back in the x-request-id header, so the
+ * "Something went wrong." a customer reports can be found in the logs. Pass the request when the handler has it: the line then
+ * carries the method, the path and the id nginx set, instead of a fresh one.
+ */
+export function errorResponse(error: unknown, request?: Request): Response {
   if (error instanceof HttpError) return Response.json({ error: error.message }, { status: error.status });
-  console.error("[api] unexpected error:", describeError(error));
-  return Response.json({ error: "Something went wrong." }, { status: 500 });
+  const reqId = request ? getRequestId(request) : newRequestId();
+  log.error("api.unexpected", { err: error, reqId, ...(request ? { method: request.method, path: pathOf(request) } : {}) });
+  return Response.json({ error: "Something went wrong." }, { status: 500, headers: { [REQUEST_ID_HEADER]: reqId } });
+}
+
+/** The path without the query string, which can carry a token. */
+function pathOf(request: Request): string | undefined {
+  try {
+    return new URL(request.url).pathname;
+  } catch {
+    return undefined;
+  }
 }

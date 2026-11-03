@@ -13,6 +13,8 @@ const db = vi.hoisted(() => {
     phoneNumber: model(),
     membership: model(),
     auditLog: model(),
+    // promote/forget.ts forgetContact (PRM-11) first looks for the workspace's customer-list audiences on Meta: none here.
+    adAudience: { findMany: vi.fn(async () => [] as unknown[]) },
     $transaction: undefined as unknown as (fn: (tx: unknown) => unknown) => unknown,
   };
   tables.$transaction = (fn) => fn(tables);

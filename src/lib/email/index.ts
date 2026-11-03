@@ -12,13 +12,23 @@ const DEFAULT_FROM = "Edwyz WA <noreply@edwyz.com>";
 
 let transport: Transporter | null = null;
 
+/**
+ * With SMTP_PASS empty no login is attempted: a relay that trusts this server by address (its own Postfix on 127.0.0.1:25) sends for it.
+ * SMTP_TLS_SERVERNAME checks the STARTTLS certificate against the mail server's real name when SMTP_HOST is an IP address.
+ * Port 465 is implicit TLS (encrypted from the first byte); every other port starts in plain text and must upgrade with STARTTLS.
+ */
 function getTransport(): Transporter {
+  const pass = process.env.SMTP_PASS;
+  const servername = process.env.SMTP_TLS_SERVERNAME;
+  const port = Number(process.env.SMTP_PORT) || 587;
+  const secure = port === 465;
   transport ??= nodemailer.createTransport({
     host: process.env.SMTP_HOST || "mail.edwyz.com",
-    port: Number(process.env.SMTP_PORT) || 587,
-    secure: false,
-    requireTLS: true,
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+    port,
+    secure,
+    requireTLS: !secure,
+    ...(pass ? { auth: { user: process.env.SMTP_USER, pass } } : {}),
+    ...(servername ? { tls: { servername } } : {}),
     connectionTimeout: 10_000,
     socketTimeout: 20_000,
   });

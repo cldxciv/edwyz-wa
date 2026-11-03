@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const db = vi.hoisted(() => {
   const model = () => ({ findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), deleteMany: vi.fn() });
-  return { contact: model(), conversation: model(), automationRule: model(), automationRun: model(), message: model(), platformSetting: { findUnique: vi.fn() } };
+  return { contact: model(), conversation: model(), automationRule: model(), automationRun: model(), message: model(), chatbotSession: model(), platformSetting: { findUnique: vi.fn() } };
 });
 const sendText = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/db", () => ({ prisma: db }));
@@ -123,8 +123,15 @@ describe("runAutomationsForInbound", () => {
     expect(sendText).not.toHaveBeenCalled();
   });
 
-  it("never replies to opted-out contacts", async () => {
-    db.contact.findFirst.mockResolvedValue({ optedOutAt: new Date(), createdAt: new Date() });
+  it("still answers a contact who opted out: the reply answers their own message, and an opt-out stops marketing only", async () => {
+    db.contact.findFirst.mockResolvedValue({ optedOutAt: new Date("2026-02-01T00:00:00Z"), createdAt: new Date("2026-01-01T00:00:00Z") });
+    db.automationRule.findMany.mockResolvedValue([rule({ id: "w", type: "welcome" })]);
+    expect((await runAutomationsForInbound({ ...base, text: "hello" })).replied).toBe(true);
+    expect(sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it("never runs for an unknown contact", async () => {
+    db.contact.findFirst.mockResolvedValue(null);
     db.automationRule.findMany.mockResolvedValue([rule({ id: "w", type: "welcome" })]);
     expect((await runAutomationsForInbound({ ...base, text: "hello" })).replied).toBe(false);
     expect(sendText).not.toHaveBeenCalled();
@@ -137,6 +144,13 @@ describe("runAutomationsForInbound", () => {
     expect(sendText).not.toHaveBeenCalled();
   });
 
+  it("answers a tap on a template button labelled Cancel, or a tapped reply titled End: that is the business's wording, not a STOP", async () => {
+    db.automationRule.findMany.mockResolvedValue([rule({ id: "w", type: "welcome" })]);
+    expect((await runAutomationsForInbound({ ...base, text: "Cancel", messageType: "button" })).replied).toBe(true);
+    expect((await runAutomationsForInbound({ ...base, text: "End", messageType: "interactive", replyId: "row1" })).replied).toBe(true);
+    expect(await runAutomationsForInbound({ ...base, text: "Stop", messageType: "button" })).toMatchObject({ replied: false, skipped: "opt-out message" });
+  });
+
   it("does nothing when there are no enabled rules", async () => {
     db.automationRule.findMany.mockResolvedValue([]);
     expect((await runAutomationsForInbound({ ...base, text: "hi" })).replied).toBe(false);
@@ -147,6 +161,19 @@ describe("runAutomationsForInbound", () => {
     db.message.findFirst.mockResolvedValue({ createdAt: new Date(base.receivedAt.getTime() - 60 * 60_000) });
     expect((await runAutomationsForInbound({ ...base, text: "hello" })).replied).toBe(false);
     db.message.findFirst.mockResolvedValue({ createdAt: new Date(base.receivedAt.getTime() - 13 * 3600_000) });
+    expect((await runAutomationsForInbound({ ...base, text: "hello" })).replied).toBe(true);
+  });
+
+  it("classic replies stay quiet while a chatbot is talking or the teammate who owns the chat replied recently", async () => {
+    db.automationRule.findMany.mockResolvedValue([rule({ id: "w", type: "welcome" })]);
+    db.chatbotSession.findFirst.mockResolvedValueOnce({ id: "s1" });
+    expect(await runAutomationsForInbound({ ...base, text: "hello" })).toMatchObject({ replied: false, skipped: "a chatbot is already talking with the customer" });
+    db.conversation.findFirst.mockResolvedValue({ status: "open", assignedToId: "u1" });
+    db.message.findFirst.mockImplementation(async ({ where }) => (where.direction === "outbound" ? { id: "m-agent" } : null));
+    expect(await runAutomationsForInbound({ ...base, text: "hello" })).toMatchObject({ replied: false, skipped: "a person is handling this chat" });
+    expect(sendText).not.toHaveBeenCalled();
+    // An owner who has been quiet for a while does not hold the reply back.
+    db.message.findFirst.mockResolvedValue(null);
     expect((await runAutomationsForInbound({ ...base, text: "hello" })).replied).toBe(true);
   });
 

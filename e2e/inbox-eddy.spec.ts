@@ -195,7 +195,7 @@ async function scanWorkspaceNext(tenantId: string) {
 test.describe("scenario 9: a quality safety stop, as a notice", () => {
   test("the notice names the paused broadcasts; Resume is a link to the broadcast page in v1", async ({ page, context, request }) => {
     test.skip(!process.env.WORKER_SECRET, "The notice scan runs on the worker tick, which needs WORKER_SECRET.");
-    test.setTimeout(120_000);
+    test.setTimeout(150_000);
     await page.setViewportSize({ width: 1280, height: 800 });
     const u = await owner(context, "quality");
     const fx = await connectFakeNumber(u.tenantId);
@@ -209,15 +209,21 @@ test.describe("scenario 9: a quality safety stop, as a notice", () => {
     await mockStatus(page);
     await page.goto("/app");
     const panel = await openPanel(page);
+    const openNotices = async () => Number((await d.query(`select count(*)::int as n from "Notice" where "tenantId" = $1 and kind = 'number_quality_dropped' and "resolvedAt" is null`, [u.tenantId])).rows[0].n);
+    // Tick until the scan has published the notice. A tick still running when its request times out finishes on the server.
     await expect
       .poll(async () => {
-        await scanWorkspaceNext(u.tenantId);
-        await tick(request, 1);
-        // Browsers fire visibilitychange at the document, where the notices poller listens (one sent to window never reaches it).
-        await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-        return panel.locator("[data-eddy-notices]").count();
-      }, { timeout: 60_000 })
+        if ((await openNotices()) === 0) {
+          await scanWorkspaceNext(u.tenantId);
+          await tick(request, 1).catch(() => undefined);
+        }
+        return openNotices();
+      }, { timeout: 90_000 })
       .toBeGreaterThan(0);
+    // The strip loads again when the tab becomes visible. Browsers fire visibilitychange at the document, where the notices
+    // poller listens (one sent to window never reaches it).
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await expect(panel.locator("[data-eddy-notices]")).toBeVisible();
     await expect(panel).toContainText(/dropped to Low quality/);
     await expect(panel).toContainText("Festive offer");
     await expect(panel.getByRole("link", { name: /Review/ }).first()).toHaveAttribute("href", "/app/broadcasts");

@@ -613,6 +613,62 @@ describe("sending and idempotency", () => {
       const json = await (await send([{ phone_number: "919876543210", custom_params: [{ name: "1", value: "A" }], header_param: "https://cdn.test/a.jpg" }])).json();
       expect(json.recipients[0].errors[0]).toMatch(/no header placeholder/);
     });
+
+    it("fills named placeholders by name (sent with parameter_name) and a coupon-code button from button_params", async () => {
+      const named = {
+        ...approved,
+        name: "promo",
+        components: [{ type: "BODY", text: "Hi {{first_name}}, use {{code_hint}}" }, { type: "BUTTONS", buttons: [{ type: "COPY_CODE", text: "Copy code" }] }],
+      };
+      db.template.findMany.mockResolvedValue([named]);
+      const ok = await (await sendRich({ custom_params: [{ name: "code_hint", value: "the code below" }, { name: "first_name", value: "Asha" }], button_params: [{ index: 0, value: "SAVE20" }] })).json();
+      expect(ok.success).toBe(true);
+      const { enqueue } = await import("@/lib/queue");
+      const queued = JSON.stringify(vi.mocked(enqueue).mock.calls);
+      expect(queued).toContain('"parameter_name":"first_name"');
+      expect(queued).toContain('"coupon_code":"SAVE20"');
+      const unknown = await (await sendRich({ custom_params: [{ name: "first", value: "A" }, { name: "code_hint", value: "x" }], button_params: [{ index: 0, value: "SAVE20" }] })).json();
+      expect(unknown.recipients[0].errors[0]).toMatch(/no placeholder named first/);
+      const noCoupon = await (await sendRich({ custom_params: [{ name: "first_name", value: "A" }, { name: "code_hint", value: "x" }] })).json();
+      expect(noCoupon.recipients[0].errors[0]).toMatch(/coupon-code button at position 0/);
+      const badCoupon = await (await sendRich({ custom_params: [{ name: "first_name", value: "A" }, { name: "code_hint", value: "x" }], button_params: [{ index: 0, value: "50% off" }] })).json();
+      expect(badCoupon.recipients[0].errors[0]).toMatch(/coupon code is up to 15 letters and numbers/);
+    });
+
+    it("sends a login-code template: the code fills the body and the copy-code button, synced from Meta or saved here", async () => {
+      const { enqueue } = await import("@/lib/queue");
+      const sentComponents = () => JSON.stringify(vi.mocked(enqueue).mock.calls.at(-1));
+      const bodyParam = '{"type":"body","parameters":[{"type":"text","text":"482913"}]}';
+      const buttonParam = '{"type":"button","sub_type":"url","index":"0","parameters":[{"type":"text","text":"482913"}]}';
+      const synced = {
+        ...approved,
+        name: "promo",
+        category: "AUTHENTICATION",
+        components: [
+          { type: "BODY", text: "{{1}} is your verification code.", add_security_recommendation: true },
+          { type: "BUTTONS", buttons: [{ type: "URL", text: "Copy code", url: "https://www.whatsapp.com/otp/code/?otp_type=COPY_CODE&code=otp{{1}}" }] },
+        ],
+      };
+      db.template.findMany.mockResolvedValue([synced]);
+      const ok = await (await sendRich({ custom_params: [{ name: "1", value: "482913" }], button_params: [{ index: 0, value: "482913" }] })).json();
+      expect(ok.success).toBe(true);
+      expect(sentComponents()).toContain(bodyParam);
+      expect(sentComponents()).toContain(buttonParam);
+      // The button carries the same code as the body, so button_params may be left out.
+      const bodyOnly = await (await sendRich({ custom_params: [{ name: "1", value: "482913" }] })).json();
+      expect(bodyOnly.success).toBe(true);
+      expect(sentComponents()).toContain(buttonParam);
+
+      const local = { ...synced, components: [{ type: "BODY", add_security_recommendation: true }, { type: "BUTTONS", buttons: [{ type: "OTP", otp_type: "COPY_CODE", text: "Copy code" }] }] };
+      db.template.findMany.mockResolvedValue([local]);
+      const fromLocal = await (await sendRich({ custom_params: [{ name: "1", value: "482913" }] })).json();
+      expect(fromLocal.success).toBe(true);
+      expect(sentComponents()).toContain(bodyParam);
+      expect(sentComponents()).toContain(buttonParam);
+      expect(sentComponents()).not.toContain("whatsapp.com/otp");
+      const noCode = await (await sendRich({})).json();
+      expect(noCode.recipients[0].errors[0]).toMatch(/takes 1 parameter\(s\); got 0/);
+    });
   });
 
   it("sends session text through the 24-hour window rules", async () => {

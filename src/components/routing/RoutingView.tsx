@@ -9,6 +9,7 @@ import { CheckRow } from "@/components/integrations/CheckRow";
 import { RoleGate } from "@/components/team/RoleGate";
 import { roleLabel } from "@/components/team/helpers";
 import type { RoutingSettings } from "@/lib/routing/config";
+import { timeZoneList } from "@/lib/timezones";
 import { AvailabilityToggle, announceAvailability, useAvailabilityChanged } from "./AvailabilityToggle";
 import { RoutingExtraCard } from "./RoutingExtraCard";
 import { DAY_NAMES, DISPLAY_ORDER, MODE_INFO, effectiveForm, isDirty, parseLimit, routingSummary, toBody, toForm, validateForm, type FormErrors, type FormState } from "./helpers";
@@ -87,13 +88,9 @@ function LimitInput({ agent, busy, onSave }: { agent: Agent; busy: boolean; onSa
   );
 }
 
+/** Suggestions for the time zone box: one per zone under its current name (Asia/Kolkata, not also Asia/Calcutta). */
 function timezoneChoices(): string[] {
-  const supported = (Intl as unknown as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf;
-  try {
-    return supported ? supported("timeZone") : [];
-  } catch {
-    return [];
-  }
+  return timeZoneList();
 }
 
 function ManagerView() {

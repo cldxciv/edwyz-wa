@@ -129,11 +129,28 @@ describe("setup steps", () => {
     expect(step(live, "contacts", ["contacts", "connect"]).dismissed).toBe(true);
     expect(step(live, "connect", ["connect"]).dismissed).toBe(false);
   });
+
+  it("reviews a done step on the list of what was made, never on the form that makes a new one", () => {
+    const steps = computeSteps(blank);
+    for (const s of steps) expect(s.reviewHref, s.id).not.toMatch(/\/new$/);
+    expect(step(blank, "template")).toMatchObject({ href: "/app/templates/new", reviewHref: "/app/templates" });
+    expect(step(blank, "broadcast").reviewHref).toBe("/app/broadcasts");
+    expect(step(blank, "automation").reviewHref).toBe("/app/automation");
+    // Steps whose page already lists what was done review there.
+    expect(step(blank, "contacts").reviewHref).toBe(step(blank, "contacts").href);
+  });
 });
 
 describe("summary", () => {
   it("is 0 percent at the start with every launch step remaining", () => {
-    expect(summarize(computeSteps(blank))).toMatchObject({ done: 0, percent: 0, remaining: 4, complete: false, nextStepId: "connect", minutesLeft: 13 });
+    expect(summarize(computeSteps(blank))).toMatchObject({ done: 0, total: 9, asked: 4, percent: 0, remaining: 4, complete: false, nextStepId: "connect", minutesLeft: 13 });
+  });
+
+  it("counts the steps asked of the owner, as the ring does: 3 of 4, not 3 of 9", () => {
+    const s = summarize(computeSteps({ ...blank, onboardingLive: true, approvedTemplates: 1, contacts: 1 }));
+    expect(s).toMatchObject({ done: 3, asked: 4, total: 9, percent: 75 });
+    // A done optional step is counted on both sides, so the percentage never drops.
+    expect(summarize(computeSteps({ ...blank, onboardingLive: true, approvedTemplates: 1, contacts: 1, members: 2 }))).toMatchObject({ done: 4, asked: 5 });
   });
 
   it("rises as steps are completed and points at the next unblocked step", () => {

@@ -109,7 +109,36 @@ describe("inbox settings and the agent signature", () => {
   it("falls back to safe defaults for missing or damaged values", () => {
     expect(cleanSettings(null)).toEqual(DEFAULT_INBOX_SETTINGS);
     expect(cleanSettings({ agentSignature: "yes", optOutReply: 5 })).toEqual(DEFAULT_INBOX_SETTINGS);
-    expect(cleanSettings({ agentSignature: true, optOutReply: "  Bye  ", optInReply: "" })).toEqual({ agentSignature: true, optOutReply: "Bye", optInReply: "" });
+    expect(cleanSettings({ agentSignature: true, optOutReply: "  Bye  ", optInReply: "" })).toEqual({ agentSignature: true, optOutReply: "Bye", optInReply: "", stopWords: [] });
+  });
+
+  it("the default STOP confirmation says what an opt-out does (owner default 1), and an old saved default reads as the new one", () => {
+    expect(DEFAULT_INBOX_SETTINGS.optOutReply).toMatch(/not get marketing messages/);
+    expect(DEFAULT_INBOX_SETTINGS.optOutReply).toMatch(/Order updates and replies to your own messages can still arrive/);
+    expect(DEFAULT_INBOX_SETTINGS.optOutReply).toMatch(/Send START to get offers again/);
+    const old = cleanSettings({
+      optOutReply: "You have been unsubscribed and will not get marketing messages from us. Reply START to subscribe again.",
+      optInReply: "You are subscribed again. Reply STOP at any time to unsubscribe.",
+    });
+    expect(old.optOutReply).toBe(DEFAULT_INBOX_SETTINGS.optOutReply);
+    expect(old.optInReply).toBe(DEFAULT_INBOX_SETTINGS.optInReply);
+    expect(cleanSettings({ optOutReply: "Our own words" }).optOutReply).toBe("Our own words");
+  });
+
+  it("keeps the workspace's STOP words normalised, without defaults, duplicates, START words or junk", () => {
+    expect(cleanSettings({ stopWords: [" Band Karo! ", "band karo", "STOP", "opt-out", "start", 7, "", "x".repeat(41), "nahi chahiye"] }).stopWords).toEqual(["band karo", "nahi chahiye"]);
+    expect(cleanSettings({ stopWords: "stop" }).stopWords).toEqual([]);
+    expect(cleanSettings({ stopWords: Array.from({ length: 30 }, (_, i) => `w${i}`) }).stopWords).toHaveLength(20);
+  });
+
+  it("validates STOP words from the form and says what is wrong", () => {
+    expect(parseSettingsPatch({ stopWords: ["Band karo", "STOP"] })).toEqual({ stopWords: ["band karo"] });
+    expect(parseSettingsPatch({ stopWords: [] })).toEqual({ stopWords: [] });
+    expect(() => parseSettingsPatch({ stopWords: "band karo" })).toThrow(/list of words/);
+    expect(() => parseSettingsPatch({ stopWords: ["ok", 5] })).toThrow(/must be text/);
+    expect(() => parseSettingsPatch({ stopWords: ["Start"] })).toThrow(/cannot also be a STOP word/);
+    expect(() => parseSettingsPatch({ stopWords: ["..."] })).toThrow(/letter or number/);
+    expect(() => parseSettingsPatch({ stopWords: Array.from({ length: 21 }, (_, i) => `w${i}`) })).toThrow(/up to 20/);
   });
 
   it("reads one row per workspace and survives a database error", async () => {

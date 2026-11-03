@@ -146,6 +146,21 @@ describe("listConversations views and flags", () => {
     expect(whereOf().AND[0]).toEqual({ OR: [{ unreadCount: { gt: 0 } }, { id: { in: ["c3"] } }] });
   });
 
+  it("leaves blocked chats out of every list unless the Blocked status is asked for", async () => {
+    await listConversations("t1", {});
+    expect(whereOf().AND).toContainEqual({ status: { not: "blocked" } });
+    await listConversations("t1", { unread: true, viewerId: "u1" });
+    expect(db.conversation.findMany.mock.calls[1][0].where.AND).toContainEqual({ status: { not: "blocked" } });
+    await listConversations("t1", { assignedTo: "u1", view: "active" });
+    expect(db.conversation.findMany.mock.calls[2][0].where.AND).toContainEqual({ status: { not: "blocked" } });
+    await listConversations("t1", { status: "blocked" });
+    const blocked = db.conversation.findMany.mock.calls[3][0].where;
+    expect(blocked.status).toBe("blocked");
+    expect(blocked.AND ?? []).not.toContainEqual({ status: { not: "blocked" } });
+    await listConversations("t1", { status: "open" });
+    expect(db.conversation.findMany.mock.calls[4][0].where.AND ?? []).not.toContainEqual({ status: { not: "blocked" } });
+  });
+
   it("ANDs the caller's visibility scope into the query", async () => {
     await listConversations("t1", { scope: { AND: [{ assignedToId: "u1" }] } });
     expect(whereOf().AND).toContainEqual({ AND: [{ assignedToId: "u1" }] });

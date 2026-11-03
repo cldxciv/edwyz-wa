@@ -33,6 +33,11 @@ export type AdMinAggregateOutputType = {
   name: string | null
   status: string | null
   createdAt: Date | null
+  format: string | null
+  variantLabel: string | null
+  sourcePostRef: string | null
+  effectiveStatus: string | null
+  reviewCheckedAt: Date | null
 }
 
 export type AdMaxAggregateOutputType = {
@@ -44,6 +49,11 @@ export type AdMaxAggregateOutputType = {
   name: string | null
   status: string | null
   createdAt: Date | null
+  format: string | null
+  variantLabel: string | null
+  sourcePostRef: string | null
+  effectiveStatus: string | null
+  reviewCheckedAt: Date | null
 }
 
 export type AdCountAggregateOutputType = {
@@ -56,6 +66,13 @@ export type AdCountAggregateOutputType = {
   status: number
   creative: number
   createdAt: number
+  format: number
+  mediaIds: number
+  variantLabel: number
+  sourcePostRef: number
+  effectiveStatus: number
+  reviewFeedback: number
+  reviewCheckedAt: number
   _all: number
 }
 
@@ -69,6 +86,11 @@ export type AdMinAggregateInputType = {
   name?: true
   status?: true
   createdAt?: true
+  format?: true
+  variantLabel?: true
+  sourcePostRef?: true
+  effectiveStatus?: true
+  reviewCheckedAt?: true
 }
 
 export type AdMaxAggregateInputType = {
@@ -80,6 +102,11 @@ export type AdMaxAggregateInputType = {
   name?: true
   status?: true
   createdAt?: true
+  format?: true
+  variantLabel?: true
+  sourcePostRef?: true
+  effectiveStatus?: true
+  reviewCheckedAt?: true
 }
 
 export type AdCountAggregateInputType = {
@@ -92,6 +119,13 @@ export type AdCountAggregateInputType = {
   status?: true
   creative?: true
   createdAt?: true
+  format?: true
+  mediaIds?: true
+  variantLabel?: true
+  sourcePostRef?: true
+  effectiveStatus?: true
+  reviewFeedback?: true
+  reviewCheckedAt?: true
   _all?: true
 }
 
@@ -177,6 +211,13 @@ export type AdGroupByOutputType = {
   status: string
   creative: runtime.JsonValue
   createdAt: Date
+  format: string
+  mediaIds: string[]
+  variantLabel: string | null
+  sourcePostRef: string | null
+  effectiveStatus: string | null
+  reviewFeedback: runtime.JsonValue | null
+  reviewCheckedAt: Date | null
   _count: AdCountAggregateOutputType | null
   _min: AdMinAggregateOutputType | null
   _max: AdMaxAggregateOutputType | null
@@ -210,6 +251,13 @@ export type AdWhereInput = {
   status?: Prisma.StringFilter<"Ad"> | string
   creative?: Prisma.JsonFilter<"Ad">
   createdAt?: Prisma.DateTimeFilter<"Ad"> | Date | string
+  format?: Prisma.StringFilter<"Ad"> | string
+  mediaIds?: Prisma.StringNullableListFilter<"Ad">
+  variantLabel?: Prisma.StringNullableFilter<"Ad"> | string | null
+  sourcePostRef?: Prisma.StringNullableFilter<"Ad"> | string | null
+  effectiveStatus?: Prisma.StringNullableFilter<"Ad"> | string | null
+  reviewFeedback?: Prisma.JsonNullableFilter<"Ad">
+  reviewCheckedAt?: Prisma.DateTimeNullableFilter<"Ad"> | Date | string | null
   adSet?: Prisma.XOR<Prisma.AdSetScalarRelationFilter, Prisma.AdSetWhereInput>
 }
 
@@ -223,6 +271,13 @@ export type AdOrderByWithRelationInput = {
   status?: Prisma.SortOrder
   creative?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  format?: Prisma.SortOrder
+  mediaIds?: Prisma.SortOrder
+  variantLabel?: Prisma.SortOrderInput | Prisma.SortOrder
+  sourcePostRef?: Prisma.SortOrderInput | Prisma.SortOrder
+  effectiveStatus?: Prisma.SortOrderInput | Prisma.SortOrder
+  reviewFeedback?: Prisma.SortOrderInput | Prisma.SortOrder
+  reviewCheckedAt?: Prisma.SortOrderInput | Prisma.SortOrder
   adSet?: Prisma.AdSetOrderByWithRelationInput
 }
 
@@ -239,6 +294,13 @@ export type AdWhereUniqueInput = Prisma.AtLeast<{
   status?: Prisma.StringFilter<"Ad"> | string
   creative?: Prisma.JsonFilter<"Ad">
   createdAt?: Prisma.DateTimeFilter<"Ad"> | Date | string
+  format?: Prisma.StringFilter<"Ad"> | string
+  mediaIds?: Prisma.StringNullableListFilter<"Ad">
+  variantLabel?: Prisma.StringNullableFilter<"Ad"> | string | null
+  sourcePostRef?: Prisma.StringNullableFilter<"Ad"> | string | null
+  effectiveStatus?: Prisma.StringNullableFilter<"Ad"> | string | null
+  reviewFeedback?: Prisma.JsonNullableFilter<"Ad">
+  reviewCheckedAt?: Prisma.DateTimeNullableFilter<"Ad"> | Date | string | null
   adSet?: Prisma.XOR<Prisma.AdSetScalarRelationFilter, Prisma.AdSetWhereInput>
 }, "id">
 
@@ -252,6 +314,13 @@ export type AdOrderByWithAggregationInput = {
   status?: Prisma.SortOrder
   creative?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  format?: Prisma.SortOrder
+  mediaIds?: Prisma.SortOrder
+  variantLabel?: Prisma.SortOrderInput | Prisma.SortOrder
+  sourcePostRef?: Prisma.SortOrderInput | Prisma.SortOrder
+  effectiveStatus?: Prisma.SortOrderInput | Prisma.SortOrder
+  reviewFeedback?: Prisma.SortOrderInput | Prisma.SortOrder
+  reviewCheckedAt?: Prisma.SortOrderInput | Prisma.SortOrder
   _count?: Prisma.AdCountOrderByAggregateInput
   _max?: Prisma.AdMaxOrderByAggregateInput
   _min?: Prisma.AdMinOrderByAggregateInput
@@ -270,6 +339,13 @@ export type AdScalarWhereWithAggregatesInput = {
   status?: Prisma.StringWithAggregatesFilter<"Ad"> | string
   creative?: Prisma.JsonWithAggregatesFilter<"Ad">
   createdAt?: Prisma.DateTimeWithAggregatesFilter<"Ad"> | Date | string
+  format?: Prisma.StringWithAggregatesFilter<"Ad"> | string
+  mediaIds?: Prisma.StringNullableListFilter<"Ad">
+  variantLabel?: Prisma.StringNullableWithAggregatesFilter<"Ad"> | string | null
+  sourcePostRef?: Prisma.StringNullableWithAggregatesFilter<"Ad"> | string | null
+  effectiveStatus?: Prisma.StringNullableWithAggregatesFilter<"Ad"> | string | null
+  reviewFeedback?: Prisma.JsonNullableWithAggregatesFilter<"Ad">
+  reviewCheckedAt?: Prisma.DateTimeNullableWithAggregatesFilter<"Ad"> | Date | string | null
 }
 
 export type AdCreateInput = {
@@ -281,6 +357,13 @@ export type AdCreateInput = {
   status?: string
   creative: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdAt?: Date | string
+  format?: string
+  mediaIds?: Prisma.AdCreatemediaIdsInput | string[]
+  variantLabel?: string | null
+  sourcePostRef?: string | null
+  effectiveStatus?: string | null
+  reviewFeedback?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  reviewCheckedAt?: Date | string | null
   adSet: Prisma.AdSetCreateNestedOneWithoutAdsInput
 }
 
@@ -294,6 +377,13 @@ export type AdUncheckedCreateInput = {
   status?: string
   creative: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdAt?: Date | string
+  format?: string
+  mediaIds?: Prisma.AdCreatemediaIdsInput | string[]
+  variantLabel?: string | null
+  sourcePostRef?: string | null
+  effectiveStatus?: string | null
+  reviewFeedback?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  reviewCheckedAt?: Date | string | null
 }
 
 export type AdUpdateInput = {
@@ -305,6 +395,13 @@ export type AdUpdateInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   creative?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  format?: Prisma.StringFieldUpdateOperationsInput | string
+  mediaIds?: Prisma.AdUpdatemediaIdsInput | string[]
+  variantLabel?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourcePostRef?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  effectiveStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  reviewFeedback?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  reviewCheckedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   adSet?: Prisma.AdSetUpdateOneRequiredWithoutAdsNestedInput
 }
 
@@ -318,6 +415,13 @@ export type AdUncheckedUpdateInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   creative?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  format?: Prisma.StringFieldUpdateOperationsInput | string
+  mediaIds?: Prisma.AdUpdatemediaIdsInput | string[]
+  variantLabel?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourcePostRef?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  effectiveStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  reviewFeedback?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  reviewCheckedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
 }
 
 export type AdCreateManyInput = {
@@ -330,6 +434,13 @@ export type AdCreateManyInput = {
   status?: string
   creative: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdAt?: Date | string
+  format?: string
+  mediaIds?: Prisma.AdCreatemediaIdsInput | string[]
+  variantLabel?: string | null
+  sourcePostRef?: string | null
+  effectiveStatus?: string | null
+  reviewFeedback?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  reviewCheckedAt?: Date | string | null
 }
 
 export type AdUpdateManyMutationInput = {
@@ -341,6 +452,13 @@ export type AdUpdateManyMutationInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   creative?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  format?: Prisma.StringFieldUpdateOperationsInput | string
+  mediaIds?: Prisma.AdUpdatemediaIdsInput | string[]
+  variantLabel?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourcePostRef?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  effectiveStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  reviewFeedback?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  reviewCheckedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
 }
 
 export type AdUncheckedUpdateManyInput = {
@@ -353,6 +471,13 @@ export type AdUncheckedUpdateManyInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   creative?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  format?: Prisma.StringFieldUpdateOperationsInput | string
+  mediaIds?: Prisma.AdUpdatemediaIdsInput | string[]
+  variantLabel?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourcePostRef?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  effectiveStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  reviewFeedback?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  reviewCheckedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
 }
 
 export type AdListRelationFilter = {
@@ -375,6 +500,13 @@ export type AdCountOrderByAggregateInput = {
   status?: Prisma.SortOrder
   creative?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  format?: Prisma.SortOrder
+  mediaIds?: Prisma.SortOrder
+  variantLabel?: Prisma.SortOrder
+  sourcePostRef?: Prisma.SortOrder
+  effectiveStatus?: Prisma.SortOrder
+  reviewFeedback?: Prisma.SortOrder
+  reviewCheckedAt?: Prisma.SortOrder
 }
 
 export type AdMaxOrderByAggregateInput = {
@@ -386,6 +518,11 @@ export type AdMaxOrderByAggregateInput = {
   name?: Prisma.SortOrder
   status?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  format?: Prisma.SortOrder
+  variantLabel?: Prisma.SortOrder
+  sourcePostRef?: Prisma.SortOrder
+  effectiveStatus?: Prisma.SortOrder
+  reviewCheckedAt?: Prisma.SortOrder
 }
 
 export type AdMinOrderByAggregateInput = {
@@ -397,6 +534,11 @@ export type AdMinOrderByAggregateInput = {
   name?: Prisma.SortOrder
   status?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  format?: Prisma.SortOrder
+  variantLabel?: Prisma.SortOrder
+  sourcePostRef?: Prisma.SortOrder
+  effectiveStatus?: Prisma.SortOrder
+  reviewCheckedAt?: Prisma.SortOrder
 }
 
 export type AdCreateNestedManyWithoutAdSetInput = {
@@ -441,6 +583,15 @@ export type AdUncheckedUpdateManyWithoutAdSetNestedInput = {
   deleteMany?: Prisma.AdScalarWhereInput | Prisma.AdScalarWhereInput[]
 }
 
+export type AdCreatemediaIdsInput = {
+  set: string[]
+}
+
+export type AdUpdatemediaIdsInput = {
+  set?: string[]
+  push?: string | string[]
+}
+
 export type AdCreateWithoutAdSetInput = {
   id?: string
   tenantId: string
@@ -450,6 +601,13 @@ export type AdCreateWithoutAdSetInput = {
   status?: string
   creative: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdAt?: Date | string
+  format?: string
+  mediaIds?: Prisma.AdCreatemediaIdsInput | string[]
+  variantLabel?: string | null
+  sourcePostRef?: string | null
+  effectiveStatus?: string | null
+  reviewFeedback?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  reviewCheckedAt?: Date | string | null
 }
 
 export type AdUncheckedCreateWithoutAdSetInput = {
@@ -461,6 +619,13 @@ export type AdUncheckedCreateWithoutAdSetInput = {
   status?: string
   creative: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdAt?: Date | string
+  format?: string
+  mediaIds?: Prisma.AdCreatemediaIdsInput | string[]
+  variantLabel?: string | null
+  sourcePostRef?: string | null
+  effectiveStatus?: string | null
+  reviewFeedback?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  reviewCheckedAt?: Date | string | null
 }
 
 export type AdCreateOrConnectWithoutAdSetInput = {
@@ -502,6 +667,13 @@ export type AdScalarWhereInput = {
   status?: Prisma.StringFilter<"Ad"> | string
   creative?: Prisma.JsonFilter<"Ad">
   createdAt?: Prisma.DateTimeFilter<"Ad"> | Date | string
+  format?: Prisma.StringFilter<"Ad"> | string
+  mediaIds?: Prisma.StringNullableListFilter<"Ad">
+  variantLabel?: Prisma.StringNullableFilter<"Ad"> | string | null
+  sourcePostRef?: Prisma.StringNullableFilter<"Ad"> | string | null
+  effectiveStatus?: Prisma.StringNullableFilter<"Ad"> | string | null
+  reviewFeedback?: Prisma.JsonNullableFilter<"Ad">
+  reviewCheckedAt?: Prisma.DateTimeNullableFilter<"Ad"> | Date | string | null
 }
 
 export type AdCreateManyAdSetInput = {
@@ -513,6 +685,13 @@ export type AdCreateManyAdSetInput = {
   status?: string
   creative: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdAt?: Date | string
+  format?: string
+  mediaIds?: Prisma.AdCreatemediaIdsInput | string[]
+  variantLabel?: string | null
+  sourcePostRef?: string | null
+  effectiveStatus?: string | null
+  reviewFeedback?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  reviewCheckedAt?: Date | string | null
 }
 
 export type AdUpdateWithoutAdSetInput = {
@@ -524,6 +703,13 @@ export type AdUpdateWithoutAdSetInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   creative?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  format?: Prisma.StringFieldUpdateOperationsInput | string
+  mediaIds?: Prisma.AdUpdatemediaIdsInput | string[]
+  variantLabel?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourcePostRef?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  effectiveStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  reviewFeedback?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  reviewCheckedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
 }
 
 export type AdUncheckedUpdateWithoutAdSetInput = {
@@ -535,6 +721,13 @@ export type AdUncheckedUpdateWithoutAdSetInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   creative?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  format?: Prisma.StringFieldUpdateOperationsInput | string
+  mediaIds?: Prisma.AdUpdatemediaIdsInput | string[]
+  variantLabel?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourcePostRef?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  effectiveStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  reviewFeedback?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  reviewCheckedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
 }
 
 export type AdUncheckedUpdateManyWithoutAdSetInput = {
@@ -546,6 +739,13 @@ export type AdUncheckedUpdateManyWithoutAdSetInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   creative?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  format?: Prisma.StringFieldUpdateOperationsInput | string
+  mediaIds?: Prisma.AdUpdatemediaIdsInput | string[]
+  variantLabel?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourcePostRef?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  effectiveStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  reviewFeedback?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  reviewCheckedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
 }
 
 
@@ -560,6 +760,13 @@ export type AdSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = run
   status?: boolean
   creative?: boolean
   createdAt?: boolean
+  format?: boolean
+  mediaIds?: boolean
+  variantLabel?: boolean
+  sourcePostRef?: boolean
+  effectiveStatus?: boolean
+  reviewFeedback?: boolean
+  reviewCheckedAt?: boolean
   adSet?: boolean | Prisma.AdSetDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["ad"]>
 
@@ -573,6 +780,13 @@ export type AdSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extensions
   status?: boolean
   creative?: boolean
   createdAt?: boolean
+  format?: boolean
+  mediaIds?: boolean
+  variantLabel?: boolean
+  sourcePostRef?: boolean
+  effectiveStatus?: boolean
+  reviewFeedback?: boolean
+  reviewCheckedAt?: boolean
   adSet?: boolean | Prisma.AdSetDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["ad"]>
 
@@ -586,6 +800,13 @@ export type AdSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensions
   status?: boolean
   creative?: boolean
   createdAt?: boolean
+  format?: boolean
+  mediaIds?: boolean
+  variantLabel?: boolean
+  sourcePostRef?: boolean
+  effectiveStatus?: boolean
+  reviewFeedback?: boolean
+  reviewCheckedAt?: boolean
   adSet?: boolean | Prisma.AdSetDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["ad"]>
 
@@ -599,9 +820,16 @@ export type AdSelectScalar = {
   status?: boolean
   creative?: boolean
   createdAt?: boolean
+  format?: boolean
+  mediaIds?: boolean
+  variantLabel?: boolean
+  sourcePostRef?: boolean
+  effectiveStatus?: boolean
+  reviewFeedback?: boolean
+  reviewCheckedAt?: boolean
 }
 
-export type AdOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "tenantId" | "adSetId" | "metaAdId" | "creativeAssetId" | "name" | "status" | "creative" | "createdAt", ExtArgs["result"]["ad"]>
+export type AdOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "tenantId" | "adSetId" | "metaAdId" | "creativeAssetId" | "name" | "status" | "creative" | "createdAt" | "format" | "mediaIds" | "variantLabel" | "sourcePostRef" | "effectiveStatus" | "reviewFeedback" | "reviewCheckedAt", ExtArgs["result"]["ad"]>
 export type AdInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   adSet?: boolean | Prisma.AdSetDefaultArgs<ExtArgs>
 }
@@ -627,6 +855,13 @@ export type $AdPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = r
     status: string
     creative: runtime.JsonValue
     createdAt: Date
+    format: string
+    mediaIds: string[]
+    variantLabel: string | null
+    sourcePostRef: string | null
+    effectiveStatus: string | null
+    reviewFeedback: runtime.JsonValue | null
+    reviewCheckedAt: Date | null
   }, ExtArgs["result"]["ad"]>
   composites: {}
 }
@@ -1060,6 +1295,13 @@ export interface AdFieldRefs {
   readonly status: Prisma.FieldRef<"Ad", 'String'>
   readonly creative: Prisma.FieldRef<"Ad", 'Json'>
   readonly createdAt: Prisma.FieldRef<"Ad", 'DateTime'>
+  readonly format: Prisma.FieldRef<"Ad", 'String'>
+  readonly mediaIds: Prisma.FieldRef<"Ad", 'String[]'>
+  readonly variantLabel: Prisma.FieldRef<"Ad", 'String'>
+  readonly sourcePostRef: Prisma.FieldRef<"Ad", 'String'>
+  readonly effectiveStatus: Prisma.FieldRef<"Ad", 'String'>
+  readonly reviewFeedback: Prisma.FieldRef<"Ad", 'Json'>
+  readonly reviewCheckedAt: Prisma.FieldRef<"Ad", 'DateTime'>
 }
     
 

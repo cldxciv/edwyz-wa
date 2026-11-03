@@ -513,9 +513,16 @@ describe("the red team: a fully obedient (compromised) model still cannot act wi
   });
 
   it("no tool can confirm: none of the 58 toolset entries is a confirm, approve or undo-of-a-card tool", () => {
+    // (PRM-13) refresh_customer_audience re-sends a customer list to Meta (IG-PAGE-ADS-SPEC 6.4): it is itself a card and
+    // refreshes no card, so it is the one named exception, checked below to stay a confirm-class card.
+    const NOT_A_CARD_VERB = new Set(["refresh_customer_audience"]);
     for (const rc of ["agent", "admin"] as const) {
       const names = toolsFor(rc).map((t) => t.name);
-      expect(names.filter((n) => /confirm|approve|nonce|revise|refresh|cancel_action/.test(n))).toEqual([]);
+      expect(names.filter((n) => !NOT_A_CARD_VERB.has(n) && /confirm|approve|nonce|revise|refresh|cancel_action/.test(n))).toEqual([]);
+    }
+    for (const name of NOT_A_CARD_VERB) {
+      const def = actionByName(name)!;
+      expect(typeof def.effects === "function" ? def.risk : effectiveRisk(def.risk, def.effects), name).toBe("confirm");
     }
     // Loud actions are cards by their effects alone (deriveRisk), whatever the model says.
     for (const name of ["send_text_reply", "delete_template", "delete_contact", "invite_teammate", "submit_template", "record_opt_in"]) {

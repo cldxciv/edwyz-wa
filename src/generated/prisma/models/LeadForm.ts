@@ -33,6 +33,15 @@ export type LeadFormMinAggregateOutputType = {
   consentText: string | null
   status: string | null
   createdAt: Date | null
+  origin: string | null
+  formType: string | null
+  locale: string | null
+  metaStatus: string | null
+  syncedAt: Date | null
+  copiedFromId: string | null
+  lastBackfillAt: Date | null
+  testLeadUntil: Date | null
+  hiddenAt: Date | null
 }
 
 export type LeadFormMaxAggregateOutputType = {
@@ -44,6 +53,15 @@ export type LeadFormMaxAggregateOutputType = {
   consentText: string | null
   status: string | null
   createdAt: Date | null
+  origin: string | null
+  formType: string | null
+  locale: string | null
+  metaStatus: string | null
+  syncedAt: Date | null
+  copiedFromId: string | null
+  lastBackfillAt: Date | null
+  testLeadUntil: Date | null
+  hiddenAt: Date | null
 }
 
 export type LeadFormCountAggregateOutputType = {
@@ -55,6 +73,16 @@ export type LeadFormCountAggregateOutputType = {
   consentText: number
   status: number
   createdAt: number
+  origin: number
+  formType: number
+  locale: number
+  spec: number
+  metaStatus: number
+  syncedAt: number
+  copiedFromId: number
+  lastBackfillAt: number
+  testLeadUntil: number
+  hiddenAt: number
   _all: number
 }
 
@@ -68,6 +96,15 @@ export type LeadFormMinAggregateInputType = {
   consentText?: true
   status?: true
   createdAt?: true
+  origin?: true
+  formType?: true
+  locale?: true
+  metaStatus?: true
+  syncedAt?: true
+  copiedFromId?: true
+  lastBackfillAt?: true
+  testLeadUntil?: true
+  hiddenAt?: true
 }
 
 export type LeadFormMaxAggregateInputType = {
@@ -79,6 +116,15 @@ export type LeadFormMaxAggregateInputType = {
   consentText?: true
   status?: true
   createdAt?: true
+  origin?: true
+  formType?: true
+  locale?: true
+  metaStatus?: true
+  syncedAt?: true
+  copiedFromId?: true
+  lastBackfillAt?: true
+  testLeadUntil?: true
+  hiddenAt?: true
 }
 
 export type LeadFormCountAggregateInputType = {
@@ -90,6 +136,16 @@ export type LeadFormCountAggregateInputType = {
   consentText?: true
   status?: true
   createdAt?: true
+  origin?: true
+  formType?: true
+  locale?: true
+  spec?: true
+  metaStatus?: true
+  syncedAt?: true
+  copiedFromId?: true
+  lastBackfillAt?: true
+  testLeadUntil?: true
+  hiddenAt?: true
   _all?: true
 }
 
@@ -174,6 +230,16 @@ export type LeadFormGroupByOutputType = {
   consentText: string | null
   status: string
   createdAt: Date
+  origin: string
+  formType: string | null
+  locale: string | null
+  spec: runtime.JsonValue | null
+  metaStatus: string | null
+  syncedAt: Date | null
+  copiedFromId: string | null
+  lastBackfillAt: Date | null
+  testLeadUntil: Date | null
+  hiddenAt: Date | null
   _count: LeadFormCountAggregateOutputType | null
   _min: LeadFormMinAggregateOutputType | null
   _max: LeadFormMaxAggregateOutputType | null
@@ -206,6 +272,16 @@ export type LeadFormWhereInput = {
   consentText?: Prisma.StringNullableFilter<"LeadForm"> | string | null
   status?: Prisma.StringFilter<"LeadForm"> | string
   createdAt?: Prisma.DateTimeFilter<"LeadForm"> | Date | string
+  origin?: Prisma.StringFilter<"LeadForm"> | string
+  formType?: Prisma.StringNullableFilter<"LeadForm"> | string | null
+  locale?: Prisma.StringNullableFilter<"LeadForm"> | string | null
+  spec?: Prisma.JsonNullableFilter<"LeadForm">
+  metaStatus?: Prisma.StringNullableFilter<"LeadForm"> | string | null
+  syncedAt?: Prisma.DateTimeNullableFilter<"LeadForm"> | Date | string | null
+  copiedFromId?: Prisma.StringNullableFilter<"LeadForm"> | string | null
+  lastBackfillAt?: Prisma.DateTimeNullableFilter<"LeadForm"> | Date | string | null
+  testLeadUntil?: Prisma.DateTimeNullableFilter<"LeadForm"> | Date | string | null
+  hiddenAt?: Prisma.DateTimeNullableFilter<"LeadForm"> | Date | string | null
   leads?: Prisma.LeadListRelationFilter
 }
 
@@ -218,6 +294,16 @@ export type LeadFormOrderByWithRelationInput = {
   consentText?: Prisma.SortOrderInput | Prisma.SortOrder
   status?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  origin?: Prisma.SortOrder
+  formType?: Prisma.SortOrderInput | Prisma.SortOrder
+  locale?: Prisma.SortOrderInput | Prisma.SortOrder
+  spec?: Prisma.SortOrderInput | Prisma.SortOrder
+  metaStatus?: Prisma.SortOrderInput | Prisma.SortOrder
+  syncedAt?: Prisma.SortOrderInput | Prisma.SortOrder
+  copiedFromId?: Prisma.SortOrderInput | Prisma.SortOrder
+  lastBackfillAt?: Prisma.SortOrderInput | Prisma.SortOrder
+  testLeadUntil?: Prisma.SortOrderInput | Prisma.SortOrder
+  hiddenAt?: Prisma.SortOrderInput | Prisma.SortOrder
   leads?: Prisma.LeadOrderByRelationAggregateInput
 }
 
@@ -234,6 +320,16 @@ export type LeadFormWhereUniqueInput = Prisma.AtLeast<{
   consentText?: Prisma.StringNullableFilter<"LeadForm"> | string | null
   status?: Prisma.StringFilter<"LeadForm"> | string
   createdAt?: Prisma.DateTimeFilter<"LeadForm"> | Date | string
+  origin?: Prisma.StringFilter<"LeadForm"> | string
+  formType?: Prisma.StringNullableFilter<"LeadForm"> | string | null
+  locale?: Prisma.StringNullableFilter<"LeadForm"> | string | null
+  spec?: Prisma.JsonNullableFilter<"LeadForm">
+  metaStatus?: Prisma.StringNullableFilter<"LeadForm"> | string | null
+  syncedAt?: Prisma.DateTimeNullableFilter<"LeadForm"> | Date | string | null
+  copiedFromId?: Prisma.StringNullableFilter<"LeadForm"> | string | null
+  lastBackfillAt?: Prisma.DateTimeNullableFilter<"LeadForm"> | Date | string | null
+  testLeadUntil?: Prisma.DateTimeNullableFilter<"LeadForm"> | Date | string | null
+  hiddenAt?: Prisma.DateTimeNullableFilter<"LeadForm"> | Date | string | null
   leads?: Prisma.LeadListRelationFilter
 }, "id" | "tenantId_metaFormId">
 
@@ -246,6 +342,16 @@ export type LeadFormOrderByWithAggregationInput = {
   consentText?: Prisma.SortOrderInput | Prisma.SortOrder
   status?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  origin?: Prisma.SortOrder
+  formType?: Prisma.SortOrderInput | Prisma.SortOrder
+  locale?: Prisma.SortOrderInput | Prisma.SortOrder
+  spec?: Prisma.SortOrderInput | Prisma.SortOrder
+  metaStatus?: Prisma.SortOrderInput | Prisma.SortOrder
+  syncedAt?: Prisma.SortOrderInput | Prisma.SortOrder
+  copiedFromId?: Prisma.SortOrderInput | Prisma.SortOrder
+  lastBackfillAt?: Prisma.SortOrderInput | Prisma.SortOrder
+  testLeadUntil?: Prisma.SortOrderInput | Prisma.SortOrder
+  hiddenAt?: Prisma.SortOrderInput | Prisma.SortOrder
   _count?: Prisma.LeadFormCountOrderByAggregateInput
   _max?: Prisma.LeadFormMaxOrderByAggregateInput
   _min?: Prisma.LeadFormMinOrderByAggregateInput
@@ -263,6 +369,16 @@ export type LeadFormScalarWhereWithAggregatesInput = {
   consentText?: Prisma.StringNullableWithAggregatesFilter<"LeadForm"> | string | null
   status?: Prisma.StringWithAggregatesFilter<"LeadForm"> | string
   createdAt?: Prisma.DateTimeWithAggregatesFilter<"LeadForm"> | Date | string
+  origin?: Prisma.StringWithAggregatesFilter<"LeadForm"> | string
+  formType?: Prisma.StringNullableWithAggregatesFilter<"LeadForm"> | string | null
+  locale?: Prisma.StringNullableWithAggregatesFilter<"LeadForm"> | string | null
+  spec?: Prisma.JsonNullableWithAggregatesFilter<"LeadForm">
+  metaStatus?: Prisma.StringNullableWithAggregatesFilter<"LeadForm"> | string | null
+  syncedAt?: Prisma.DateTimeNullableWithAggregatesFilter<"LeadForm"> | Date | string | null
+  copiedFromId?: Prisma.StringNullableWithAggregatesFilter<"LeadForm"> | string | null
+  lastBackfillAt?: Prisma.DateTimeNullableWithAggregatesFilter<"LeadForm"> | Date | string | null
+  testLeadUntil?: Prisma.DateTimeNullableWithAggregatesFilter<"LeadForm"> | Date | string | null
+  hiddenAt?: Prisma.DateTimeNullableWithAggregatesFilter<"LeadForm"> | Date | string | null
 }
 
 export type LeadFormCreateInput = {
@@ -274,6 +390,16 @@ export type LeadFormCreateInput = {
   consentText?: string | null
   status?: string
   createdAt?: Date | string
+  origin?: string
+  formType?: string | null
+  locale?: string | null
+  spec?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  metaStatus?: string | null
+  syncedAt?: Date | string | null
+  copiedFromId?: string | null
+  lastBackfillAt?: Date | string | null
+  testLeadUntil?: Date | string | null
+  hiddenAt?: Date | string | null
   leads?: Prisma.LeadCreateNestedManyWithoutLeadFormInput
 }
 
@@ -286,6 +412,16 @@ export type LeadFormUncheckedCreateInput = {
   consentText?: string | null
   status?: string
   createdAt?: Date | string
+  origin?: string
+  formType?: string | null
+  locale?: string | null
+  spec?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  metaStatus?: string | null
+  syncedAt?: Date | string | null
+  copiedFromId?: string | null
+  lastBackfillAt?: Date | string | null
+  testLeadUntil?: Date | string | null
+  hiddenAt?: Date | string | null
   leads?: Prisma.LeadUncheckedCreateNestedManyWithoutLeadFormInput
 }
 
@@ -298,6 +434,16 @@ export type LeadFormUpdateInput = {
   consentText?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  origin?: Prisma.StringFieldUpdateOperationsInput | string
+  formType?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  locale?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  spec?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  metaStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  syncedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  copiedFromId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  lastBackfillAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  testLeadUntil?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  hiddenAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   leads?: Prisma.LeadUpdateManyWithoutLeadFormNestedInput
 }
 
@@ -310,6 +456,16 @@ export type LeadFormUncheckedUpdateInput = {
   consentText?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  origin?: Prisma.StringFieldUpdateOperationsInput | string
+  formType?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  locale?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  spec?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  metaStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  syncedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  copiedFromId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  lastBackfillAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  testLeadUntil?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  hiddenAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   leads?: Prisma.LeadUncheckedUpdateManyWithoutLeadFormNestedInput
 }
 
@@ -322,6 +478,16 @@ export type LeadFormCreateManyInput = {
   consentText?: string | null
   status?: string
   createdAt?: Date | string
+  origin?: string
+  formType?: string | null
+  locale?: string | null
+  spec?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  metaStatus?: string | null
+  syncedAt?: Date | string | null
+  copiedFromId?: string | null
+  lastBackfillAt?: Date | string | null
+  testLeadUntil?: Date | string | null
+  hiddenAt?: Date | string | null
 }
 
 export type LeadFormUpdateManyMutationInput = {
@@ -333,6 +499,16 @@ export type LeadFormUpdateManyMutationInput = {
   consentText?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  origin?: Prisma.StringFieldUpdateOperationsInput | string
+  formType?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  locale?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  spec?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  metaStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  syncedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  copiedFromId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  lastBackfillAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  testLeadUntil?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  hiddenAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
 }
 
 export type LeadFormUncheckedUpdateManyInput = {
@@ -344,6 +520,16 @@ export type LeadFormUncheckedUpdateManyInput = {
   consentText?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  origin?: Prisma.StringFieldUpdateOperationsInput | string
+  formType?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  locale?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  spec?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  metaStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  syncedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  copiedFromId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  lastBackfillAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  testLeadUntil?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  hiddenAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
 }
 
 export type LeadFormTenantIdMetaFormIdCompoundUniqueInput = {
@@ -360,6 +546,16 @@ export type LeadFormCountOrderByAggregateInput = {
   consentText?: Prisma.SortOrder
   status?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  origin?: Prisma.SortOrder
+  formType?: Prisma.SortOrder
+  locale?: Prisma.SortOrder
+  spec?: Prisma.SortOrder
+  metaStatus?: Prisma.SortOrder
+  syncedAt?: Prisma.SortOrder
+  copiedFromId?: Prisma.SortOrder
+  lastBackfillAt?: Prisma.SortOrder
+  testLeadUntil?: Prisma.SortOrder
+  hiddenAt?: Prisma.SortOrder
 }
 
 export type LeadFormMaxOrderByAggregateInput = {
@@ -371,6 +567,15 @@ export type LeadFormMaxOrderByAggregateInput = {
   consentText?: Prisma.SortOrder
   status?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  origin?: Prisma.SortOrder
+  formType?: Prisma.SortOrder
+  locale?: Prisma.SortOrder
+  metaStatus?: Prisma.SortOrder
+  syncedAt?: Prisma.SortOrder
+  copiedFromId?: Prisma.SortOrder
+  lastBackfillAt?: Prisma.SortOrder
+  testLeadUntil?: Prisma.SortOrder
+  hiddenAt?: Prisma.SortOrder
 }
 
 export type LeadFormMinOrderByAggregateInput = {
@@ -382,6 +587,15 @@ export type LeadFormMinOrderByAggregateInput = {
   consentText?: Prisma.SortOrder
   status?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  origin?: Prisma.SortOrder
+  formType?: Prisma.SortOrder
+  locale?: Prisma.SortOrder
+  metaStatus?: Prisma.SortOrder
+  syncedAt?: Prisma.SortOrder
+  copiedFromId?: Prisma.SortOrder
+  lastBackfillAt?: Prisma.SortOrder
+  testLeadUntil?: Prisma.SortOrder
+  hiddenAt?: Prisma.SortOrder
 }
 
 export type LeadFormNullableScalarRelationFilter = {
@@ -414,6 +628,16 @@ export type LeadFormCreateWithoutLeadsInput = {
   consentText?: string | null
   status?: string
   createdAt?: Date | string
+  origin?: string
+  formType?: string | null
+  locale?: string | null
+  spec?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  metaStatus?: string | null
+  syncedAt?: Date | string | null
+  copiedFromId?: string | null
+  lastBackfillAt?: Date | string | null
+  testLeadUntil?: Date | string | null
+  hiddenAt?: Date | string | null
 }
 
 export type LeadFormUncheckedCreateWithoutLeadsInput = {
@@ -425,6 +649,16 @@ export type LeadFormUncheckedCreateWithoutLeadsInput = {
   consentText?: string | null
   status?: string
   createdAt?: Date | string
+  origin?: string
+  formType?: string | null
+  locale?: string | null
+  spec?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  metaStatus?: string | null
+  syncedAt?: Date | string | null
+  copiedFromId?: string | null
+  lastBackfillAt?: Date | string | null
+  testLeadUntil?: Date | string | null
+  hiddenAt?: Date | string | null
 }
 
 export type LeadFormCreateOrConnectWithoutLeadsInput = {
@@ -452,6 +686,16 @@ export type LeadFormUpdateWithoutLeadsInput = {
   consentText?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  origin?: Prisma.StringFieldUpdateOperationsInput | string
+  formType?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  locale?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  spec?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  metaStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  syncedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  copiedFromId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  lastBackfillAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  testLeadUntil?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  hiddenAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
 }
 
 export type LeadFormUncheckedUpdateWithoutLeadsInput = {
@@ -463,6 +707,16 @@ export type LeadFormUncheckedUpdateWithoutLeadsInput = {
   consentText?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  origin?: Prisma.StringFieldUpdateOperationsInput | string
+  formType?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  locale?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  spec?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  metaStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  syncedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  copiedFromId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  lastBackfillAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  testLeadUntil?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  hiddenAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
 }
 
 
@@ -505,6 +759,16 @@ export type LeadFormSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs
   consentText?: boolean
   status?: boolean
   createdAt?: boolean
+  origin?: boolean
+  formType?: boolean
+  locale?: boolean
+  spec?: boolean
+  metaStatus?: boolean
+  syncedAt?: boolean
+  copiedFromId?: boolean
+  lastBackfillAt?: boolean
+  testLeadUntil?: boolean
+  hiddenAt?: boolean
   leads?: boolean | Prisma.LeadForm$leadsArgs<ExtArgs>
   _count?: boolean | Prisma.LeadFormCountOutputTypeDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["leadForm"]>
@@ -518,6 +782,16 @@ export type LeadFormSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Exte
   consentText?: boolean
   status?: boolean
   createdAt?: boolean
+  origin?: boolean
+  formType?: boolean
+  locale?: boolean
+  spec?: boolean
+  metaStatus?: boolean
+  syncedAt?: boolean
+  copiedFromId?: boolean
+  lastBackfillAt?: boolean
+  testLeadUntil?: boolean
+  hiddenAt?: boolean
 }, ExtArgs["result"]["leadForm"]>
 
 export type LeadFormSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
@@ -529,6 +803,16 @@ export type LeadFormSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Exte
   consentText?: boolean
   status?: boolean
   createdAt?: boolean
+  origin?: boolean
+  formType?: boolean
+  locale?: boolean
+  spec?: boolean
+  metaStatus?: boolean
+  syncedAt?: boolean
+  copiedFromId?: boolean
+  lastBackfillAt?: boolean
+  testLeadUntil?: boolean
+  hiddenAt?: boolean
 }, ExtArgs["result"]["leadForm"]>
 
 export type LeadFormSelectScalar = {
@@ -540,9 +824,19 @@ export type LeadFormSelectScalar = {
   consentText?: boolean
   status?: boolean
   createdAt?: boolean
+  origin?: boolean
+  formType?: boolean
+  locale?: boolean
+  spec?: boolean
+  metaStatus?: boolean
+  syncedAt?: boolean
+  copiedFromId?: boolean
+  lastBackfillAt?: boolean
+  testLeadUntil?: boolean
+  hiddenAt?: boolean
 }
 
-export type LeadFormOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "tenantId" | "pageAssetId" | "metaFormId" | "name" | "consentText" | "status" | "createdAt", ExtArgs["result"]["leadForm"]>
+export type LeadFormOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "tenantId" | "pageAssetId" | "metaFormId" | "name" | "consentText" | "status" | "createdAt" | "origin" | "formType" | "locale" | "spec" | "metaStatus" | "syncedAt" | "copiedFromId" | "lastBackfillAt" | "testLeadUntil" | "hiddenAt", ExtArgs["result"]["leadForm"]>
 export type LeadFormInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   leads?: boolean | Prisma.LeadForm$leadsArgs<ExtArgs>
   _count?: boolean | Prisma.LeadFormCountOutputTypeDefaultArgs<ExtArgs>
@@ -564,6 +858,16 @@ export type $LeadFormPayload<ExtArgs extends runtime.Types.Extensions.InternalAr
     consentText: string | null
     status: string
     createdAt: Date
+    origin: string
+    formType: string | null
+    locale: string | null
+    spec: runtime.JsonValue | null
+    metaStatus: string | null
+    syncedAt: Date | null
+    copiedFromId: string | null
+    lastBackfillAt: Date | null
+    testLeadUntil: Date | null
+    hiddenAt: Date | null
   }, ExtArgs["result"]["leadForm"]>
   composites: {}
 }
@@ -996,6 +1300,16 @@ export interface LeadFormFieldRefs {
   readonly consentText: Prisma.FieldRef<"LeadForm", 'String'>
   readonly status: Prisma.FieldRef<"LeadForm", 'String'>
   readonly createdAt: Prisma.FieldRef<"LeadForm", 'DateTime'>
+  readonly origin: Prisma.FieldRef<"LeadForm", 'String'>
+  readonly formType: Prisma.FieldRef<"LeadForm", 'String'>
+  readonly locale: Prisma.FieldRef<"LeadForm", 'String'>
+  readonly spec: Prisma.FieldRef<"LeadForm", 'Json'>
+  readonly metaStatus: Prisma.FieldRef<"LeadForm", 'String'>
+  readonly syncedAt: Prisma.FieldRef<"LeadForm", 'DateTime'>
+  readonly copiedFromId: Prisma.FieldRef<"LeadForm", 'String'>
+  readonly lastBackfillAt: Prisma.FieldRef<"LeadForm", 'DateTime'>
+  readonly testLeadUntil: Prisma.FieldRef<"LeadForm", 'DateTime'>
+  readonly hiddenAt: Prisma.FieldRef<"LeadForm", 'DateTime'>
 }
     
 

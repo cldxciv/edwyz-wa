@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FakeSpendDb } from "./helpers/fake-spend-db";
@@ -8,6 +9,12 @@ const h = vi.hoisted(() => ({
   disconnect: vi.fn(),
   anonymise: vi.fn(),
   fs: { lstat: vi.fn(), readdir: vi.fn(), rm: vi.fn(), unlink: vi.fn(), realpath: vi.fn() },
+  // docs/IG-PAGE-ADS-SPEC.md 5.5: the Meta audience hooks (stubs until PRM-11) and Eddy's contact sweep, as spies.
+  forgetContact: vi.fn(),
+  audienceDeletes: vi.fn(),
+  accountAudienceDeletes: vi.fn(),
+  eddyErase: vi.fn(),
+  deleteMedia: vi.fn(),
 }));
 
 vi.mock("@/lib/db", async () => {
@@ -23,6 +30,14 @@ vi.mock("@/lib/admin/auth", () => ({
   requirePlatformAdmin: async () => ({ actor: { userId: "admin1", tenantId: "t-admin", role: "owner" }, email: "admin@edwyz.test" }),
 }));
 vi.mock("node:fs/promises", () => ({ default: h.fs, ...h.fs }));
+vi.mock("@/lib/promote/forget", () => ({
+  forgetContact: h.forgetContact,
+  queueWorkspaceAudienceDeletes: h.audienceDeletes,
+  queueAdAccountAudienceDeletes: h.accountAudienceDeletes,
+  customerListAudiencesExist: async () => false,
+}));
+vi.mock("@/lib/eddy/erasure-sweep", () => ({ eraseContactFromEddy: h.eddyErase }));
+vi.mock("@/lib/content/media", async (original) => ({ ...(await original<typeof import("@/lib/content/media")>()), deleteMedia: h.deleteMedia }));
 
 import { POST as eraseRoute } from "@/app/api/admin/tenants/[id]/erase/route";
 import { POST as deletionCallback } from "@/app/api/meta/data-deletion/route";
@@ -30,8 +45,9 @@ import { processDeletionRequest, runDeletionRequestSweep } from "@/lib/lifecycle
 import { eraseMetaConnectionData, eraseMetaUserData } from "@/lib/lifecycle/erase-meta";
 import { eraseWorkspaceData, purgeAppendOnly, purgeGucValue, PURGE_GUC, tombstoneKey } from "@/lib/lifecycle/erase-workspace";
 import { cleanupOrphanCreativeFiles, removeTenantFiles, resolveTenantDir } from "@/lib/lifecycle/files";
-import { appendOnlyPurgeTables, deletableTables, lowerFirst } from "@/lib/lifecycle/personal-data";
+import { appendOnlyPurgeTables, deletableTables, erasureTransactionTables, lowerFirst, PERSONAL_DATA } from "@/lib/lifecycle/personal-data";
 import { worker } from "@/lib/lifecycle/worker";
+import { setLogSink } from "@/lib/log";
 
 process.env.DATA_DIR = path.resolve("/srv/wa-data");
 process.env.SITE_URL = "https://wa.edwyz.com";
@@ -75,6 +91,12 @@ beforeEach(() => {
   h.fs.realpath.mockImplementation(async (p: string) => p);
   h.fs.rm.mockResolvedValue(undefined);
   h.fs.unlink.mockResolvedValue(undefined);
+  for (const fn of [h.forgetContact, h.audienceDeletes, h.accountAudienceDeletes, h.eddyErase, h.deleteMedia]) fn.mockReset();
+  h.forgetContact.mockResolvedValue({ queued: false, audiences: 0 });
+  h.audienceDeletes.mockResolvedValue({ audiences: 0, queued: 0, failed: 0 });
+  h.accountAudienceDeletes.mockResolvedValue({ audiences: 0, queued: 0, failed: 0 });
+  h.eddyErase.mockResolvedValue(undefined);
+  h.deleteMedia.mockResolvedValue(true);
 });
 
 describe("eraseWorkspaceData", () => {
@@ -291,6 +313,39 @@ describe("eraseWorkspaceData", () => {
     expect(h.db.rows("contact")).toHaveLength(1);
   });
 
+  it("cancels at Razorpay a new plan waiting to start, whose only record is a setting erasure deletes (and stops if it cannot)", async () => {
+    seedTwoWorkspaces();
+    const next = { kind: "next_subscription", authorized: true, replaces: "sub_1", toPlanId: "p", toPlanName: "Agency", fromPlanId: "g", razorpaySubscriptionId: "sub_2", at: "2026-11-30T00:00:00.000Z", requestedAt: "2026-10-20T00:00:00.000Z", requestedBy: "u" };
+    h.db.seed("platformSetting", [{ key: "billing:plan-change:t1", value: next }]);
+    const calls: string[] = [];
+    let cancelStatus = 500;
+    const fetchMock = vi.fn(async (url: string, init: { method: string }) => {
+      const path = new URL(url).pathname;
+      calls.push(`${init.method} ${path}`);
+      if (path === "/v1/subscriptions/sub_2/cancel") return new Response(JSON.stringify(cancelStatus === 200 ? { id: "sub_2", status: "cancelled" } : {}), { status: cancelStatus });
+      return new Response(JSON.stringify({ id: "sub_2", status: "authenticated" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.RAZORPAY_KEY_ID = "rzp_test_k";
+    process.env.RAZORPAY_KEY_SECRET = "keysecret";
+    try {
+      // Razorpay cannot cancel it and still has it: nothing is erased.
+      await expect(eraseWorkspaceData("t1", { now: ISO })).rejects.toMatchObject({ status: 409 });
+      expect(h.db.rows("contact")).toHaveLength(2);
+      expect(h.db.rows("platformSetting").some((r) => r.key === "billing:plan-change:t1")).toBe(true);
+      cancelStatus = 200;
+      calls.length = 0;
+      await eraseWorkspaceData("t1", { now: ISO });
+      expect(calls).toContain("POST /v1/subscriptions/sub_2/cancel");
+      expect(h.db.rows("platformSetting").some((r) => r.key === "billing:plan-change:t1")).toBe(false);
+      expect(h.db.rows("contact")).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+      delete process.env.RAZORPAY_KEY_ID;
+      delete process.env.RAZORPAY_KEY_SECRET;
+    }
+  });
+
   it("anonymises members left without a workspace, but not admins or members of other workspaces", async () => {
     h.db.seed("tenant", [{ id: "t1", slug: "s1" }, { id: "t2", slug: "s2" }]);
     h.db.seed("user", [
@@ -329,6 +384,212 @@ describe("eraseWorkspaceData", () => {
     const again = await eraseWorkspaceData("t1");
     expect(again.tenantFound).toBe(false);
     expect(h.db.rows("contact")).toHaveLength(1);
+  });
+});
+
+describe("Instagram and Facebook Page ads data in workspace erasure (docs/IG-PAGE-ADS-SPEC.md 5.5)", () => {
+  const PROMOTE = ["InsightBreakdown", "AdTest", "AdMedia", "AdAudienceUpload", "AdAudience"];
+
+  it("deletes the five tables inside the final transaction, with the workspace row, and only this workspace's rows", async () => {
+    seedTwoWorkspaces();
+    const result = await eraseWorkspaceData("t1", { now: ISO });
+    const finalTx = h.db.transactions.at(-1)!;
+    expect(finalTx.status).toBe("committed");
+    const from = h.db.events.indexOf(`tx:begin:${finalTx.id}`);
+    const to = h.db.events.indexOf(`tx:commit:${finalTx.id}`);
+    expect(h.db.events.slice(from + 1, to)).toEqual([...PROMOTE.map((id) => `delete:${lowerFirst(id)}`), "delete:tenant"]);
+    expect(erasureTransactionTables().map((e) => e.id)).toEqual(PROMOTE);
+    for (const id of PROMOTE) {
+      // Not touched before the final transaction.
+      expect(h.db.events.indexOf(`delete:${lowerFirst(id)}`), id).toBeGreaterThan(from);
+      expect(h.db.rows(lowerFirst(id)).map((r) => r.tenantId), id).toEqual(["t2"]);
+      expect(result.counts[id], id).toBe(1);
+    }
+    expect(h.db.rows("platformSetting").some((r) => r.key === tombstoneKey("t1"))).toBe(true);
+  });
+
+  it("deletes the customer-list audiences on Meta first: before the Meta connections are revoked and before any row goes", async () => {
+    seedTwoWorkspaces();
+    h.audienceDeletes.mockImplementation(async () => {
+      h.db.events.push("promote:audience-deletes");
+      return { audiences: 2, queued: 2, failed: 0 };
+    });
+    h.disconnect.mockImplementation(async (_a: unknown, id: string) => void h.db.events.push(`disconnect:${id}`));
+    await eraseWorkspaceData("t1", { now: ISO });
+    expect(h.audienceDeletes).toHaveBeenCalledTimes(1);
+    expect(h.audienceDeletes).toHaveBeenCalledWith("t1");
+    const at = h.db.events.indexOf("promote:audience-deletes");
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(at).toBeLessThan(h.db.events.findIndex((e) => e.startsWith("disconnect:")));
+    expect(at).toBeLessThan(h.db.events.findIndex((e) => e.startsWith("delete:")));
+    expect(at).toBeLessThan(h.db.events.indexOf(`tx:begin:${h.db.transactions.at(-1)!.id}`));
+  });
+
+  it("logs the outcome with counts only, and carries on when the Meta deletes fail", async () => {
+    const lines: string[] = [];
+    setLogSink((_level, line) => lines.push(line));
+    try {
+      seedTwoWorkspaces();
+      h.audienceDeletes.mockResolvedValueOnce({ audiences: 3, queued: 2, failed: 1 });
+      await eraseWorkspaceData("t1", { now: ISO });
+      const ok = JSON.parse(lines.find((l) => l.includes("lifecycle.erase.meta_audiences"))!);
+      expect(ok).toMatchObject({ msg: "lifecycle.erase.meta_audiences", audiences: 3, queued: 2, failed: 1 });
+
+      lines.length = 0;
+      seedTwoWorkspaces();
+      h.audienceDeletes.mockRejectedValueOnce(new Error("Meta is down"));
+      const result = await eraseWorkspaceData("t2", { now: ISO });
+      expect(lines.some((l) => l.includes("lifecycle.erase.meta_audiences_failed"))).toBe(true);
+      expect(result.tenantFound).toBe(true);
+      for (const id of PROMOTE) expect(h.db.rows(lowerFirst(id)).filter((r) => r.tenantId === "t2"), id).toEqual([]);
+      // Never the workspace id in these lines.
+      expect(lines.filter((l) => l.includes("lifecycle.erase.meta_audiences")).join("\n")).not.toContain("t2");
+    } finally {
+      setLogSink(null);
+    }
+  });
+});
+
+describe("contact erasure and Meta audiences (docs/IG-PAGE-ADS-SPEC.md 5.5)", () => {
+  type ContactDelegate = Record<string, unknown>;
+  type Where = { tenantId_phone: { tenantId: string; phone: string } };
+
+  /** fake-db has no compound-key lookup or single-row delete; add both for the contact model, and undo it afterwards. */
+  function contactLookup(): () => void {
+    const d = h.db.prisma.contact as ContactDelegate;
+    const original = { findUnique: d.findUnique, delete: d.delete };
+    d.findUnique = async ({ where }: { where: Where }) =>
+      h.db.rows("contact").find((r) => r.tenantId === where.tenantId_phone.tenantId && r.phone === where.tenantId_phone.phone) ?? null;
+    d.delete = async ({ where }: { where: { id: string } }) => {
+      const rows = h.db.rows("contact");
+      h.db.events.push("delete:contact");
+      return rows.splice(rows.findIndex((r) => r.id === where.id), 1)[0];
+    };
+    return () => {
+      d.findUnique = original.findUnique;
+      if (original.delete === undefined) delete d.delete;
+      else d.delete = original.delete;
+    };
+  }
+
+  const realErasure = () => vi.importActual<typeof import("@/lib/lifecycle/erasure")>("@/lib/lifecycle/erasure");
+
+  function seedContacts() {
+    h.db.seed("contact", [
+      { id: "k1", tenantId: "t1", phone: "+911", email: "asha@example.com" },
+      { id: "k2", tenantId: "t1", phone: "+912" },
+    ]);
+    h.db.seed("conversation", [{ id: "v1", tenantId: "t1", contactId: "k1" }]);
+    h.db.seed("broadcastRecipient", [{ id: "br1", tenantId: "t1", contactId: "k1" }]);
+  }
+
+  it("calls forgetContact inside the transaction, while the contact still exists, before anything of it is deleted", async () => {
+    const restore = contactLookup();
+    try {
+      seedContacts();
+      h.forgetContact.mockImplementation(async (_t: string, contactId: string) => {
+        h.db.events.push(`forget:${contactId}`);
+        // The contact can still be read: forgetContact hashes its email and phone.
+        expect(h.db.rows("contact").map((r) => r.id)).toContain(contactId);
+        return { queued: true, audiences: 1 };
+      });
+      const { deleteContactData } = await realErasure();
+      expect(await deleteContactData("t1", "+911")).toEqual({ deleted: true });
+      expect(h.forgetContact).toHaveBeenCalledTimes(1);
+      expect(h.forgetContact).toHaveBeenCalledWith("t1", "k1", { db: expect.anything() });
+      const tx = h.db.transactions.at(-1)!;
+      const inTx = h.db.events.slice(h.db.events.indexOf(`tx:begin:${tx.id}`) + 1, h.db.events.indexOf(`tx:commit:${tx.id}`));
+      expect(inTx[0]).toBe("forget:k1");
+      expect(inTx.filter((e) => e.startsWith("delete:")).length).toBeGreaterThan(1);
+      expect(inTx.at(-1)).toBe("delete:contact");
+      expect(h.db.rows("contact").map((r) => r.id)).toEqual(["k2"]);
+      expect(h.db.rows("broadcastRecipient")).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps the contact and everything of it when forgetContact fails, so the erasure can run again", async () => {
+    const restore = contactLookup();
+    try {
+      seedContacts();
+      h.forgetContact.mockRejectedValueOnce(new Error("queue unavailable"));
+      const { deleteContactData } = await realErasure();
+      await expect(deleteContactData("t1", "+911")).rejects.toThrow("queue unavailable");
+      expect(h.db.rows("contact").map((r) => r.id)).toEqual(["k1", "k2"]);
+      expect(h.db.rows("broadcastRecipient")).toHaveLength(1);
+      expect(h.db.events.filter((e) => e.startsWith("delete:"))).toEqual([]);
+      expect(h.eddyErase).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  it("does not call forgetContact for a contact that does not exist", async () => {
+    const restore = contactLookup();
+    try {
+      seedContacts();
+      const { deleteContactData } = await realErasure();
+      expect(await deleteContactData("t1", "+999")).toEqual({ deleted: false });
+      expect(h.forgetContact).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  it("the contacts page, the compat API and Eddy (contacts/service deleteContact) forget the contact on Meta before deleting it", async () => {
+    seedContacts();
+    h.forgetContact.mockImplementation(async (_t: string, contactId: string) => {
+      h.db.events.push(`forget:${contactId}`);
+      expect(h.db.rows("contact").map((r) => r.id)).toContain(contactId);
+      return { queued: true, audiences: 1 };
+    });
+    const { deleteContact } = await import("@/lib/contacts/service");
+    await deleteContact({ userId: "u1", tenantId: "t1", role: "admin" }, "k1");
+    expect(h.forgetContact).toHaveBeenCalledWith("t1", "k1");
+    expect(h.db.events.indexOf("forget:k1")).toBeGreaterThanOrEqual(0);
+    expect(h.db.events.indexOf("forget:k1")).toBeLessThan(h.db.events.indexOf("delete:contact"));
+    expect(h.db.rows("contact").map((r) => r.id)).toEqual(["k2"]);
+  });
+
+  it("keeps the contact when forgetting it fails, so the delete can be tried again", async () => {
+    seedContacts();
+    h.forgetContact.mockRejectedValueOnce(new Error("queue unavailable"));
+    const { deleteContact } = await import("@/lib/contacts/service");
+    await expect(deleteContact({ userId: "u1", tenantId: "t1", role: "admin" }, "k1")).rejects.toThrow("queue unavailable");
+    expect(h.db.rows("contact").map((r) => r.id)).toEqual(["k1", "k2"]);
+    expect(h.db.events).not.toContain("delete:contact");
+  });
+
+  it("every path in src that deletes a Contact row calls forgetContact first; the exceptions are named with a reason", () => {
+    const root = path.join(process.cwd(), "src");
+    /** Files that delete contact rows without forgetting them, and why that is right. */
+    const EXEMPT: Record<string, string> = {
+      "lib/contacts/resolve.ts": "a merge: the person stays, as the merge target",
+      "lib/admin/service.ts": "rolls back a contact the same request created after a refused test send",
+      "lib/inbox/new-chat.ts": "rolls back a contact the same request created after a refused send",
+      "lib/spend/notify/platform-sender.ts": "the Edwyz notifier workspace's own contacts; that workspace runs no ads",
+    };
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== "generated") walk(full);
+        } else if (/\.(ts|tsx)$/.test(entry.name)) files.push(full);
+      }
+    };
+    walk(root);
+    const deletes = /\.contact\.delete(Many)?\(/;
+    const found = files.filter((f) => deletes.test(readFileSync(f, "utf8"))).map((f) => path.relative(root, f).split(path.sep).join("/"));
+    expect(found).toEqual(expect.arrayContaining(["lib/lifecycle/erasure.ts", "lib/contacts/service.ts", "lib/actions/defs/contacts.ts", "lib/lifecycle/erase-meta.ts"]));
+    const missing = found.filter((f) => !EXEMPT[f] && !/\bforgetContact\(/.test(readFileSync(path.join(root, f), "utf8")));
+    expect(missing, `Call promote/forget.forgetContact before the contact row goes in: ${missing.join(", ")}`).toEqual([]);
+    // Every exception still deletes contacts, so the list cannot go stale and hide a new path.
+    for (const f of Object.keys(EXEMPT)) expect(found, f).toContain(f);
+    // promote/forget.ts lists every path for PRM-11.
+    const forget = readFileSync(path.join(root, "lib/promote/forget.ts"), "utf8");
+    for (const f of found) expect(forget, f).toContain(f);
   });
 });
 
@@ -461,6 +722,117 @@ describe("eraseMetaConnectionData", () => {
     await eraseMetaConnectionData("t2", "c3");
     expect(h.disconnect).not.toHaveBeenCalled();
     expect(ids("lead")).toEqual(["l1", "l2", "l3"]);
+  });
+
+  it("forgets a lead's contact on Meta before deleting it", async () => {
+    seedMeta();
+    h.forgetContact.mockImplementation(async (_t: string, contactId: string) => {
+      h.db.events.push(`forget:${contactId}`);
+      return { queued: false, audiences: 0 };
+    });
+    await eraseMetaConnectionData("t1", "c1");
+    expect(h.forgetContact.mock.calls).toEqual([["t1", "k-lead"]]);
+    expect(h.db.events.indexOf("forget:k-lead")).toBeLessThan(h.db.events.indexOf("delete:contact"));
+  });
+});
+
+describe("eraseMetaConnectionData and Instagram and Facebook Page ads data (docs/IG-PAGE-ADS-SPEC.md 5.5)", () => {
+  function seedPromote() {
+    seedMeta();
+    const { db } = h;
+    db.seed("insightBreakdown", [
+      { id: "ib1", tenantId: "t1", entityMetaId: "MC1", dimension: "placement" },
+      { id: "ib2", tenantId: "t1", entityMetaId: "MA1", dimension: "age_gender" },
+      { id: "ib3", tenantId: "t1", entityMetaId: "MS1", dimension: "region" },
+      { id: "ib4", tenantId: "t1", entityMetaId: "MC2", dimension: "placement" },
+      { id: "ib5", tenantId: "t2", entityMetaId: "MC1", dimension: "placement" },
+    ]);
+    db.seed("adTest", [
+      { id: "at1", tenantId: "t1", campaignId: "ca1" },
+      { id: "at2", tenantId: "t1", campaignId: "ca2" },
+    ]);
+    db.seed("adMedia", [
+      { id: "m-crop", tenantId: "t1", adAccountAssetId: "ac1", source: "crop", sourceKey: "crop1.jpg" },
+      { id: "m-ig", tenantId: "t1", adAccountAssetId: "ac1", source: "ig_copy", sourceKey: "ig.mp4" },
+      { id: "m-ig-other", tenantId: "t1", adAccountAssetId: "ac2", source: "ig_copy", sourceKey: "ig.mp4" },
+      { id: "m-library", tenantId: "t1", adAccountAssetId: "ac1", source: "content", sourceKey: "lib.jpg" },
+      { id: "m-creative", tenantId: "t1", adAccountAssetId: "ac1", source: "creative", sourceKey: "asset_1" },
+      { id: "m-ac2", tenantId: "t1", adAccountAssetId: "ac2", source: "crop", sourceKey: "crop2.jpg" },
+      { id: "m-t2", tenantId: "t2", adAccountAssetId: "ac1", source: "crop", sourceKey: "crop1.jpg" },
+    ]);
+    db.seed("adAudience", [
+      { id: "au-list", tenantId: "t1", adAccountAssetId: "ac1", kind: "customer_list" },
+      { id: "au-saved", tenantId: "t1", adAccountAssetId: "ac1", kind: "saved" },
+      { id: "au-ac2", tenantId: "t1", adAccountAssetId: "ac2", kind: "customer_list" },
+      { id: "au-no-account", tenantId: "t1", adAccountAssetId: null, kind: "saved" },
+    ]);
+    db.seed("adAudienceUpload", [
+      { id: "up1", tenantId: "t1", audienceId: "au-list" },
+      { id: "up2", tenantId: "t1", audienceId: "au-ac2" },
+    ]);
+  }
+
+  it("erases the breakdowns, version comparisons, media and audiences of the connection's ad accounts, and nothing else", async () => {
+    seedPromote();
+    const counts = await eraseMetaConnectionData("t1", "c1");
+    expect(ids("insightBreakdown")).toEqual(["ib4", "ib5"]);
+    expect(ids("adTest")).toEqual(["at2"]);
+    expect(ids("adMedia")).toEqual(["m-ac2", "m-ig-other", "m-t2"]);
+    expect(ids("adAudience")).toEqual(["au-ac2", "au-no-account"]);
+    expect(ids("adAudienceUpload")).toEqual(["up2"]);
+    expect(counts).toMatchObject({ InsightBreakdown: 3, AdTest: 1, AdMedia: 4, AdAudience: 2, AdAudienceUpload: 1, AdMediaFile: 1 });
+  });
+
+  it("removes only the files Edwyz made for ads that no other row of the workspace still names; the customer's library and creatives stay", async () => {
+    seedPromote();
+    await eraseMetaConnectionData("t1", "c1");
+    // crop1.jpg goes (t2's row of the same key is another workspace); ig.mp4 is still named for ac2; lib.jpg and asset_1 are the customer's.
+    expect(h.deleteMedia.mock.calls).toEqual([["t1", "crop1.jpg"]]);
+  });
+
+  it("a file delete that fails never stops the erasure", async () => {
+    seedPromote();
+    h.deleteMedia.mockRejectedValue(new Error("EACCES"));
+    const counts = await eraseMetaConnectionData("t1", "c1");
+    expect(ids("metaConnection")).toEqual(["c2", "c3"]);
+    expect(counts.AdMediaFile).toBeUndefined();
+  });
+
+  it("deletes the accounts' customer-list audiences on Meta first: before the connection is revoked and before any row goes", async () => {
+    seedPromote();
+    h.accountAudienceDeletes.mockImplementation(async () => {
+      h.db.events.push("promote:account-audience-deletes");
+      return { audiences: 1, queued: 1, failed: 0 };
+    });
+    h.disconnect.mockImplementation(async (_a: unknown, id: string) => void h.db.events.push(`disconnect:${id}`));
+    const counts = await eraseMetaConnectionData("t1", "c1");
+    expect(h.accountAudienceDeletes.mock.calls).toEqual([["t1", ["ac1"]]]);
+    const at = h.db.events.indexOf("promote:account-audience-deletes");
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(at).toBeLessThan(h.db.events.indexOf("disconnect:c1"));
+    expect(at).toBeLessThan(h.db.events.findIndex((e) => e.startsWith("delete:")));
+    expect(counts.metaAudiencesDeleted).toBe(1);
+  });
+
+  it("counts a failed Meta audience delete and carries on; a connection with no ad account asks nothing", async () => {
+    seedPromote();
+    h.accountAudienceDeletes.mockRejectedValueOnce(new Error("Meta is down"));
+    const counts = await eraseMetaConnectionData("t1", "c1");
+    expect(counts.metaAudienceDeletesFailed).toBe(1);
+    expect(ids("adAudience")).toEqual(["au-ac2", "au-no-account"]);
+    h.accountAudienceDeletes.mockClear();
+    h.accountAudienceDeletes.mockResolvedValueOnce({ audiences: 2, queued: 1, failed: 1 });
+    expect(await eraseMetaConnectionData("t1", "c2")).toMatchObject({ metaAudiencesDeleted: 1, metaAudienceDeletesFailed: 1 });
+    h.accountAudienceDeletes.mockClear();
+    await eraseMetaConnectionData("t2", "c3");
+    expect(h.accountAudienceDeletes).not.toHaveBeenCalled();
+  });
+
+  it("every table the registry marks as data of a Meta connection is erased by erase-meta.ts", () => {
+    const source = readFileSync(path.join(process.cwd(), "src/lib/lifecycle/erase-meta.ts"), "utf8");
+    const derived = PERSONAL_DATA.filter((e) => e.metaDerived).map((e) => e.id);
+    expect(derived).toEqual(expect.arrayContaining(["InsightBreakdown", "AdTest", "AdMedia", "AdAudienceUpload", "AdAudience"]));
+    for (const id of derived) expect(source, id).toMatch(new RegExp(`"${id}"|prisma\\.${lowerFirst(id)}\\.deleteMany\\(`));
   });
 });
 

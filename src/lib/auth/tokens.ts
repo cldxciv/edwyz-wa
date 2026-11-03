@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Role } from "@/generated/prisma/client";
+import { COMPANY } from "@/lib/config";
 import { prisma } from "@/lib/db";
 import { HttpError } from "@/lib/tenancy";
 
@@ -73,32 +74,106 @@ export type Rotated = { userId: string; tenantId: string; role: Role; refreshTok
 
 const ENDED = "Your session has ended. Please sign in again.";
 
-/** Single-use refresh: the presented token is revoked and replaced. Presenting a revoked token revokes every session of that user. */
+/** Shown at sign-in (and on accepting an invite) to an account a platform admin turned off. */
+export const ACCOUNT_DISABLED = `This account has been turned off. Contact ${COMPANY.email} if you think this is a mistake.`;
+
+/**
+ * The refresh token that replaces `token` when it is rotated. It is derived from the old token with the server secret, not drawn at
+ * random, so a second refresh racing the first one (two tabs, or a wake-up timer and a focus handler firing together) arrives at the
+ * same successor instead of looking like a stolen token. Nobody without SESSION_SECRET can work it out from the old token.
+ */
+export function successorToken(token: string): string {
+  return createHmac("sha256", secret()).update(`refresh-successor:${token}`).digest("base64url");
+}
+
+/**
+ * The membership a refreshed session signs into: the session's workspace while it still exists, otherwise the oldest workspace of
+ * the user that was not deleted. A deleted workspace would refuse every request and send the app round the renewal loop for ever.
+ */
+async function liveMembership(userId: string, tenantId: string | null) {
+  const current = tenantId
+    ? await prisma.membership.findUnique({ where: { tenantId_userId: { tenantId, userId } }, include: { tenant: { select: { deletedAt: true } } } })
+    : null;
+  if (current && !current.tenant?.deletedAt) return current;
+  return prisma.membership.findFirst({ where: { userId, tenant: { deletedAt: null } }, orderBy: { createdAt: "asc" } });
+}
+
+/** Writes the successor session once. Both requests of a race may get here; whichever insert lands first wins, the other is skipped. */
+async function storeSuccessor(previousToken: string, userId: string, tenantId: string, userAgent: string | null): Promise<string> {
+  const token = successorToken(previousToken);
+  await prisma.session.createMany({
+    data: [{ userId, tenantId, refreshTokenHash: hashToken(token), userAgent: userAgent?.slice(0, 300) ?? null, expiresAt: new Date(Date.now() + REFRESH_TTL_MS) }],
+    skipDuplicates: true,
+  });
+  return token;
+}
+
+const inGrace = (revokedAt: Date | null | undefined, nowMs = Date.now()) => !!revokedAt && revokedAt.getTime() > nowMs;
+
+/**
+ * Single-use refresh: the presented token is revoked and replaced. Presenting a token that was rotated less than a minute ago
+ * (ROTATION_GRACE_MS) is a refresh racing the one that rotated it, and gets the same successor. Presenting a token revoked any other
+ * way (rotated longer ago, signed out, password reset) revokes every session of that user.
+ */
 export async function rotateRefreshToken(token: string, userAgent: string | null): Promise<Rotated> {
-  const session = await prisma.session.findUnique({ where: { refreshTokenHash: hashToken(token) } });
+  const session = await prisma.session.findUnique({ where: { refreshTokenHash: hashToken(token) }, include: { user: { select: { disabledAt: true } } } });
   if (!session) throw new HttpError(401, ENDED);
+  // A disabled account gets no new session (getActor would refuse it, and the app would loop between /app and the renewal).
+  if (session.user?.disabledAt) throw new HttpError(401, ENDED);
   const revokeAll = async (): Promise<never> => {
     await prisma.session.updateMany({ where: { userId: session.userId, revokedAt: null }, data: { revokedAt: new Date() } });
     throw new HttpError(401, ENDED);
   };
-  if (session.revokedAt) return revokeAll();
+  if (session.revokedAt) return inGrace(session.revokedAt) ? joinRotation(session, token, userAgent) : revokeAll();
   if (session.expiresAt.getTime() <= Date.now()) throw new HttpError(401, ENDED);
 
-  const current = session.tenantId
-    ? await prisma.membership.findUnique({ where: { tenantId_userId: { tenantId: session.tenantId, userId: session.userId } } })
-    : null;
-  const membership = current ?? (await prisma.membership.findFirst({ where: { userId: session.userId }, orderBy: { createdAt: "asc" } }));
+  const membership = await liveMembership(session.userId, session.tenantId);
 
   // The old session stays good for access tokens for a short while: other tabs and requests already in flight still carry it.
-  // The refresh token itself is single use from this moment (any non-null revokedAt makes reuse an error above).
+  // The refresh token itself is single use from this moment: presenting it again gets the same successor while the grace lasts.
   const claimed = await prisma.session.updateMany({ where: { id: session.id, revokedAt: null }, data: { revokedAt: new Date(Date.now() + ROTATION_GRACE_MS) } });
-  if (claimed.count === 0) return revokeAll();
+  if (claimed.count === 0) {
+    // Another request claimed it between the read and the claim. Join that rotation, unless it was a sign-out rather than a rotation.
+    const now = await prisma.session.findUnique({ where: { id: session.id }, select: { revokedAt: true } });
+    return inGrace(now?.revokedAt) ? joinRotation(session, token, userAgent) : revokeAll();
+  }
   if (!membership) throw new HttpError(401, ENDED);
 
-  const refreshToken = await createSession(session.userId, membership.tenantId, userAgent);
+  const refreshToken = await storeSuccessor(token, session.userId, membership.tenantId, userAgent);
   return { userId: session.userId, tenantId: membership.tenantId, role: membership.role, refreshToken };
 }
 
+/** Answers a refresh that lost the race with the successor the winner made (writing it if the winner has not yet). */
+async function joinRotation(session: { userId: string; tenantId: string | null }, token: string, userAgent: string | null): Promise<Rotated> {
+  const refreshToken = successorToken(token);
+  const hash = hashToken(refreshToken);
+  let successor = await prisma.session.findUnique({ where: { refreshTokenHash: hash } });
+  if (!successor) {
+    const membership = await liveMembership(session.userId, session.tenantId);
+    if (!membership) throw new HttpError(401, ENDED);
+    await storeSuccessor(token, session.userId, membership.tenantId, userAgent);
+    successor = await prisma.session.findUnique({ where: { refreshTokenHash: hash } });
+  }
+  // The successor itself may have been signed out or reset since; then the old token is no good either. (One that was rotated in
+  // turn, a moment ago, is still in its own grace and is handed out: the browser then rotates it like any other.)
+  if (!successor || (successor.revokedAt && !inGrace(successor.revokedAt)) || successor.expiresAt.getTime() <= Date.now()) throw new HttpError(401, ENDED);
+  const membership = await liveMembership(session.userId, successor.tenantId);
+  if (!membership) throw new HttpError(401, ENDED);
+  return { userId: session.userId, tenantId: membership.tenantId, role: membership.role, refreshToken };
+}
+
+/**
+ * Sign-out: ends the presented session and the sessions rotated from it. A token rotated less than a minute ago is still in its grace
+ * (revokedAt in the future) and its successor is live, which happens when a rotation response was lost or a sign-out raced a renewal.
+ * Both end now, so the old token cannot fetch the successor again (joinRotation) and the successor cannot sign the browser back in.
+ * Two steps down the line cover a successor that was itself rotated a moment ago; rows exist only where a rotation really happened.
+ */
 export async function revokeSessionByToken(token: string): Promise<void> {
-  await prisma.session.updateMany({ where: { refreshTokenHash: hashToken(token), revokedAt: null }, data: { revokedAt: new Date() } });
+  const now = new Date();
+  const next = successorToken(token);
+  const line = [token, next, successorToken(next)].map(hashToken);
+  await prisma.session.updateMany({
+    where: { refreshTokenHash: { in: line }, OR: [{ revokedAt: null }, { revokedAt: { gt: now } }] },
+    data: { revokedAt: now },
+  });
 }

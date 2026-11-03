@@ -19,6 +19,12 @@ const level = (v: unknown): "all" | "assistants" | null => (v === "all" || v ===
 export const producer: NoticeProducer = {
   name: "spending",
   kinds: ["spending_stopped"],
+  /** Workspaces whose spending is stopped; all of them while the platform stop is on. */
+  async due(tenantIds) {
+    if (level((await readPlatformFreeze()).freeze)) return tenantIds;
+    const rows = (await prisma.spendControl.findMany({ where: { tenantId: { in: [...tenantIds] }, freeze: { in: ["all", "assistants"] } }, select: { tenantId: true } })) as { tenantId: string }[];
+    return rows.map((r) => r.tenantId);
+  },
   async run(ctx) {
     const [control, platform] = await Promise.all([
       prisma.spendControl.findUnique({ where: { tenantId: ctx.tenantId }, select: { freeze: true, frozenByKind: true, frozenByUserId: true } }) as Promise<ControlRow | null>,

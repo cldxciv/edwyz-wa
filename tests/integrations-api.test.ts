@@ -281,11 +281,21 @@ describe("POST /api/v1/messages", () => {
     db.message.create.mockImplementation(async ({ data }) => ({ id: "m1", ...data }));
   });
 
-  it("422 for an opted-out contact, for text and templates", async () => {
-    db.contact.findFirst.mockResolvedValue({ ...contact, optedOutAt: new Date() });
-    expect((await send({ to: "+919876543210", type: "text", text: "hi" })).status).toBe(422);
-    expect((await send({ to: "+919876543210", type: "template", template: { name: "t", language: "en" } })).status).toBe(422);
+  it("422 for a marketing template to an opted-out contact, and nothing is created", async () => {
+    db.contact.findFirst.mockResolvedValue({ ...contact, optIn: true, optedOutAt: new Date() });
+    db.template.findFirst.mockResolvedValue({ category: "MARKETING" });
+    const res = await send({ to: "+919876543210", type: "template", template: { name: "t", language: "en" } });
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toMatch(/opted out of marketing/);
     expect(db.message.create).not.toHaveBeenCalled();
+  });
+
+  it("an opt-out stops marketing only: a reply in the window and a utility template still go (202)", async () => {
+    db.contact.findFirst.mockResolvedValue({ ...contact, optedOutAt: new Date() });
+    db.conversation.findFirst.mockResolvedValue({ id: "cv1", lastInboundAt: new Date(Date.now() - 3600_000) });
+    db.conversation.upsert.mockResolvedValue({ id: "cv1" });
+    expect((await send({ to: "+919876543210", type: "text", text: "hi" })).status).toBe(202);
+    expect((await send({ to: "+919876543210", type: "template", template: { name: "order_update", language: "en", components: [] } })).status).toBe(202);
   });
 
   it("409 for text when the 24-hour window is closed or never opened", async () => {

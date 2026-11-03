@@ -89,15 +89,19 @@ describe("web app manifest (/manifest.webmanifest)", () => {
       const size = info.width;
       const centre = size / 2;
       let inked = 0;
+      // One expect for the farthest inked pixel: one per pixel takes seconds now that the mark is a filled tile.
+      let farthest = { distance: 0, at: "" };
       for (let y = 0; y < size; y++) {
         for (let x = 0; x < size; x++) {
           const i = (y * size + x) * info.channels;
           const isBackground = data[i] >= 250 && data[i + 1] >= 250 && data[i + 2] >= 250;
           if (isBackground) continue;
           inked += 1;
-          expect(Math.hypot(x + 0.5 - centre, y + 0.5 - centre), `${src} pixel ${x},${y}`).toBeLessThanOrEqual(0.4 * size);
+          const distance = Math.hypot(x + 0.5 - centre, y + 0.5 - centre);
+          if (distance > farthest.distance) farthest = { distance, at: `${x},${y}` };
         }
       }
+      expect(farthest.distance, `${src} pixel ${farthest.at}`).toBeLessThanOrEqual(0.4 * size);
       expect(inked, src).toBeGreaterThan(size * size * 0.05); // the logo is there, not just a blank tile
       const corner = [data[0], data[1], data[2]].map((v) => v.toString(16).padStart(2, "0")).join("");
       expect(`#${corner}`).toBe(PWA_BACKGROUND_COLOR);

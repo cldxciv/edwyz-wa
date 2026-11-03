@@ -128,9 +128,10 @@ test("broadcasts list: empty state, limit and results panels, tabs, calendar and
   await expect(page.getByRole("button", { name: "This month" })).toBeEnabled();
   await page.getByRole("button", { name: "This month" }).click();
   await expect(page.getByRole("heading", { level: 2, name: monthTitle })).toBeVisible();
-  // "+" plans a broadcast on that day
+  // "+" plans a broadcast on that day. On the last day of a month tomorrow may not be in this month's grid, so go to its month.
   const tomorrow = new Date(Date.now() + 86_400_000);
-  await page.getByRole("link", { name: `Plan a broadcast on ${tomorrow.toDateString()}` }).click();
+  if (tomorrow.getMonth() !== today.getMonth()) await page.getByRole("button", { name: "Next month" }).click();
+  await page.getByRole("link", { name: `Plan a broadcast on ${tomorrow.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" })}` }).click();
   await page.waitForURL(/\/app\/broadcasts\/new\?date=\d{4}-\d{2}-\d{2}/);
   // back to list tab and open a broadcast from its chip
   await page.goBack();
@@ -463,7 +464,8 @@ test("broadcasts: agent sees a read-only view; direct creation and actions are r
     await signupUser(other, "bc");
     const p2 = await other.newPage();
     await p2.goto(`/app/broadcasts/${id}`);
-    await expect(p2.getByText("We could not load this broadcast")).toBeVisible();
+    await expect(p2.getByRole("heading", { level: 1, name: "Broadcast not found" })).toBeVisible();
+    await expect(p2.getByRole("link", { name: "Back to broadcasts" })).toBeVisible();
     await expect(p2.getByText("Owner secret broadcast")).toHaveCount(0);
     await p2.goto("/app/broadcasts");
     await expect(p2.getByText("Owner secret broadcast")).toHaveCount(0);

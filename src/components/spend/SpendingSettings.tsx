@@ -7,6 +7,7 @@ import { useApi } from "@/components/contacts/hooks";
 import { parseMajorInput } from "@/lib/spend/money";
 import type { ControlSettingsDTO } from "@/lib/spend/types";
 import type { SpendSummaryView } from "@/lib/spend/summary";
+import { timeZoneList } from "@/lib/timezones";
 import { ActivityTable } from "./ActivityTable";
 import { ApprovalsCard } from "./ApprovalsCard";
 import { AssistantsCard } from "./AssistantsCard";
@@ -104,17 +105,9 @@ export function SpendingSettingsView({ summary, onSaved, focusApprovalId }: View
   );
 }
 
-/** Time zones for the select: the browser's list when it has one. */
+/** Time zones for the select: the browser's list when it has one, one entry per zone under its current name. */
 export function timeZoneOptions(current: string): string[] {
-  let list: string[] = [];
-  try {
-    const intl = Intl as unknown as { supportedValuesOf?: (key: string) => string[] };
-    list = intl.supportedValuesOf?.("timeZone") ?? [];
-  } catch {
-    list = [];
-  }
-  if (list.length === 0) list = ["Asia/Kolkata", "Asia/Dubai", "Asia/Singapore", "Europe/London", "Europe/Berlin", "America/New_York", "America/Los_Angeles", "Australia/Sydney", "UTC"];
-  return list.includes(current) ? list : [current, ...list];
+  return timeZoneList(current);
 }
 
 /** The owner's other settings: time zone, target cost per lead, and whether safety stops may pause the team's campaigns. */

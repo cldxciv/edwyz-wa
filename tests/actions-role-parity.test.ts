@@ -7,6 +7,9 @@ import { describe, expect, it, vi } from "vitest";
  * route handler's role guard is read from its source (requireRole, adminActor, writeActor, requireOnboardingActor, owner
  * checks). A definition weaker than its route fails. Definitions stricter than their route are allowed (4.10a item 5: Eddy may
  * be stricter) but must be listed below with the reason, so the list stays exact. The broken fixture proves the check bites.
+ * (PRM-13) The Instagram and Facebook Page ads routes guard with promote/route-guard.ts: promoteRoute("write") admits admins
+ * and owners only (promoteWrite), and promoteRoute("read", ..., { minRole }) the role it names; a read without minRole admits
+ * any member.
  */
 vi.mock("@/lib/db", () => ({ prisma: {} }));
 
@@ -24,6 +27,19 @@ const STRICTER_THAN_ROUTE: Record<string, string> = {
   "record_opt_in PATCH /api/contacts/[id]": "The contacts route admits any member and updateContact requires an admin for optIn; the tool is admin-only.",
   "stop_spending PUT /api/spend/freeze": "The freeze route admits any member and kill.ts refuses a team member's stop (403, ledgered); the tool is admin-only (EDDY-06).",
   "decline_spend_request POST /api/spend/approvals/[id]": "The approvals route admits any member and decideApproval refuses a team member's decline; the tool is admin-only (EDDY-06).",
+  "get_promotion GET /api/promote/drafts/[id]": "The draft route lets team members read drafts read-only (6.1 rule 7); Eddy's promotion tools are for owners and admins (IG-PAGE-ADS-SPEC 6.4).",
+};
+
+/**
+ * Stricter than the related routes the page already had (IG-PAGE-ADS-SPEC 6.4 notes): get_promotion_results is admin-only like
+ * its own route (GET /api/ads/insights/dimensions, promote guard with minRole admin), while the older insights routes (summary,
+ * series, breakdown) have no role check, as Eddy does for list_campaigns.
+ */
+const STRICTER_THAN_RELATED_ROUTES: Record<string, { routes: string[]; reason: string }> = {
+  get_promotion_results: {
+    routes: ["/api/ads/insights/summary", "/api/ads/insights/series", "/api/ads/insights/breakdown"],
+    reason: "Results by placement, creative, audience and leads are for owners and admins; the older insights routes admit any member.",
+  },
 };
 
 const stripComments = (code: string) => code.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
@@ -55,7 +71,11 @@ export function handlerSource(source: string, method: string): string | null {
 /** The role a handler requires before it does anything: owner, admin, or agent (any member). */
 export function guardOf(handler: string): Role {
   if (/requireRole\(\s*actor\s*,\s*["']owner["']\s*\)/.test(handler)) return "owner";
+  if (/\bpromoteRoute\b[^(]*\(\s*["']read["']/.test(handler) && /\bminRole\s*:\s*["']owner["']/.test(handler)) return "owner";
   if (/requireRole\(\s*actor\s*,\s*["']admin["']\s*\)|\badminActor\(|\bwriteActor\(|\brequireOnboardingActor\(/.test(handler)) return "admin";
+  // The promote route guard: every write is admins and owners (promoteWrite); a read names its role in its options.
+  if (/\bpromoteRoute\b[^(]*\(\s*["']write["']/.test(handler)) return "admin";
+  if (/\bpromoteRoute\b[^(]*\(\s*["']read["']/.test(handler) && /\bminRole\s*:\s*["']admin["']/.test(handler)) return "admin";
   return "agent";
 }
 
@@ -104,6 +124,25 @@ describe("role parity (4.8 test 2)", () => {
     expect(guardOf(handlerSource(readFileSync(fileOf("/api/quick-replies/[id]"), "utf8"), "PATCH")!)).toBe("agent");
     // `export const PUT = handle` is followed to the handler.
     expect(handlerSource(readFileSync(fileOf("/api/inbox/conversations/[id]/status"), "utf8"), "PUT")).toContain("setStatus");
+    // (PRM-13) the promote route guard: writes are admins and owners; reads are what their options name, else any member.
+    expect(guardOf(handlerSource(readFileSync(fileOf("/api/promote/drafts"), "utf8"), "POST")!)).toBe("admin");
+    expect(guardOf(handlerSource(readFileSync(fileOf("/api/promote/drafts/[id]/start"), "utf8"), "POST")!)).toBe("admin");
+    expect(guardOf(handlerSource(readFileSync(fileOf("/api/promote/sources"), "utf8"), "GET")!)).toBe("admin");
+    expect(guardOf(handlerSource(readFileSync(fileOf("/api/promote/drafts/[id]"), "utf8"), "GET")!)).toBe("agent");
+    expect(guardOf(handlerSource(readFileSync(fileOf("/api/promote/catalog"), "utf8"), "GET")!)).toBe("agent");
+    expect(guardOf('export const GET = promoteRoute("read", async () => x, { minRole: "owner" });')).toBe("owner");
+  });
+
+  it("(PRM-13) get_promotion_results is admin-only, stricter than the older insights routes, and every /api/promote tool is admin-only but the catalogue", () => {
+    for (const [name, { routes, reason }] of Object.entries(STRICTER_THAN_RELATED_ROUTES)) {
+      const def = actionByName(name)!;
+      expect(def.minRole, name).toBe("admin");
+      expect(reason.length).toBeGreaterThan(20);
+      for (const route of routes) expect(guardOf(handlerSource(readFileSync(fileOf(route), "utf8"), "GET")!), route).toBe("agent");
+    }
+    const promoteTools = ACTIONS.filter((d) => d.route !== "virtual" && (d.route.path.startsWith("/api/promote/") || d.route.path.startsWith("/api/leads/forms")));
+    expect(promoteTools.length).toBeGreaterThan(30);
+    for (const def of promoteTools) expect(def.minRole, def.name).toBe(def.name === "get_creative_specs" ? "agent" : "admin");
   });
 });
 

@@ -2,20 +2,23 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Alert, Button, Card, ErrorState, FormField, Input, Select, Skeleton, apiFetch, confirm, toast } from "@/components/ui";
 import { PageHeader } from "@/components/app/PageHeader";
 import { canManage, useApi, useRole } from "@/components/contacts/hooks";
 import { LIMITS, type Trigger, type TriggerType } from "@/lib/automation/v2/model";
+import { OPT_OUT_SCHEDULED } from "@/lib/contacts/opt-out";
 import { ActionList } from "./ActionEditor";
 import { GroupEditor } from "./ConditionEditor";
-import { DAY_LABELS, browserTimezone, humanError, timezoneOptions } from "./helpers";
+import { guardedNavigationPath } from "@/components/templates/helpers";
+import { DAY_LABELS, browserTimezone, humanError, ownSubmit, timezoneOptions } from "./helpers";
 import { linkButton } from "./linkButton";
 import {
   STARTERS,
   TRIGGERS,
   WAIT_CHOICES,
   applyTrigger,
+  cardProblems,
   defaultTrigger,
   draftFromRow,
   draftWarnings,
@@ -23,7 +26,9 @@ import {
   hasProblems,
   namesFrom,
   summaryOf,
+  templateFillProblem,
   toBody,
+  triggerProblem,
   validateDraftV2,
   EMPTY_OPTIONS,
   STATUS_CHOICES,
@@ -64,13 +69,15 @@ function Step({ n, title, hint, error, children }: { n: number; title: string; h
   );
 }
 
-function TriggerFields({ trigger, onChange, timezone }: { trigger: Trigger; onChange: (t: Trigger) => void; timezone: string }) {
+function TriggerFields({ trigger, onChange, timezone, showErrors }: { trigger: Trigger; onChange: (t: Trigger) => void; timezone: string; showErrors: boolean }) {
+  const problem = showErrors ? triggerProblem(trigger) : null;
+  const err = (field: string) => (problem?.field === field ? problem.message : undefined);
   switch (trigger.type) {
     case "no_customer_response": {
       const unit = [...UNITS].reverse().find((u) => trigger.minutes % u.factor === 0) ?? UNITS[0];
       return (
         <div className="grid grid-cols-2 gap-3 sm:max-w-sm">
-          <FormField label="Wait for">
+          <FormField label="Wait for" error={err("minutes")}>
             <Input type="number" min={1} value={trigger.minutes / unit.factor} onChange={(e) => onChange({ ...trigger, minutes: Math.max(1, Math.round(Number(e.target.value) || 1)) * unit.factor })} />
           </FormField>
           <FormField label="Unit">
@@ -95,16 +102,16 @@ function TriggerFields({ trigger, onChange, timezone }: { trigger: Trigger; onCh
               </Select>
             </FormField>
             {trigger.repeat === "once" && (
-              <FormField label="Date">
+              <FormField label="Date" error={err("date")}>
                 <Input type="date" value={trigger.date ?? ""} onChange={(e) => onChange({ ...trigger, date: e.target.value })} />
               </FormField>
             )}
-            <FormField label="Time">
+            <FormField label="Time" error={err("time")}>
               <Input type="time" value={trigger.time} onChange={(e) => onChange({ ...trigger, time: e.target.value })} />
             </FormField>
           </div>
           {trigger.repeat === "weekly" && (
-            <fieldset>
+            <fieldset aria-describedby={err("days") ? "trigger-days-error" : undefined}>
               <legend className="mb-1.5 text-sm font-medium">On these days</legend>
               <div className="flex flex-wrap gap-1.5">
                 {DAY_LABELS.map((label, day) => (
@@ -114,9 +121,14 @@ function TriggerFields({ trigger, onChange, timezone }: { trigger: Trigger; onCh
                   </label>
                 ))}
               </div>
+              {err("days") && (
+                <p id="trigger-days-error" role="alert" data-problem className="mt-1.5 text-xs font-medium text-bad-fg">
+                  {err("days")}
+                </p>
+              )}
             </fieldset>
           )}
-          <FormField label="Timezone">
+          <FormField label="Timezone" error={err("timezone")}>
             <Select value={trigger.timezone || timezone} onChange={(e) => onChange({ ...trigger, timezone: e.target.value })}>
               {(zones.includes(trigger.timezone) ? zones : [trigger.timezone, ...zones]).map((z) => (
                 <option key={z} value={z}>
@@ -125,19 +137,19 @@ function TriggerFields({ trigger, onChange, timezone }: { trigger: Trigger; onCh
               ))}
             </Select>
           </FormField>
-          <p className="text-sm text-muted">It runs for your contacts one by one. Use the If step to choose who, for example a tag or a segment. One run reaches up to 5,000 contacts who fit your conditions, and the history notes it if more were left. A rule you save or switch on after today&apos;s time first runs at the next scheduled time. People who opted out are always skipped, and marketing templates only go to people who agreed to them.</p>
+          <p className="text-sm text-muted">It runs for your contacts one by one. Use the If step to choose who, for example a tag or a segment. One run reaches up to 5,000 contacts who fit your conditions, and the history notes it if more were left. A rule you save or switch on after today&apos;s time first runs at the next scheduled time. {OPT_OUT_SCHEDULED} Marketing templates only go to people who agreed to them.</p>
         </div>
       );
     case "tag_added":
     case "tag_removed":
       return (
-        <FormField label="Tag" optional hint="Leave empty to react to any tag. Runs when a teammate, a contact import, the API, a lead form or a chatbot changes tags. Changes made by another rule do not start rules.">
+        <FormField label="Tag" optional error={err("tag")} hint="Leave empty to react to any tag. Runs when a teammate, a contact import, the API, a lead form or a chatbot changes tags. Changes made by another rule do not start rules.">
           <Input value={trigger.tag ?? ""} maxLength={LIMITS.tag} onChange={(e) => onChange({ ...trigger, tag: e.target.value || null })} />
         </FormField>
       );
     case "attribute_changed":
       return (
-        <FormField label="Contact detail" required hint="The name of the detail, for example city or order status. Runs when a teammate, a contact import, the API, a lead form or a chatbot changes it. Changes made by another rule do not start rules.">
+        <FormField label="Contact detail" required error={err("attribute")} hint="The name of the detail, for example city or order status. Runs when a teammate, a contact import, the API, a lead form or a chatbot changes it. Changes made by another rule do not start rules.">
           <Input value={trigger.attribute} maxLength={LIMITS.attribute} onChange={(e) => onChange({ ...trigger, attribute: e.target.value })} />
         </FormField>
       );
@@ -174,10 +186,48 @@ function BuilderForm({ initial, ruleId, options, editable, onMaterialCreated }: 
   const formRef = useRef<HTMLFormElement>(null);
 
   const problems: DraftProblems = attempted ? validateDraftV2(draft) : {};
+  // Problems that belong to one field are shown under it; the cards keep only the rest.
+  const cards = cardProblems(draft, problems);
   const names = useMemo(() => namesFrom(options), [options]);
   const warnings = draftWarnings(draft);
   const set = <K extends keyof RuleDraftV2>(key: K, value: RuleDraftV2[K]) => setDraft((d) => ({ ...d, [key]: value }));
   const sentence = summaryOf(draft, names);
+  // Nothing to lose while saving (the page is about to change) or when the form is only for looking.
+  const dirty = editable && !busy && JSON.stringify(draft) !== JSON.stringify(initial);
+
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    // Cancel, All rules and the menu are links that navigate on the client, which never fires beforeunload: ask first.
+    const guardLinks = (e: MouseEvent) => {
+      const anchor = (e.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
+      if (!anchor) return;
+      const path = guardedNavigationPath(
+        {
+          href: anchor.getAttribute("href") ?? "",
+          target: anchor.target,
+          download: anchor.hasAttribute("download"),
+          button: e.button,
+          modified: e.metaKey || e.ctrlKey || e.shiftKey || e.altKey,
+          defaultPrevented: e.defaultPrevented,
+        },
+        window.location.origin,
+        window.location.pathname,
+      );
+      if (!path) return;
+      e.preventDefault();
+      e.stopPropagation();
+      void confirm({ title: "Leave without saving?", body: "This rule has not been saved. If you leave now, your changes are lost.", confirmLabel: "Leave without saving", cancelLabel: "Keep editing", tone: "danger" }).then((ok) => {
+        if (ok) router.push(path);
+      });
+    };
+    window.addEventListener("beforeunload", warn);
+    document.addEventListener("click", guardLinks, true);
+    return () => {
+      window.removeEventListener("beforeunload", warn);
+      document.removeEventListener("click", guardLinks, true);
+    };
+  }, [dirty, router]);
 
   function changeTrigger(type: TriggerType) {
     const result = applyTrigger(draft, defaultTrigger(type, timezone));
@@ -186,11 +236,14 @@ function BuilderForm({ initial, ruleId, options, editable, onMaterialCreated }: 
   }
 
   async function submit(e: React.FormEvent) {
-    e.preventDefault();
+    // Only this form's own submit: a dialog's form opened from inside it (a new reply material) must never save the rule.
+    if (!ownSubmit(e)) return;
     setAttempted(true);
     setServerError(null);
     const found = validateDraftV2(draft);
-    if (hasProblems(found)) {
+    // A template step missing a heading picture or value, a button value, or using another number's account: shown under its field.
+    const unfilled = draft.actions.some((a) => templateFillProblem(a, options, draft.phoneNumberId));
+    if (hasProblems(found) || unfilled) {
       queueMicrotask(() => formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"], [data-problem]')?.scrollIntoView?.({ block: "center" }));
       return;
     }
@@ -232,7 +285,7 @@ function BuilderForm({ initial, ruleId, options, editable, onMaterialCreated }: 
         <Card>
           <div className="grid gap-4 sm:grid-cols-2">
             <FormField label="Rule name" required hint="Only your team sees this." error={problems.name}>
-              <Input value={draft.name} maxLength={LIMITS.name} placeholder="Welcome message" onChange={(e) => set("name", e.target.value)} data-autofocus="" />
+              <Input value={draft.name} maxLength={LIMITS.name} placeholder="e.g. Welcome message" onChange={(e) => set("name", e.target.value)} data-autofocus="" />
             </FormField>
             {options.phoneNumbers.length > 1 && (
               <FormField label="Only for this number" optional hint="Leave on all numbers to run for every WhatsApp number.">
@@ -249,7 +302,7 @@ function BuilderForm({ initial, ruleId, options, editable, onMaterialCreated }: 
           </div>
         </Card>
 
-        <Step n={1} title="When" hint="What starts this rule?" error={problems.trigger}>
+        <Step n={1} title="When" hint="What starts this rule?" error={cards.trigger}>
           <FormField label="The rule starts when" hint={TRIGGERS.find((t) => t.value === draft.trigger.type)?.help}>
             <Select value={draft.trigger.type} onChange={(e) => changeTrigger(e.target.value as TriggerType)}>
               {TRIGGERS.map((t) => (
@@ -259,16 +312,16 @@ function BuilderForm({ initial, ruleId, options, editable, onMaterialCreated }: 
               ))}
             </Select>
           </FormField>
-          <TriggerFields trigger={draft.trigger} onChange={(t) => set("trigger", t)} timezone={timezone} />
+          <TriggerFields trigger={draft.trigger} onChange={(t) => set("trigger", t)} timezone={timezone} showErrors={attempted} />
           {note && <Alert tone="info">{note}</Alert>}
         </Step>
 
-        <Step n={2} title="If" hint="Optional. Only continue when these are true." error={problems.filters}>
-          <GroupEditor group={root} depth={1} ctx={{ trigger: draft.trigger, options: ctxOptions, timezone }} onChange={(g) => set("filters", { ...draft.filters, root: g })} />
+        <Step n={2} title="If" hint="Optional. Only continue when these are true." error={cards.filters}>
+          <GroupEditor group={root} depth={1} ctx={{ trigger: draft.trigger, options: ctxOptions, timezone, showErrors: attempted }} onChange={(g) => set("filters", { ...draft.filters, root: g })} />
         </Step>
 
-        <Step n={3} title="Then" hint="What should happen? Steps run from top to bottom." error={problems.actions ?? problems.combo}>
-          <ActionList actions={draft.actions} trigger={draft.trigger} options={options} onMaterialCreated={onMaterialCreated} onChange={(a) => set("actions", a)} />
+        <Step n={3} title="Then" hint="What should happen? Steps run from top to bottom." error={cards.actions}>
+          <ActionList actions={draft.actions} trigger={draft.trigger} options={options} phoneNumberId={draft.phoneNumberId} onMaterialCreated={onMaterialCreated} onChange={(a) => set("actions", a)} showErrors={attempted} />
         </Step>
 
         <details className="rounded-card border border-border bg-raised p-4 shadow-raised">
@@ -315,7 +368,8 @@ function BuilderForm({ initial, ruleId, options, editable, onMaterialCreated }: 
         </Card>
       </fieldset>
 
-      <div className="sticky bottom-0 -mx-4 flex flex-wrap items-center gap-3 border-t border-border bg-background/95 px-4 py-3 backdrop-blur sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0">
+      {/* On a phone the bar sticks just above the bottom menu bar (3.25rem tall, see MobileTabBar), not under it. */}
+      <div className="sticky bottom-[calc(3.25rem+env(safe-area-inset-bottom))] z-(--z-sticky) -mx-4 flex flex-wrap items-center gap-3 border-t border-border bg-background/95 px-4 py-3 backdrop-blur sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0">
         {editable && (
           <Button type="submit" loading={busy} className="max-sm:flex-1">
             {ruleId ? "Save changes" : "Create rule"}
@@ -345,6 +399,8 @@ export function RuleBuilder({ ruleId, starterId }: { ruleId?: string; starterId?
     return starter ? starter.build(browserTimezone()) : emptyDraftV2();
   }, [ruleId, starterId, existing.data]);
 
+  // The server answers "Rule not found." for a deleted rule, a mistyped address or another workspace's rule: retrying cannot help.
+  const missing = Boolean(ruleId && !existing.data && existing.error && /not found/i.test(existing.error));
   const failed = (ruleId ? existing.error && !existing.data : false) || (options.error && !options.data);
   const isClassic = existing.data && existing.data.rule.version !== 2;
 
@@ -364,7 +420,17 @@ export function RuleBuilder({ ruleId, starterId }: { ruleId?: string; starterId?
           You can look at this rule. Only admins and owners can change it.
         </Alert>
       )}
-      {failed ? (
+      {missing ? (
+        <ErrorState
+          title="This rule no longer exists"
+          message="It may have been deleted, or the link is wrong. Your other rules are on the Automation page."
+          action={
+            <Link href="/app/automation" className={linkButton("secondary", "md")}>
+              Back to rules
+            </Link>
+          }
+        />
+      ) : failed ? (
         <ErrorState title="We could not load this rule" message="Check your connection and try again." action={<Button onClick={() => (existing.retry(), options.retry())}>Try again</Button>} />
       ) : isClassic ? (
         <Alert tone="warn" title="This is a classic auto-reply">

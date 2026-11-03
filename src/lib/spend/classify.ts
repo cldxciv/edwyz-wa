@@ -5,16 +5,23 @@
  *
  *   not_spend             every GET (and DELETE: removing never raises spend); CAPI `<dataset>/events`; `<page>/subscribed_apps`;
  *                         content publishing (`/feed`, `/photos`, `/videos`, `/media`, `/media_publish`); `<user>/permissions`;
- *                         template management; media and resumable uploads; number registration; a POST `<id>` that sets no
- *                         spend field (a rename).
+ *                         template management; media and resumable uploads (`act_X/video_ads`, IG-PAGE-ADS-SPEC P0-9); pixel
+ *                         creation (`act_X/adspixels`, P0-12); number registration; a POST `<id>` that sets no spend field (a
+ *                         rename).
  *   ads_create            POST `act_X/{campaigns,adsets,ads,adcreatives}`. The tripwire needs a create permit and status PAUSED
  *                         (creatives have no delivery status and are exempt from the PAUSED rule, erratum 12.1b).
  *   meta_cap              POST `act_X` with `spend_cap` or `spend_cap_action`.
  *   msg_send              POST `<phoneNumberId>/messages` (a read receipt, `status: read` with no recipient, is free).
  *   ads_lowering          POST `<id>` whose only spend field is `status` PAUSED, ARCHIVED or DELETED. Never blocked.
  *   ads_raise_or_unknown  POST `<id>` with any other spend field (status ACTIVE, a budget, a later end, a bid, a spend cap), any
- *                         other POST on an ad account, copies, batch requests, and bodies that cannot be read. Unknown counts
- *                         as raising, so it needs a permit.
+ *                         other POST on an ad account, batch requests, the banned edges and parameters below, and bodies that
+ *                         cannot be read. Unknown counts as raising, so it needs a permit.
+ *
+ * Banned (IG-PAGE-ADS-SPEC 4.7 and D25; bypass rule B15 keeps these names in this file): a write to `<id>/copies`,
+ * `<campaign|adset>/budget_schedules`, `act_X/asyncadrequestsets` or `<business>/ad_studies`, a Graph batch, and any write whose
+ * parameters carry `creative_test_config` or a minimum spend target at any depth. Each is `ads_raise_or_unknown`, and no permit
+ * covers it: the edges are never a single object path, and the parameters are listed in `spendKeys`, which no permit allows.
+ * (A split test as `ads_create` waits for Phase 0 request P0-7 and PRM-17.)
  *
  * The `pattern` is the only part of a request that may be logged or audited: ids are replaced, the query and body never appear.
  */
@@ -47,7 +54,7 @@ export type GraphClassification = {
   objectId: string | null;
   edge: string | null;
   createKind: CreateKind | null;
-  /** The spend fields found in the parameters, sorted. */
+  /** The spend fields found in the parameters, sorted. A banned parameter (BANNED_PARAMS) counts at any depth. */
   spendKeys: string[];
   /** The merged parameters (query, path query, body) the tripwire checks; access_token and appsecret_proof are left out. */
   params: Readonly<Record<string, unknown>>;
@@ -82,9 +89,47 @@ export const END_KEYS: readonly string[] = ["end_time", "stop_time"];
 /** Statuses that stop delivery: a write that only sets one of these is lowering (I2). */
 export const LOWERING_STATUSES: readonly string[] = ["PAUSED", "ARCHIVED", "DELETED"];
 
+/**
+ * Edges that can raise spend outside reserveAds (IG-PAGE-ADS-SPEC 4.7, D25), with the reason code a write to them gets. A write
+ * whose path names one of them anywhere is `ads_raise_or_unknown`, whatever its body. No intent mints a permit for them.
+ */
+const BANNED_EDGES: ReadonlyMap<string, string> = new Map([
+  // Copies can set status_option ACTIVE.
+  ["copies", "copies"],
+  // A high-demand period can spend up to 8x the daily budget.
+  ["budget_schedules", "budget_schedule"],
+  // An async request set creates or edits ads in bulk, outside the create permit's object count.
+  ["asyncadrequestsets", "async_ad_requests"],
+  // A split test carries its own dates and budget split; as ads_create it waits for P0-7 and PRM-17.
+  ["ad_studies", "ad_study"],
+]);
+
+/**
+ * Parameters that can raise spend wherever they appear in a write (IG-PAGE-ADS-SPEC 4.7, D25, T1'): a creative test sets its
+ * own test budget, and a minimum spend target forces spend onto an ad set. Found at any depth (nested objects, arrays, JSON
+ * text Meta parses, and any part of a bracketed form key such as `creative[creative_test_config]`), they make the write
+ * `ads_raise_or_unknown` and are listed in `spendKeys`, so no permit covers them.
+ */
+export const BANNED_PARAMS: readonly string[] = ["creative_test_config", "daily_min_spend_target", "lifetime_min_spend_target"];
+const BANNED_PARAM_WHY: ReadonlyMap<string, string> = new Map([
+  ["creative_test_config", "creative_test"],
+  ["daily_min_spend_target", "min_spend_target"],
+  ["lifetime_min_spend_target", "min_spend_target"],
+]);
+/** Nesting deeper than this is not read: such a write is treated as raising ("deep_body"). Real bodies stay well below it. */
+const MAX_PARAM_DEPTH = 32;
+
 const CREATE_EDGES: readonly CreateKind[] = ["campaigns", "adsets", "ads", "adcreatives"];
 /** Ad account edges that cannot deliver anything by themselves: creative media and audiences. */
 const ACCOUNT_NOT_SPEND_EDGES = new Set(["adimages", "advideos", "customaudiences", "saved_audiences"]);
+/**
+ * Ad account writes that cannot spend, each with its reason code, allowed only when the body carries no spend field and can be
+ * read: a pixel (`create_pixel`, P0-12) and the resumable video upload's start and finish (`PROMOTE_VIDEO=resumable`, P0-9).
+ */
+const ACCOUNT_NOT_SPEND_WRITES: ReadonlyMap<string, string> = new Map([
+  ["adspixels", "pixel_create"],
+  ["video_ads", "video_upload"],
+]);
 /** Object edges that never spend ad money or send a message. */
 const NOT_SPEND_EDGES = new Set([
   "events",
@@ -149,8 +194,9 @@ export function normalizePath(raw: string): { segments: string[]; query: Record<
 }
 
 /**
- * Marks a field given twice with different values (query and body, say). Which one Meta reads is not documented, so every
- * check treats it as unreadable: it is never PAUSED, never a budget, never a time.
+ * Marks a field given twice with different values (query and body, say), or a field the classifier reads given in bracket
+ * form (`status[0]`). Which value Meta reads is not documented, so every check treats it as unreadable: it is never PAUSED,
+ * never a budget, never a time, and as a method override it counts as a write.
  */
 export const CONFLICTING_VALUE: unique symbol = Symbol("conflicting value");
 
@@ -161,6 +207,29 @@ const sameValue = (a: unknown, b: unknown): boolean => {
   } catch {
     return false;
   }
+};
+
+/**
+ * The outer field of a parameter key: Meta builds nested fields from bracketed form keys, so `status[0]` or
+ * `targeting[geo_locations]` sets the field before the first bracket.
+ */
+const outerField = (key: string): string =>
+  key
+    .split(/[[\]]+/)
+    .map((s) => s.trim())
+    .find(Boolean) ?? "";
+
+/** Top-level fields the classifier reads by name: the spend fields, a batch, the method override and a message recipient. */
+const FIELDS_READ = new Set<string>([...SPEND_KEYS, "batch", "method", "to", "recipient"]);
+
+/**
+ * The banned parameters (BANNED_PARAMS) a key names. A bracketed form key sets the fields inside its brackets too
+ * (`creative[creative_test_config]`, `cells[0][daily_min_spend_target]`), so the whole key is searched, decoded and in any
+ * case, not only its outer field.
+ */
+const bannedNamesInKey = (key: string): string[] => {
+  const text = decodeSegment(key).toLowerCase();
+  return BANNED_PARAMS.filter((name) => text.includes(name));
 };
 
 /** The parameters Meta will read: query string, query inside the path, then a JSON, urlencoded or FormData body. */
@@ -198,8 +267,56 @@ function mergedParams(call: GraphCall, pathQuery: Record<string, string>): { par
   } else if (!isBinary(body)) {
     opaque = true;
   }
+  // A field the classifier reads, given in bracket form (`status[0]=ACTIVE`, `daily_budget[x]=1`, `batch[0][method]=POST`), is
+  // set in a shape no check here can read, so it counts as given with an unreadable value, like a conflicting one.
+  for (const k of Object.keys(params)) {
+    const outer = outerField(k);
+    if (outer !== k && FIELDS_READ.has(outer)) params[outer] = CONFLICTING_VALUE;
+  }
   for (const k of SECRET_PARAMS) delete params[k];
   return { params, opaque };
+}
+
+/**
+ * The banned parameters (BANNED_PARAMS) a write carries at any depth: keys of nested objects (every bracket part of a form
+ * key), array items, and strings holding JSON (Meta parses fields like `targeting` or `cells` from JSON text). JSON-like text
+ * that does not parse is searched as text. `tooDeep` is set when nesting goes past MAX_PARAM_DEPTH, so what lies below was not
+ * read.
+ */
+function bannedParamsIn(params: Readonly<Record<string, unknown>>): { found: string[]; tooDeep: boolean } {
+  const found = new Set<string>();
+  let tooDeep = false;
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > MAX_PARAM_DEPTH) {
+      tooDeep = true;
+      return;
+    }
+    if (typeof value === "string") {
+      const text = value.trim();
+      if (!text.startsWith("{") && !text.startsWith("[")) return;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        for (const k of BANNED_PARAMS) if (text.includes(k)) found.add(k);
+        return;
+      }
+      visit(parsed, depth + 1);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, depth + 1);
+      return;
+    }
+    if (typeof value === "object" && value !== null && !isBinary(value)) {
+      for (const [k, v] of Object.entries(value)) {
+        for (const name of bannedNamesInKey(k)) found.add(name);
+        visit(v, depth + 1);
+      }
+    }
+  };
+  visit(params, 0);
+  return { found: [...found].sort(), tooDeep };
 }
 
 /** A path safe to log: Graph edge names are kept, ids and anything else become {id}. */
@@ -222,9 +339,14 @@ export function classify(call: GraphCall): GraphClassification {
   const { params, opaque } = mergedParams(call, pathQuery);
   let method = String(call.method ?? "GET").toUpperCase();
   // Graph honours a `method` parameter on a request (the old JSONP override); a GET that says method=post is a write.
-  const override = typeof params.method === "string" ? params.method.toUpperCase() : null;
+  const override = typeof params.method === "string" ? params.method.trim().toUpperCase() : null;
   if (override === "POST" || override === "DELETE") method = override;
-  const spendKeys = SPEND_KEYS.filter((k) => k in params).sort();
+  // An override that cannot be read (given twice with different values, or in bracket form) counts as a write.
+  else if (params.method === CONFLICTING_VALUE) method = "POST";
+  const isRead = method === "GET" || method === "HEAD" || method === "OPTIONS" || method === "DELETE";
+  // Reads and deletes never raise spend, so their parameters are not searched.
+  const banned = isRead ? { found: [] as string[], tooDeep: false } : bannedParamsIn(params);
+  const spendKeys = [...new Set([...SPEND_KEYS.filter((k) => k in params), ...banned.found])].sort();
   const pattern = pathPattern(segments);
   const first = segments[0] ?? null;
   const account = segments.find((s) => ACCOUNT.test(s)) ?? null;
@@ -246,6 +368,12 @@ export function classify(call: GraphCall): GraphClassification {
   // Every other method is treated as a write (POST).
   if (params.batch !== undefined) return result("ads_raise_or_unknown", "unknown", "batch");
   if (segments.length === 0) return result("ads_raise_or_unknown", "unknown", "root_write");
+  // Banned edges (4.7, D25): anywhere in the path, whatever the body.
+  const bannedEdge = segments.slice(1).find((s) => BANNED_EDGES.has(s));
+  if (bannedEdge) return result("ads_raise_or_unknown", "unknown", BANNED_EDGES.get(bannedEdge)!, { objectId: first });
+  // Banned parameters at any depth, on any edge (even one that is otherwise not spend).
+  if (banned.found.length > 0) return result("ads_raise_or_unknown", "unknown", BANNED_PARAM_WHY.get(banned.found[0])!, { objectId: first });
+  if (banned.tooDeep) return result("ads_raise_or_unknown", "unknown", "deep_body", { objectId: first });
   if (first && /^upload:/.test(first)) return result("not_spend", "none", "upload_session");
 
   if (first && ACCOUNT.test(first)) {
@@ -257,6 +385,8 @@ export function classify(call: GraphCall): GraphClassification {
       const e = segments[1];
       if ((CREATE_EDGES as readonly string[]).includes(e)) return result("ads_create", "neutral", "create", { createKind: e as CreateKind });
       if (ACCOUNT_NOT_SPEND_EDGES.has(e)) return result("not_spend", "none", "account_media");
+      const why = ACCOUNT_NOT_SPEND_WRITES.get(e);
+      if (why && !opaque && spendKeys.length === 0) return result("not_spend", "none", why);
     }
     return result("ads_raise_or_unknown", "unknown", "account_edge");
   }
@@ -277,8 +407,9 @@ export function classify(call: GraphCall): GraphClassification {
     if (status === "READ" && params.to === undefined && params.recipient === undefined) return result("not_spend", "none", "read_receipt", { objectId: first });
     return result("msg_send", "raise", "message", { objectId: first });
   }
-  if (edge === "copies") return result("ads_raise_or_unknown", "unknown", "copies", { objectId: first });
   if (edge && NOT_SPEND_EDGES.has(edge) && !opaque) return result("not_spend", "none", "edge", { objectId: first });
+  // A pixel on a business (C9's alternative to act_X/adspixels, P0-12): not spend while it sets no spend field.
+  if (segments.length === 2 && edge === "adspixels" && !opaque && spendKeys.length === 0) return result("not_spend", "none", "pixel_create", { objectId: first });
   if (opaque || spendKeys.length > 0) return result("ads_raise_or_unknown", "unknown", "edge_spend_field", { objectId: first });
   return result("not_spend", "none", "edge_no_spend_field", { objectId: first });
 }

@@ -23,7 +23,7 @@ vi.mock("@/lib/billing/status", () => ({ getBillingStatus: vi.fn(async () => ({ 
 
 import { GET as list, POST as create } from "@/app/api/ai-agent/agents/route";
 import { DELETE as remove, PATCH as patch } from "@/app/api/ai-agent/agents/[id]/route";
-import { GET as listSources, POST as addSource } from "@/app/api/ai-agent/agents/[id]/sources/route";
+import { GET as listSources, PATCH as refreshSource, POST as addSource } from "@/app/api/ai-agent/agents/[id]/sources/route";
 import { DELETE as removeSource } from "@/app/api/ai-agent/agents/[id]/sources/[sourceId]/route";
 import { POST as testRoute } from "@/app/api/ai-agent/agents/[id]/test/route";
 import { GET as usageRoute } from "@/app/api/ai-agent/usage/route";
@@ -128,6 +128,26 @@ describe("sources api", () => {
     expect(db.aiKnowledgeSource.deleteMany.mock.calls[0][0].where).toEqual({ id: "s1", agentId: "a1", tenantId: "t1" });
   });
 
+  it("adds a text file read in the browser, and refuses a file type it cannot read", async () => {
+    const res = await addSource(call("/api/ai-agent/agents/a1/sources", { kind: "file", fileName: "faq.md", content: "# FAQ\n\nWe deliver in 2 days." }), ctx);
+    expect(res.status).toBe(201);
+    expect(((await res.json()) as { source: { kind: string; title: string } }).source).toMatchObject({ kind: "file", title: "faq.md" });
+    const bad = await addSource(call("/api/ai-agent/agents/a1/sources", { kind: "file", fileName: "faq.docx", content: "PK" }), ctx);
+    expect(bad.status).toBe(400);
+  });
+
+  it("refreshes a web page source by id: admins only, and only a web page", async () => {
+    db.aiKnowledgeSource.findFirst.mockResolvedValue({ id: "s1", kind: "text", title: "T", content: "x", sourceUrl: null, status: "ready", createdAt: new Date() });
+    const res = await refreshSource(call("/api/ai-agent/agents/a1/sources", { sourceId: "s1" }, "PATCH"), ctx);
+    expect(res.status).toBe(400);
+    expect(db.aiKnowledgeSource.findFirst.mock.calls[0][0].where).toEqual({ id: "s1", agentId: "a1", tenantId: "t1" });
+    expect((await refreshSource(call("/api/ai-agent/agents/a1/sources", {}, "PATCH"), ctx)).status).toBe(400);
+    expect((await refreshSource(call("/api/ai-agent/agents/a1/sources", { sourceId: "s1" }, "PATCH", null), ctx)).status).toBe(403);
+    auth.role = "agent";
+    expect((await refreshSource(call("/api/ai-agent/agents/a1/sources", { sourceId: "s1" }, "PATCH"), ctx)).status).toBe(403);
+    expect(db.aiKnowledgeSource.updateMany).not.toHaveBeenCalled();
+  });
+
   it("only admins can add or delete", async () => {
     auth.role = "agent";
     expect((await addSource(call("/x", { kind: "text", content: "a" }), ctx)).status).toBe(403);
@@ -177,7 +197,9 @@ describe("test and usage", () => {
     db.usageLedger.count.mockResolvedValue(40);
     db.plan.findUnique.mockResolvedValue({ aiCreditsMonthly: 100 });
     const body = await (await usageRoute(new Request(`${ORIGIN}/api/ai-agent/usage`))).json();
-    expect(body).toEqual({ used: 40, limit: 100, remaining: 60, replies: 40, aiConfigured: true });
+    // hour: AI replies in the last 60 minutes against the plan's AI replies per hour. This plan has no code, name or value, so the
+    // platform fallback (60) applies.
+    expect(body).toEqual({ used: 40, limit: 100, remaining: 60, replies: 40, hour: { used: 40, limit: 60, source: "fallback" }, aiConfigured: true });
   });
 
   it("applies the platform default ceiling when the plan sets no AI credit limit", async () => {
@@ -187,7 +209,7 @@ describe("test and usage", () => {
     db.plan.findUnique.mockResolvedValue({ aiCreditsMonthly: null });
     const body = await (await usageRoute(new Request(`${ORIGIN}/api/ai-agent/usage`))).json();
     // The platform default is 1,500 credits a month (EDDY-SPEC 12.1a decision 2; it was 200 before Eddy).
-    expect(body).toEqual({ used: 40, limit: 1500, remaining: 1460, replies: 40, aiConfigured: true });
+    expect(body).toEqual({ used: 40, limit: 1500, remaining: 1460, replies: 40, hour: { used: 40, limit: 60, source: "fallback" }, aiConfigured: true });
   });
 
   it("says AI is off when the server has no key, so the page does not show a budget that can never be used", async () => {

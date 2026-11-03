@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Badge, Button, DataTable, EmptyState, ErrorState, Input, Select, StatusPill, apiFetch, confirm, toast, type Column } from "@/components/ui";
+import { Alert, Badge, Button, DataTable, EmptyState, ErrorState, Input, Select, StatusPill, apiFetch, confirm, toast, type Column } from "@/components/ui";
 import { displayName } from "@/lib/contacts/identity";
 import { PageHeader } from "@/components/app/PageHeader";
 import { ContactDialog, type ContactRow } from "./ContactDialog";
@@ -35,6 +35,7 @@ export function ContactsView({ openAdd = false, initialSegment }: { openAdd?: bo
   const [error, setError] = useState<string | null>(null);
   const [dialog, setDialog] = useState<DialogState>(openAdd ? { kind: "edit", contact: null } : null);
   const [seenAdd, setSeenAdd] = useState(openAdd);
+  const [missingSegment, setMissingSegment] = useState(false);
   const latest = useRef(0);
   const directory = useOwnerStageOptions();
   useEffect(() => void (dialog?.kind === "edit" && dialog.contact && dispatchEddyEvent("wa:eddy-selection", { type: "contact", id: dialog.contact.id })), [dialog]); // tells Eddy which contact is open
@@ -65,6 +66,13 @@ export function ContactsView({ openAdd = false, initialSegment }: { openAdd?: bo
       setKnownTags((prev) => [...new Set([...prev, ...page.items.flatMap((c) => c.tags)])].sort());
     } catch (e) {
       if (ticket !== latest.current) return;
+      if (!after && filters.segment && e instanceof Error && /segment not found/i.test(e.message)) {
+        // An old link or a deleted segment: show everyone and say why, instead of an error that Try again cannot fix.
+        setMissingSegment(true);
+        setSegment("");
+        setApplied({ ...filters, segment: "" });
+        return;
+      }
       const message = friendlyError(e, "We could not load your contacts. Check your connection and try again.");
       if (after) toast.error("We could not load more contacts", { description: message });
       else setError(message);
@@ -78,6 +86,10 @@ export function ContactsView({ openAdd = false, initialSegment }: { openAdd?: bo
   }, [applied, load]);
 
   useEffect(() => {
+    if (missingSegment) router.replace("/app/contacts", { scroll: false });
+  }, [missingSegment, router]);
+
+  useEffect(() => {
     const next = { q: q.trim(), tag: tag.trim(), segment };
     const id = setTimeout(() => setApplied((cur) => (cur.q === next.q && cur.tag === next.tag && cur.segment === next.segment ? cur : next)), 350);
     return () => clearTimeout(id);
@@ -88,6 +100,7 @@ export function ContactsView({ openAdd = false, initialSegment }: { openAdd?: bo
   const segmentName = [...(segments.data?.segments ?? []), ...(segments.data?.presets ?? [])].find((s) => s.id === applied.segment)?.name;
 
   function clearFilters() {
+    setMissingSegment(false);
     setQ("");
     setTag("");
     setSegment("");
@@ -190,10 +203,10 @@ export function ContactsView({ openAdd = false, initialSegment }: { openAdd?: bo
     <EmptyState
       compact
       title={applied.q ? `No contacts match "${applied.q}"` : applied.tag ? `No contacts tagged "${applied.tag}"` : `No contacts in ${segmentName ? `"${segmentName}"` : "this segment"}`}
-      body="Check the spelling, or try a different search, tag or segment."
+      body={applied.q ? "Check the spelling, or try a different search, tag or segment." : applied.tag ? "Check the spelling of the tag, or try a different one." : "No one is in this segment right now."}
       action={
         <Button variant="secondary" onClick={clearFilters}>
-          Clear search
+          {applied.q ? "Clear search" : "Show all contacts"}
         </Button>
       }
     />
@@ -265,7 +278,14 @@ export function ContactsView({ openAdd = false, initialSegment }: { openAdd?: bo
           <label htmlFor="contact-segment" className="mb-1 block text-sm font-medium">
             Segment
           </label>
-          <Select id="contact-segment" value={segment} onChange={(e) => setSegment(e.target.value)}>
+          <Select
+            id="contact-segment"
+            value={segment}
+            onChange={(e) => {
+              setMissingSegment(false);
+              setSegment(e.target.value);
+            }}
+          >
             <option value="">All contacts</option>
             {(segments.data?.segments.length ?? 0) > 0 && (
               <optgroup label="Your segments">
@@ -291,6 +311,21 @@ export function ContactsView({ openAdd = false, initialSegment }: { openAdd?: bo
           </Button>
         )}
       </form>
+
+      {missingSegment && (
+        <Alert
+          className="mb-4"
+          tone="warn"
+          title="That segment no longer exists"
+          action={
+            <Button size="sm" variant="ghost" onClick={() => setMissingSegment(false)}>
+              Dismiss
+            </Button>
+          }
+        >
+          It may have been deleted, so you are seeing all contacts. Pick another segment above.
+        </Alert>
+      )}
 
       {error ? (
         <ErrorState

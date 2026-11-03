@@ -14,7 +14,9 @@ export type PreviewMessage = {
 export type Waiting =
   | { kind: "buttons"; nodeId: string }
   | { kind: "list"; nodeId: string }
-  | { kind: "ask"; nodeId: string; retries: number };
+  | { kind: "ask"; nodeId: string; retries: number }
+  /** A wait step that ends early when the customer writes (onReply "continue"): reply, or let the wait end (Reply.endWait). */
+  | { kind: "delay"; nodeId: string };
 
 export type PreviewStatus = "waiting" | "ended" | "handoff";
 
@@ -145,9 +147,22 @@ function run(flow: FlowDefinition, d: Draft, node: FlowNode): string | null | "w
     case "remove_tag":
       note(d, `Tag "${node.data.tag}" removed.`);
       return nextNode(flow, node.id);
-    case "delay":
-      note(d, `Waits ${formatMinutes(node.data.minutes)} (skipped in preview).`);
+    case "delay": {
+      // What a customer's message during the wait does, as the live bot does it (src/lib/chatbots/index.ts).
+      const wait = formatMinutes(node.data.minutes);
+      if (node.data.onReply === "continue") {
+        note(d, `Waits ${wait}. A reply from the customer ends the wait early. Reply as the customer, or let the wait end.`);
+        s.waiting = { kind: "delay", nodeId: node.id };
+        return "wait";
+      }
+      note(
+        d,
+        node.data.onReply === "pass"
+          ? `Waits ${wait} (skipped in preview). A message during the wait goes to chat routing and rules; nothing answers it.`
+          : `Waits ${wait} (skipped in preview). The bot keeps any message sent during the wait, and nothing else answers it.`,
+      );
       return nextNode(flow, node.id);
+    }
     case "webhook":
       note(d, `Would contact ${node.data.url} (not contacted in preview).`);
       if (node.data.saveAs) vars[node.data.saveAs] = "sample response";
@@ -168,7 +183,7 @@ function run(flow: FlowDefinition, d: Draft, node: FlowNode): string | null | "w
       return nextNode(flow, node.id);
     case "unsubscribe":
       if (node.data.message?.trim()) say(d, interpolate(node.data.message, vars));
-      note(d, "Customer opted out of messages. The bot stops.");
+      note(d, "Customer opted out of marketing. The bot stops.");
       return null;
     case "end":
       return null;
@@ -192,7 +207,8 @@ export function startPreview(flow: FlowDefinition, opening?: string): PreviewSta
   return d.state;
 }
 
-export type Reply = { text?: string; optionId?: string };
+/** endWait: a wait that a reply could end early runs its full time instead (the preview's "Let the wait end"). */
+export type Reply = { text?: string; optionId?: string; endWait?: boolean };
 
 /** Feeds one customer reply to a waiting preview. Returns the same state when the preview is not waiting. */
 export function reply(flow: FlowDefinition, prev: PreviewState, input: Reply): PreviewState {
@@ -202,6 +218,21 @@ export function reply(flow: FlowDefinition, prev: PreviewState, input: Reply): P
   const node = nodeById(flow, w.nodeId);
   if (!node) return prev;
   const typed = (input.text ?? "").trim();
+
+  if (w.kind === "delay" && node.type === "delay") {
+    if (input.endWait) note(d, "The wait ended.");
+    else {
+      if (!typed) return prev;
+      // The live bot ends the wait and saves the message as {{last_reply}}, then goes on to the next step.
+      d.state.messages.push({ from: "customer", text: typed });
+      d.state.variables.last_reply = typed;
+      note(d, "The customer wrote during the wait, so the bot goes on now.");
+    }
+    d.state.waiting = null;
+    enter(flow, d, nextNode(flow, node.id));
+    return d.state;
+  }
+
   const escalate = (fits: boolean, offered: boolean): PreviewState | null => {
     const esc = settingsOf(flow).escalation;
     if (!esc.enabled || offered) return null;

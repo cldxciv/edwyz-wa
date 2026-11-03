@@ -2,13 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Row = { count: number; expiresAt: number };
 const store = vi.hoisted(() => new Map<string, { count: number; expiresAt: number }>());
-const calls = vi.hoisted(() => ({ query: [] as { sql: string; values: unknown[] }[], exec: [] as { sql: string; values: unknown[] }[], fail: false }));
+const calls = vi.hoisted(() => ({ query: [] as { sql: string; values: unknown[] }[], exec: [] as { sql: string; values: unknown[] }[], fail: false, noBucketTable: false }));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
     $queryRaw: vi.fn(async (strings: TemplateStringsArray, ...values: unknown[]) => {
       calls.query.push({ sql: strings.join("?"), values });
       if (calls.fail) throw new Error("connection refused");
+      // How Prisma reports a raw query on a table that has no migration (Postgres 42P01).
+      if (calls.noBucketTable && strings.join("?").includes('"RateLimitBucket"')) {
+        throw Object.assign(new Error('Raw query failed. Code: `42P01`. Message: `relation "RateLimitBucket" does not exist`'), { code: "P2010" });
+      }
       const [key, delta, windowMs] = values as [string, number, number];
       const now = Date.now();
       let row: Row | undefined = store.get(key);
@@ -24,16 +28,22 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-import { createLimiter, sweepExpiredLimits } from "@/lib/ratelimit";
+import { setLogSink } from "@/lib/log";
+import { createLimiter, resetRateLimitBackend, sweepExpiredLimits } from "@/lib/ratelimit";
 
 beforeEach(() => {
   store.clear();
   calls.query.length = 0;
   calls.exec.length = 0;
   calls.fail = false;
+  calls.noBucketTable = false;
+  resetRateLimitBackend();
   process.env.RATELIMIT_BACKEND = "settings";
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  setLogSink(null);
+});
 
 describe("synchronous consume (drop-in)", () => {
   it("allows up to max and then denies", async () => {
@@ -176,6 +186,34 @@ describe("storage", () => {
     limiter.consume("k");
     await limiter.flush();
     expect(calls.query[0].sql).toContain('INSERT INTO "RateLimitBucket"');
+  });
+
+  it("moves to the settings rows, once and without losing a hit, when RATELIMIT_BACKEND=table but the table has no migration", async () => {
+    const lines: string[] = [];
+    setLogSink((_level, line) => lines.push(line));
+    process.env.RATELIMIT_BACKEND = "table";
+    calls.noBucketTable = true;
+    const limiter = createLimiter(2, 60_000, "nobucket");
+    expect(limiter.consume("k")).toBe(true);
+    await limiter.flush();
+    // the failed table write is retried at once on PlatformSetting, so the count is shared, not per process
+    expect(calls.query.map((q) => (q.sql.includes('"RateLimitBucket"') ? "table" : "settings"))).toEqual(["table", "settings"]);
+    expect(store.get(calls.query[1].values[0] as string)?.count).toBe(1);
+    expect(await limiter.consumeShared("k")).toBe(true);
+    expect(calls.query.at(-1)!.sql).toContain('INSERT INTO "PlatformSetting"');
+    expect(await limiter.consumeShared("k")).toBe(false);
+    expect(lines.filter((l) => l.includes("ratelimit.table_missing"))).toHaveLength(1);
+    expect(lines.some((l) => l.includes("ratelimit.degraded"))).toBe(false);
+  });
+
+  it("a different database failure on the table backend is not mistaken for a missing table", async () => {
+    process.env.RATELIMIT_BACKEND = "table";
+    calls.fail = true;
+    const limiter = createLimiter(5, 60_000, "tbldown");
+    limiter.consume("k");
+    await limiter.flush();
+    calls.fail = false;
+    expect(calls.query.every((q) => q.sql.includes('"RateLimitBucket"'))).toBe(true);
   });
 
   it("reset and clear delete the shared rows and the local count", async () => {

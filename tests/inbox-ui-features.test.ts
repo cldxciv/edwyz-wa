@@ -1,10 +1,13 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { Composer, type ComposerProps } from "@/components/inbox/Composer";
 import { FILTER_KEYS, FILTER_TABS, filterToQuery } from "@/components/inbox/helpers";
 import { Bubble, NoteBubble, UnreadLine } from "@/components/inbox/MessageBubble";
 import { SavedViews } from "@/components/inbox/SavedViews";
-import { mediaPreview, validateAttachment, type ChatMessage } from "@/components/inbox/ux";
+import { mediaPreview, templatesForWaba, validateAttachment, wabaOf, type ChatMessage } from "@/components/inbox/ux";
 import { SAVED_TABS } from "@/lib/inbox/filters";
 import { isInboxView } from "@/lib/inbox/list";
 
@@ -89,6 +92,104 @@ describe("sent attachments in the thread", () => {
 
   it("previews uploaded files only through the tenant-checked proxy", () => {
     expect(mediaPreview({ id: "m4", type: "document", mediaUrl: "meta-media:7", mediaMime: "application/pdf" })?.src).toBe("/api/inbox/media/m4");
+  });
+
+  it("shows photos and videos, now sent by WhatsApp media id, through the proxy, and still shows older media-library links", () => {
+    expect(mediaPreview({ id: "m5", type: "image", mediaUrl: "meta-media:8", mediaMime: "image/jpeg" })?.src).toBe("/api/inbox/media/m5");
+    expect(mediaPreview({ id: "m6", type: "video", mediaUrl: "meta-media:9", mediaMime: "video/mp4" })?.src).toBe("/api/inbox/media/m6");
+    const key = `${"b".repeat(32)}.jpg`;
+    expect(mediaPreview({ id: "m7", type: "image", mediaUrl: `https://wa.edwyz.com/api/content/media-public/t1/${key}?sig=x`, mediaMime: "image/jpeg" })?.src).toBe(`/api/content/media/${key}`);
+  });
+});
+
+describe("templates a chat can send", () => {
+  const t = (id: string, wabaRefId?: string) => ({ id, name: id, language: "en", category: "UTILITY", status: "approved", components: [], ...(wabaRefId ? { wabaRefId } : {}) });
+
+  it("offers only the templates of the number's own WhatsApp Business Account", () => {
+    const all = [t("a1", "waba_a"), t("b1", "waba_b"), t("a2", "waba_a")];
+    expect(templatesForWaba(all, "waba_a")?.map((x) => x.id)).toEqual(["a1", "a2"]);
+    expect(templatesForWaba(all, "waba_c")).toEqual([]);
+  });
+
+  it("hides nothing while the account is unknown, and keeps the loading state", () => {
+    const all = [t("a1", "waba_a"), t("x")];
+    expect(templatesForWaba(all, null)).toBe(all);
+    expect(templatesForWaba(null, "waba_a")).toBeNull();
+    expect(templatesForWaba(all, "waba_b")?.map((x) => x.id)).toEqual(["x"]);
+  });
+
+  it("reads the account from an API row only when it is a plain id", () => {
+    expect(wabaOf({ displayPhone: "+91 1", wabaRefId: "waba_a" })).toBe("waba_a");
+    expect(wabaOf({ displayPhone: "+91 1" })).toBeNull();
+    expect(wabaOf({ wabaRefId: "" })).toBeNull();
+    expect(wabaOf({ wabaRefId: 5 })).toBeNull();
+    expect(wabaOf(undefined)).toBeNull();
+    expect(wabaOf(null)).toBeNull();
+  });
+
+  it("both the chat and the new-chat dialog pass the filtered list to the picker", () => {
+    const read = (f: string) => readFileSync(path.resolve(__dirname, "../src/components/inbox", f), "utf8");
+    expect(read("ChatView.tsx")).toMatch(/templates=\{chatTemplates\}/);
+    expect(read("ChatView.tsx")).toMatch(/templatesForWaba\(templates, numberWaba\)/);
+    expect(read("NewChatDialog.tsx")).toMatch(/templates=\{sendable\}/);
+  });
+});
+
+describe("composer while the chat loads", () => {
+  const props = (windowOpen: boolean | null, extra: Partial<ComposerProps> = {}): ComposerProps => ({
+    conversationId: "cv1",
+    windowOpen,
+    remainingMs: windowOpen ? 5 * 3_600_000 : 0,
+    lastInboundAt: null,
+    now: new Date("2026-10-30T10:00:00Z"),
+    disabled: windowOpen === null,
+    contactName: "Asha",
+    contactPhone: "+919876543210",
+    agentName: "Priya",
+    members: [],
+    templates: null,
+    templatesError: null,
+    onReloadTemplates: () => undefined,
+    onSendText: () => undefined,
+    onSendMedia: async () => undefined,
+    onSendTemplate: async () => undefined,
+    onAddNote: () => undefined,
+    restore: null,
+    ...extra,
+  });
+  const html = (p: ComposerProps) => renderToStaticMarkup(createElement(Composer, p));
+
+  it("does not claim the window is closed before it knows: no template-only notice, no picker, the box stays in place but disabled", () => {
+    const out = html(props(null));
+    expect(out).not.toContain("Template-only mode");
+    expect(out).not.toContain("Internal note</button>.");
+    expect(out).not.toContain("Loading templates");
+    expect(out).toMatch(/<textarea[^>]*id="inbox-composer"[^>]*disabled=""/);
+    expect(out).toContain("ui-skeleton");
+  });
+
+  it("shows template-only mode once the chat says the window is closed", () => {
+    const out = html(props(false));
+    expect(out).toContain("Template-only mode");
+    expect(out).toContain("Loading templates");
+    expect(out).toContain("Internal note</button>.");
+    expect(out).not.toContain('id="inbox-composer"');
+  });
+
+  it("shows the open window and an enabled box once the chat says it is open, even if the parent forgot to disable it while loading", () => {
+    const open = html(props(true));
+    expect(open).toContain("Reply window open");
+    expect(open).not.toMatch(/<textarea[^>]*disabled=""/);
+    expect(html(props(null, { disabled: false }))).toMatch(/<textarea[^>]*disabled=""/);
+  });
+});
+
+describe("empty inbox", () => {
+  it("sends 'Connect a number' to the connect page, which exists, not to /app/settings, which has no page", () => {
+    const src = readFileSync(path.resolve(__dirname, "../src/components/inbox/ConversationList.tsx"), "utf8");
+    expect(src).toContain('href="/app/settings/connect">Connect a number</a>');
+    expect(src).not.toContain('href="/app/settings">');
+    expect(readFileSync(path.resolve(__dirname, "../src/app/(app)/app/settings/connect/page.tsx"), "utf8")).toBeTruthy();
   });
 });
 

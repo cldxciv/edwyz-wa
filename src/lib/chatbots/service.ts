@@ -60,6 +60,41 @@ async function phoneNumber(tenantId: string, body: Rec): Promise<string | null |
   return found.id;
 }
 
+export type TriggerFields = { triggerType: string; triggerKeywords: string[]; phoneNumberId: string | null };
+type TriggerSource = { flow: unknown; triggerType: string; triggerKeywords: string[]; phoneNumberId?: string | null };
+
+const isRec = (v: unknown): v is Rec => Boolean(v) && typeof v === "object" && !Array.isArray(v);
+
+/** The trigger the bot runs on now: the columns, which the runtime reads. */
+const liveTrigger = (c: TriggerSource): TriggerFields => ({ triggerType: c.triggerType, triggerKeywords: c.triggerKeywords ?? [], phoneNumberId: c.phoneNumberId ?? null });
+
+/**
+ * The trigger of the saved draft. A published bot's columns are what customers get, so a change saved on it waits in the draft
+ * flow (flow.trigger) until publishChatbot copies it live; without one, the draft trigger is the live one.
+ */
+export function draftTrigger(c: TriggerSource): TriggerFields {
+  const live = liveTrigger(c);
+  const saved = isRec(c.flow) && isRec(c.flow.trigger) ? c.flow.trigger : null;
+  if (!saved) return live;
+  return {
+    triggerType: typeof saved.triggerType === "string" && (TRIGGER_TYPES as readonly string[]).includes(saved.triggerType) ? saved.triggerType : live.triggerType,
+    triggerKeywords: Array.isArray(saved.triggerKeywords) ? saved.triggerKeywords.filter((k): k is string => typeof k === "string") : live.triggerKeywords,
+    phoneNumberId: saved.phoneNumberId === null || typeof saved.phoneNumberId === "string" ? saved.phoneNumberId : live.phoneNumberId,
+  };
+}
+
+const sameTrigger = (a: TriggerFields, b: TriggerFields) => a.triggerType === b.triggerType && a.phoneNumberId === b.phoneNumberId && a.triggerKeywords.join("\n") === b.triggerKeywords.join("\n");
+
+/** True when a trigger change is saved in the draft and not live yet (only a published bot keeps one). */
+export const triggerPending = (c: TriggerSource): boolean => !sameTrigger(draftTrigger(c), liveTrigger(c));
+
+/** The flow JSON without its pending trigger, as it is stored once the trigger is live (or on a bot that is not published). */
+function withoutTrigger(flow: unknown): Prisma.InputJsonValue {
+  if (!isRec(flow)) return flow as Prisma.InputJsonValue;
+  const { trigger: _pending, ...rest } = flow;
+  return rest as Prisma.InputJsonValue;
+}
+
 /** Drafts may be incomplete; only the shape and size limits are enforced until publish. */
 function draftFlow(value: unknown): Prisma.InputJsonValue {
   const flow = value as Rec;
@@ -112,18 +147,38 @@ export async function createChatbot(tenantId: string, userId: string, body: Rec)
   });
 }
 
+/**
+ * Saves the draft. On a published bot the trigger (when it starts, its words and its number) is part of the draft too: it is kept
+ * in the draft flow and goes live only on publish, so "Save draft" never changes what customers get. A published word-triggered
+ * bot cannot be saved without words. On a bot that is not published the trigger columns are the draft.
+ */
 export async function updateChatbot(tenantId: string, id: string, body: Rec) {
-  await getChatbot(tenantId, id);
+  const current = await getChatbot(tenantId, id);
   const data: Prisma.ChatbotUpdateManyMutationInput & { phoneNumberId?: string | null } = {};
   const botName = name(body);
   if (botName !== undefined) data.name = botName;
   const triggerType = trigger(body);
-  if (triggerType !== undefined) data.triggerType = triggerType;
   const triggerKeywords = keywords(body);
-  if (triggerKeywords !== undefined) data.triggerKeywords = triggerKeywords;
   const phone = await phoneNumber(tenantId, body);
-  if (phone !== undefined) data.phoneNumberId = phone;
-  if (body.flow !== undefined) data.flow = draftFlow(body.flow);
+  const draft = draftTrigger(current);
+  const next: TriggerFields = {
+    triggerType: triggerType ?? draft.triggerType,
+    triggerKeywords: triggerKeywords ?? draft.triggerKeywords,
+    phoneNumberId: phone !== undefined ? phone : draft.phoneNumberId,
+  };
+  const flow = body.flow !== undefined ? draftFlow(body.flow) : withoutTrigger(current.flow);
+  if (current.status === "published") {
+    if (next.triggerType === "keyword" && next.triggerKeywords.length === 0) {
+      throw new HttpError(400, "This chatbot is published and starts on words, so it needs at least one word. Add one, or choose another way for it to start.");
+    }
+    const pending = sameTrigger(next, liveTrigger(current)) ? null : next;
+    data.flow = (pending ? { ...(flow as Rec), trigger: pending } : flow) as Prisma.InputJsonValue;
+  } else {
+    data.triggerType = next.triggerType;
+    data.triggerKeywords = next.triggerKeywords;
+    data.phoneNumberId = next.phoneNumberId;
+    if (body.flow !== undefined || (isRec(current.flow) && "trigger" in current.flow)) data.flow = flow;
+  }
   await prisma.chatbot.updateMany({ where: { id, tenantId, status: { not: "archived" } }, data });
   return getChatbot(tenantId, id);
 }
@@ -164,20 +219,33 @@ async function checkTeams(tenantId: string, flow: NonNullable<FlowValidation["fl
   return { ok: false, errors: [{ message: "A team used in this chatbot no longer exists. Choose another team in the hand-over settings." }], warnings: [] };
 }
 
+/** Makes the draft live: the flow, and the draft trigger (when it starts, its words and its number), which wait for publish. */
 export async function publishChatbot(tenantId: string, id: string) {
   const chatbot = await getChatbot(tenantId, id);
   if (chatbot.status === "archived") throw new HttpError(409, "Archived chatbots cannot be published. Duplicate it instead.");
-  if (chatbot.triggerType === "keyword" && chatbot.triggerKeywords.length === 0) {
+  const next = draftTrigger(chatbot);
+  if (next.triggerType === "keyword" && next.triggerKeywords.length === 0) {
     throw new HttpError(422, "Add at least one trigger keyword before publishing.");
   }
   const validation = validateFlow(chatbot.flow);
   if (!validation.ok || !validation.flow) throw new FlowInvalidError(validation);
   const teamProblem = await checkTeams(tenantId, validation.flow);
   if (teamProblem) throw new FlowInvalidError(teamProblem);
-  await prisma.chatbot.updateMany({
-    where: { id, tenantId },
-    data: { publishedFlow: validation.flow as unknown as Prisma.InputJsonValue, status: "published", version: chatbot.version + 1 },
-  });
+  // A number chosen in the draft may have been removed since it was saved.
+  if (next.phoneNumberId && next.phoneNumberId !== chatbot.phoneNumberId && !(await prisma.phoneNumber.findFirst({ where: { id: next.phoneNumberId, tenantId }, select: { id: true } }))) {
+    throw new HttpError(422, "The WhatsApp number chosen for this chatbot is no longer in this workspace. Choose another number in Settings.");
+  }
+  const pending = isRec(chatbot.flow) && "trigger" in chatbot.flow;
+  const data: Prisma.ChatbotUpdateManyMutationInput & { phoneNumberId?: string | null } = {
+    publishedFlow: validation.flow as unknown as Prisma.InputJsonValue,
+    status: "published",
+    version: chatbot.version + 1,
+    triggerType: next.triggerType,
+    triggerKeywords: next.triggerKeywords,
+    phoneNumberId: next.phoneNumberId,
+    ...(pending ? { flow: withoutTrigger(chatbot.flow) } : {}),
+  };
+  await prisma.chatbot.updateMany({ where: { id, tenantId }, data });
   return { chatbot: await getChatbot(tenantId, id), warnings: validation.warnings };
 }
 
@@ -201,14 +269,16 @@ export async function duplicateChatbot(tenantId: string, userId: string, id: str
   if ((await prisma.chatbot.count({ where: { tenantId, status: { not: "archived" } } })) >= MAX_CHATBOTS_PER_TENANT) {
     throw new HttpError(409, `A workspace can have at most ${MAX_CHATBOTS_PER_TENANT} chatbots.`);
   }
+  // The copy starts as a draft of the source's draft, including a trigger change that was saved but not published yet.
+  const draft = draftTrigger(source);
   return prisma.chatbot.create({
     data: {
       tenantId,
       name: `${source.name} (copy)`.slice(0, 100),
-      triggerType: source.triggerType,
-      triggerKeywords: source.triggerKeywords,
-      phoneNumberId: source.phoneNumberId,
-      flow: source.flow as Prisma.InputJsonValue,
+      triggerType: draft.triggerType,
+      triggerKeywords: draft.triggerKeywords,
+      phoneNumberId: draft.phoneNumberId,
+      flow: withoutTrigger(source.flow),
       createdByUserId: userId,
     },
   });

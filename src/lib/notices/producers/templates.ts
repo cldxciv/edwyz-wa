@@ -6,6 +6,7 @@
  * template moves to another status, its earlier template notices resolve. The rejection reason is never copied: [Fix with
  * Eddy] opens Eddy with the notice id, and Eddy reads the reason through a tool as UntrustedText (6.7 critic).
  */
+import type { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
 import type { NoticeKind } from "@/lib/eddy/contract";
 import { KIND_SPECS, act, dedupe } from "../kinds";
@@ -30,6 +31,20 @@ const asCursor = (c: Json | null): Cursor | null => (c && typeof c === "object" 
 export const producer: NoticeProducer = {
   name: "templates",
   kinds: KINDS,
+  /** Workspaces with a template changed after their cursor (24 hours back before the first run): two queries for the batch. */
+  async due(tenantIds, now) {
+    const states = (await prisma.noticeScanState.findMany({ where: { tenantId: { in: [...tenantIds] }, scanner: "templates" }, select: { tenantId: true, cursor: true } })) as { tenantId: string; cursor: Json }[];
+    const cursors = new Map(states.map((s) => [s.tenantId, asCursor(s.cursor)]));
+    const lookback = new Date(now.getTime() - FIRST_LOOKBACK_MS);
+    const changed = tenantIds.flatMap((tenantId): Prisma.TemplateWhereInput[] => {
+      const c = cursors.get(tenantId);
+      if (!c) return [{ tenantId, updatedAt: { gte: lookback } }];
+      const since = new Date(c.at);
+      return [{ tenantId, updatedAt: { gt: since } }, { tenantId, updatedAt: since, id: { gt: c.id } }];
+    });
+    const rows = await prisma.template.groupBy({ by: ["tenantId"], where: { OR: changed } });
+    return rows.map((r) => r.tenantId);
+  },
   async run(ctx) {
     const cursor = asCursor(ctx.cursor) ?? { at: new Date(ctx.now.getTime() - FIRST_LOOKBACK_MS).toISOString(), id: "" };
     const since = new Date(cursor.at);

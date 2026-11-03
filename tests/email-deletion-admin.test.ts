@@ -16,7 +16,7 @@ const billing = vi.hoisted(() => ({ getBillingStatus: vi.fn() }));
 vi.mock("@/lib/billing", () => billing);
 vi.mock("@/lib/tenant-lifecycle", () => ({ windDownTenant: vi.fn() }));
 
-import { getTenantDetail, listTenants, TENANT_FILTERS } from "@/lib/admin/tenants";
+import { getTenantDetail, listTenants, pendingDeletionRequests, TENANT_FILTERS } from "@/lib/admin/tenants";
 
 const row = (id: string) => ({ id, name: `W ${id}`, slug: id, createdAt: new Date(), status: "active", deletedAt: null, trialEndsAt: null, billingExempt: false, onboardingStatus: "none", _count: { memberships: 1 }, subscription: null });
 const request = { status: "requested", requestedAt: "2026-11-01T00:00:00.000Z", requestedByUserId: "u1", deleteBy: "2026-12-01T00:00:00.000Z" };
@@ -46,7 +46,27 @@ describe("pending workspace deletion requests are visible to the platform team",
     expect(TENANT_FILTERS).toContain("deletion_requested");
     db.platformSetting.findMany.mockResolvedValue([{ key: "workspace-deletion:t2", value: request }]);
     await listTenants({ filter: "deletion_requested", q: "", page: 1 });
-    expect(db.tenant.findMany.mock.calls[0][0].where).toMatchObject({ id: { in: ["t2"] }, deletedAt: null });
+    expect(db.tenant.findMany.mock.calls[0][0].where).toEqual({ id: { in: ["t2"] } });
+  });
+
+  it("lists every workspace the overview counts, including one already soft-deleted or whose erase stopped partway", async () => {
+    // A tiny tenant table that honours the two conditions listTenants uses, so the count and the rows play out for real.
+    const tenants = [row("t1"), row("t2"), { ...row("t3"), status: "suspended", deletedAt: new Date("2026-11-02T00:00:00Z") }];
+    const pick = ({ where }: { where: { id?: { in: string[] }; deletedAt?: null | { not: null } } }) =>
+      tenants.filter((t) => (!where.id || where.id.in.includes(t.id)) && (where.deletedAt === undefined || (where.deletedAt === null ? t.deletedAt === null : t.deletedAt !== null)));
+    db.tenant.findMany.mockImplementation(async (args) => pick(args));
+    db.tenant.count.mockImplementation(async (args) => pick(args).length);
+    db.platformSetting.findMany.mockResolvedValue([
+      { key: "workspace-deletion:t2", value: request },
+      { key: "workspace-deletion:t3", value: request },
+    ]);
+    const counted = (await pendingDeletionRequests()).size;
+    const listed = await listTenants({ filter: "deletion_requested", q: "", page: 1 });
+    expect(counted).toBe(2);
+    expect(listed.total).toBe(counted);
+    expect(listed.items.map((t) => t.id)).toEqual(["t2", "t3"]);
+    // The ordinary filters still leave deleted workspaces out.
+    expect((await listTenants({ filter: "all", q: "", page: 1 })).items.map((t) => t.id)).toEqual(["t1", "t2"]);
   });
 
   it("the filter is empty, not 'everything', when no one has asked", async () => {

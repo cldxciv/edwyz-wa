@@ -2,12 +2,18 @@ import { hashToken, newOpaqueToken } from "@/lib/auth/tokens";
 import { siteUrl } from "@/lib/config";
 import { prisma } from "@/lib/db";
 import { queueEmail } from "./index";
-import { passwordResetTemplate, verifyEmailTemplate } from "./templates";
+import { passwordChangedTemplate, passwordResetTemplate, verifyEmailTemplate } from "./templates";
 import { createEmailToken } from "./tokens";
 
+/** A fresh link (earlier unused verify links stop working), with the body sealed in the queue because it carries the one-time link. */
 export async function sendVerificationEmail(user: { id: string; email: string; name: string }): Promise<void> {
   const token = await createEmailToken(user.id, "verify");
   await queueEmail({ to: user.email, ...verifyEmailTemplate({ name: user.name, link: `${siteUrl()}/verify-email?token=${token}` }) }, { seal: true });
+}
+
+/** Tells the account holder their password changed, so a change they did not make does not go unnoticed. Carries no link. */
+export async function sendPasswordChangedEmail(user: { email: string; name: string }): Promise<void> {
+  await queueEmail({ to: user.email, ...passwordChangedTemplate({ name: user.name }) });
 }
 
 /**

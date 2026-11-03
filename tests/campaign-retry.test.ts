@@ -18,7 +18,7 @@ vi.mock("@/lib/integrations/events", () => ({ emitEvent: async () => undefined }
 // The portfolio-wide 24 hour usage is covered in campaign-limits.test.ts; here the portfolio always has room.
 vi.mock("@/lib/broadcasts/portfolio", () => ({ portfolioUsage: async () => ({ limit: 1000, used: 0, oldest: null, phones: [] }) }));
 
-import { processBroadcast, recipientUpdateFromMessage, requeueDueRetries } from "@/lib/broadcasts/process";
+import { LATE_FAILURE_GRACE_MS, processBroadcast, recipientUpdateFromMessage, requeueDueRetries } from "@/lib/broadcasts/process";
 import { failedRecipientData, isRetryableCode, planRetry, retryWindowEnd, retryWindowOpen } from "@/lib/broadcasts/retry";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -134,6 +134,28 @@ describe("processBroadcast with retries", () => {
   it("completes when no retry is waiting", async () => {
     db.broadcast.findUnique.mockResolvedValue(broadcast());
     setup(null);
+    await processBroadcast("b1", now);
+    expect(db.broadcast.update.mock.calls.at(-1)![0].data.status).toBe("completed");
+  });
+
+  it("stays open a few minutes after the last send, so a 131049 that Meta reports late is still retried", async () => {
+    const lastSent = new Date(now.getTime() - 2 * 60_000);
+    db.broadcast.findUnique.mockResolvedValue(broadcast());
+    setup(null);
+    db.broadcastRecipient.findFirst.mockImplementation(async ({ where }: any) => (where.retryAfter ? null : where.sentAt ? { sentAt: lastSent } : null));
+    await processBroadcast("b1", now);
+    expect(db.broadcast.update).not.toHaveBeenCalled();
+    expect(queue.enqueue).toHaveBeenCalledWith("broadcast", { broadcastId: "b1" }, { runAt: new Date(lastSent.getTime() + LATE_FAILURE_GRACE_MS) });
+    const lookup = db.broadcastRecipient.findFirst.mock.calls.map((c: any) => c[0]).find((q: any) => q.where.sentAt);
+    expect(lookup).toMatchObject({ where: { tenantId: "t1", broadcastId: "b1", sentAt: { not: null } }, orderBy: { sentAt: "desc" } });
+
+    // Once the grace has passed it completes; with retries off it never waits.
+    vi.clearAllMocks();
+    db.broadcast.findUnique.mockResolvedValue(broadcast());
+    await processBroadcast("b1", new Date(lastSent.getTime() + LATE_FAILURE_GRACE_MS + 1));
+    expect(db.broadcast.update.mock.calls.at(-1)![0].data.status).toBe("completed");
+    vi.clearAllMocks();
+    db.broadcast.findUnique.mockResolvedValue(broadcast({ retryDays: 0 }));
     await processBroadcast("b1", now);
     expect(db.broadcast.update.mock.calls.at(-1)![0].data.status).toBe("completed");
   });

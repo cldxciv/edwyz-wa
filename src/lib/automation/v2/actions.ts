@@ -1,11 +1,14 @@
 import { Prisma } from "@/generated/prisma/client";
 import { handleInboundForAiAgent, STOP_TAG } from "@/lib/ai-agent";
+import { liftAiPause } from "@/lib/ai-agent/pause";
 import { startChatbot } from "@/lib/chatbots";
 import { siteUrl } from "@/lib/config";
+import { mayReceive, sendKindForCategory } from "@/lib/contacts/opt-out";
 import { prisma } from "@/lib/db";
 import { queueEmail } from "@/lib/email";
 import { sendMedia, sendTemplateMessage, sendText } from "@/lib/inbox/service";
-import { buildBodyComponents, bodyText, checkVariables, cleanVariable, fillTemplate, inlineSendable } from "@/lib/inbox/template-vars";
+import { buildTemplateComponents, type TemplateBuildError } from "@/lib/chatbots/template-build";
+import { bodyText, checkVariables, cleanVariable, fillTemplate, variableCount } from "@/lib/inbox/template-vars";
 import { isWithinServiceWindow } from "@/lib/inbox/window";
 import { emitStatusChanged } from "@/lib/integrations/emitters";
 import { processRun } from "@/lib/leads/runner";
@@ -14,9 +17,11 @@ import { describeError } from "@/lib/safe-error";
 import { HttpError } from "@/lib/tenancy";
 import { prepareMaterial } from "./materials";
 import type { Action, TagScope } from "./model";
+import { ruleTemplateProblem } from "./template-check";
 import { renderText } from "./variables";
 
-export type EnvContact = { id: string; name: string | null; phone: string | null; tags: string[]; attributes: Record<string, unknown>; optIn: boolean };
+/** optedOutAt: the contact opted out of marketing (lib/contacts/opt-out.ts); a marketing template step is skipped for them. */
+export type EnvContact = { id: string; name: string | null; phone: string | null; tags: string[]; attributes: Record<string, unknown>; optIn: boolean; optedOutAt?: Date | null };
 export type EnvConversation = { id: string; phoneNumberId: string; assignedToId: string | null; tags: string[]; teamId: string | null; lastInboundAt: Date | null; status: string };
 
 export type ActionEnv = {
@@ -60,14 +65,42 @@ function values(env: ActionEnv) {
   return { name: env.contact.name, phone: env.contact.phone ?? "", attributes: env.contact.attributes };
 }
 
-async function pickPhoneId(env: ActionEnv): Promise<string | null> {
+/**
+ * The number a run sends from: the rule's own, else the contact's latest chat, else the first connected number. With `wabaRefId`
+ * (a template's WhatsApp Business account), only numbers of that account are picked, because a template can only be sent from them.
+ */
+async function pickPhoneId(env: ActionEnv, wabaRefId?: string | null): Promise<string | null> {
   if (env.rule.phoneNumberId) return env.rule.phoneNumberId;
   const { tenantId } = env;
-  const existing = await prisma.conversation.findFirst({ where: { tenantId, contactId: env.contact.id }, orderBy: { lastMessageAt: "desc" }, select: { phoneNumberId: true } });
+  const account = wabaRefId ? { phoneNumber: { wabaRefId } } : {};
+  const existing = await prisma.conversation.findFirst({ where: { tenantId, contactId: env.contact.id, ...account }, orderBy: { lastMessageAt: "desc" }, select: { phoneNumberId: true } });
   if (existing) return existing.phoneNumberId;
-  const phone = await prisma.phoneNumber.findFirst({ where: { tenantId, status: "connected" }, orderBy: { createdAt: "asc" }, select: { id: true } });
+  const phone = await prisma.phoneNumber.findFirst({ where: { tenantId, status: "connected", ...(wabaRefId ? { wabaRefId } : {}) }, orderBy: { createdAt: "asc" }, select: { id: true } });
   return phone?.id ?? null;
 }
+
+/** A template is approved for one WhatsApp Business account; the sending number must belong to it, or Meta refuses the send. */
+async function numberFitsTemplate(tenantId: string, phoneNumberId: string, wabaRefId: string | null | undefined): Promise<boolean> {
+  if (!wabaRefId) return true;
+  const phone = await prisma.phoneNumber.findFirst({ where: { id: phoneNumberId, tenantId }, select: { wabaRefId: true } });
+  return !phone || phone.wabaRefId === wabaRefId;
+}
+
+/**
+ * Why a rule cannot send this template at all, in words for the run log, or null. Headings and link buttons are filled by the step.
+ * A rule saved before a check existed (a coupon code, named values, a login code) fails here with the reason instead of at Meta.
+ */
+export function templateRuleProblem(components: unknown): string | null {
+  const problem = ruleTemplateProblem(components);
+  return problem ? `the template ${problem.long}` : null;
+}
+
+/** A value the template needs that this step did not fill (or that came out empty for this contact), in words for the run log. */
+export const TEMPLATE_FILL_PROBLEM: Record<TemplateBuildError, string> = {
+  missing_header_media: "the template has a picture, video or file at the top and this step has no https link to it, or the link came out empty for this contact",
+  missing_header_value: "the template's heading has a value to fill in and this step has none, or it came out empty for this contact",
+  missing_button_value: "the template's button link has a value to fill in and this step has none, or it came out empty for this contact",
+};
 
 /** The chat this run works on, created when the rule started without one (a schedule or a new contact). Null when no number is connected. */
 async function ensureConversation(env: ActionEnv): Promise<EnvConversation | null> {
@@ -102,25 +135,34 @@ async function sendTextAction(env: ActionEnv, text: string): Promise<ActionResul
   return ok(true);
 }
 
-async function sendTemplateAction(env: ActionEnv, templateId: string, variables: string[]): Promise<ActionResult> {
-  const template = await prisma.template.findFirst({ where: { id: templateId, tenantId: env.tenantId } });
+async function sendTemplateAction(env: ActionEnv, action: Extract<Action, { type: "send_template" }>): Promise<ActionResult> {
+  const template = await prisma.template.findFirst({ where: { id: action.templateId, tenantId: env.tenantId } });
   if (!template) return failed("the template was deleted");
   if (template.status !== "approved") return skipped("the template is not approved");
+  if (!mayReceive(env.contact, sendKindForCategory(template.category))) return skipped("the contact opted out of marketing messages");
   if (String(template.category).toLowerCase() === "marketing" && !env.contact.optIn) return skipped("the contact has not agreed to marketing messages");
-  const fit = inlineSendable(template.components);
-  if (!fit.ok) return failed("the template needs a media header or button value, which rules cannot fill in");
-  const filled = variables.map((v) => cleanVariable(renderText(v, values(env))));
-  const checked = checkVariables(filled.slice(0, fit.variables), fit.variables);
+  const unsendable = templateRuleProblem(template.components);
+  if (unsendable) return failed(unsendable);
+  const count = variableCount(bodyText(template.components));
+  const fill = (v: string | undefined) => renderText(v ?? "", values(env));
+  const filled = action.variables.map((v) => cleanVariable(fill(v)));
+  const checked = checkVariables(filled.slice(0, count), count);
   if (!checked.ok) return failed(checked.error);
-  const phoneNumberId = env.conversation?.phoneNumberId ?? (await pickPhoneId(env));
-  if (!phoneNumberId) return skipped("no WhatsApp number is connected");
+  // The chatbot template builder: heading text or picture link, the text values, and the link button value.
+  const built = buildTemplateComponents(template.components, { header: fill(action.headerVariable), headerMediaUrl: fill(action.headerMediaUrl), body: checked.values, button: fill(action.buttonVariable) });
+  if ("error" in built) return failed(TEMPLATE_FILL_PROBLEM[built.error]);
+  const phoneNumberId = env.conversation?.phoneNumberId ?? (await pickPhoneId(env, template.wabaRefId));
+  if (!phoneNumberId) return skipped(template.wabaRefId ? "no WhatsApp number of the template's business account is connected" : "no WhatsApp number is connected");
+  if (!(await numberFitsTemplate(env.tenantId, phoneNumberId, template.wabaRefId))) {
+    return failed("the template belongs to a different WhatsApp Business account than the number this chat or rule uses; choose a template of that number's account");
+  }
   const message = await sendTemplateMessage({
     tenantId: env.tenantId,
     phoneNumberId,
     contactId: env.contact.id,
     templateName: template.name,
     language: template.language,
-    components: buildBodyComponents(checked.values),
+    components: built.components,
     ...(env.conversation ? { conversationId: env.conversation.id } : {}),
     origin: "automation",
     ...(env.reservationId ? { reservationId: env.reservationId } : {}),
@@ -212,11 +254,9 @@ async function startChatbotAction(env: ActionEnv, chatbotId: string): Promise<Ac
 async function startAiAction(env: ActionEnv): Promise<ActionResult> {
   if (!env.inbound || !env.conversation) return skipped("the AI agent starts from a customer message");
   const conversation = env.conversation;
-  if (conversation.tags.includes(STOP_TAG)) {
-    const tags = conversation.tags.filter((t) => t !== STOP_TAG);
-    await prisma.conversation.updateMany({ where: { id: conversation.id, tenantId: env.tenantId }, data: { tags } });
-    conversation.tags = tags;
-  }
+  // The rule lifts the AI pause in this chat; the dated end keeps a later pause from being judged by this one's start.
+  if (conversation.tags.includes(STOP_TAG)) conversation.tags = await liftAiPause(env.tenantId, conversation.id, conversation.tags);
+  // startedBy "rule": the agent answers whatever its Reply when setting says, including "Only when an automation rule starts it".
   const handled = await handleInboundForAiAgent({
     tenantId: env.tenantId,
     phoneNumberId: env.inbound.phoneNumberId,
@@ -224,8 +264,10 @@ async function startAiAction(env: ActionEnv): Promise<ActionResult> {
     contactId: env.contact.id,
     text: env.inbound.text,
     receivedAt: env.inbound.receivedAt,
+    messageType: env.inbound.messageType,
+    startedBy: "rule",
   });
-  return handled ? ok(true) : skipped("the AI agent did not answer; check that it is switched on and its activation setting");
+  return handled ? ok(true) : skipped("the AI agent did not answer; check that it is switched on for this number and that the 24-hour window is open");
 }
 
 function matchKey(attributes: Record<string, unknown>, name: string): string {
@@ -319,7 +361,7 @@ async function dispatch(action: Action, env: ActionEnv): Promise<ActionResult> {
     case "send_text":
       return sendTextAction(env, action.text);
     case "send_template":
-      return sendTemplateAction(env, action.templateId, action.variables);
+      return sendTemplateAction(env, action);
     case "send_material":
       return sendMaterialAction(env, action.materialId);
     case "assign_user":

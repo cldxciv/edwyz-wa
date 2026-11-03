@@ -151,7 +151,7 @@ export function ChatbotsView() {
         actions={
           <>
             <Link href="/app/automation" className={linkButton("secondary", "md")}>
-              Auto-replies
+              Rules
             </Link>
             {editable && (
               <Link href="/app/automation/chatbots/new" className={linkButton("primary", "md")}>

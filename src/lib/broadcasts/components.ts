@@ -1,52 +1,44 @@
-import { templateVariables } from "@/lib/templates/validate";
+import { readPlaceholders } from "@/lib/templates/validate";
 
-export type SendComponent = { type: "body"; parameters: { type: "text"; text: string }[] };
+/** Button types a broadcast can send: quick replies and call buttons need nothing, links and coupon codes are filled by the value mapping. */
+const SENDABLE_BUTTONS = new Set(["QUICK_REPLY", "URL", "PHONE_NUMBER", "COPY_CODE"]);
+/** Meta lists the copy-code button of a login-code template as a URL button with this address. */
+const OTP_URL = /^https:\/\/www\.whatsapp\.com\/otp\//i;
+const BUTTON_NAMES: Record<string, string> = { FLOW: "form", CATALOG: "catalog", MPM: "product list", SPM: "product", VOICE_CALL: "WhatsApp call", APP: "app" };
 
-function bodyText(components: unknown): string {
-  const list = Array.isArray(components) ? components : [];
-  const body = list.find((c) => c && typeof c === "object" && (c as { type?: string }).type === "BODY") as { text?: string } | undefined;
-  return body?.text ?? "";
-}
+type Component = Record<string, unknown>;
+const list = (components: unknown): Component[] => (Array.isArray(components) ? (components as Component[]).filter((c) => c && typeof c === "object") : []);
+const buttonsOf = (components: unknown): Component[] => ((list(components).find((c) => c.type === "BUTTONS")?.buttons as Component[] | undefined) ?? []).filter((b) => b && typeof b === "object");
+const buttonType = (b: Component) => (typeof b.type === "string" ? b.type.toUpperCase() : "");
 
-/** Reasons a template cannot be broadcast with the current feature set, or null when it can. */
-export function unsupportedReason(components: unknown): string | null {
-  const list = (Array.isArray(components) ? components : []) as Record<string, unknown>[];
-  const header = list.find((c) => c.type === "HEADER");
-  if (header && header.format !== "TEXT") return "Templates with media headers are not supported in broadcasts yet.";
-  if (header && typeof header.text === "string" && templateVariables(header.text).length) {
-    return "Templates with header variables are not supported in broadcasts yet.";
-  }
-  const buttons = list.find((c) => c.type === "BUTTONS");
-  const hasUrlVar = ((buttons?.buttons as { url?: string }[] | undefined) ?? []).some((b) => b.url && templateVariables(b.url).length);
-  return hasUrlVar ? "Templates with URL button variables are not supported in broadcasts yet." : null;
-}
+/** The copy-code button of a login-code template: OTP as saved here, or the WhatsApp OTP link Meta lists once it is synced. */
+export const isLoginCodeButton = (b: Component): boolean => buttonType(b) === "OTP" || (buttonType(b) === "URL" && typeof b.url === "string" && OTP_URL.test(b.url));
+
+/** True for a login-code (authentication) template. */
+export const isLoginCodeTemplate = (components: unknown): boolean => buttonsOf(components).some(isLoginCodeButton);
 
 /**
- * Body variable {{n}} is filled from the contact attribute named "n"; {{1}} falls back to the contact name.
- * Returns null when a value is missing so the recipient is failed instead of sending a broken message.
+ * Why a template cannot be broadcast at all, or null. Media headers, header placeholders, named placeholders, link placeholders and
+ * coupon codes are filled by the value mapping. The wizard greys out a template with a reason, so it is never sent and refused by Meta.
+ * allowLoginCode is for a message to one person with the caller's own values (the compat API): the caller sends the code itself.
  */
-export function buildSendComponents(
-  templateComponents: unknown,
-  contact: { name: string | null; attributes: unknown },
-): SendComponent[] | null {
-  const vars = templateVariables(bodyText(templateComponents));
-  if (vars.length === 0) return [];
-  const attrs = (contact.attributes && typeof contact.attributes === "object" ? contact.attributes : {}) as Record<string, unknown>;
-  const parameters: { type: "text"; text: string }[] = [];
-  for (const n of vars) {
-    const raw = attrs[String(n)] ?? (n === 1 ? contact.name : undefined);
-    if (typeof raw !== "string" || !raw.trim()) return null;
-    parameters.push({ type: "text", text: raw.trim() });
-  }
-  return [{ type: "body", parameters }];
-}
-
-/** Why a template cannot be broadcast at all, or null. Media headers, header placeholders and link placeholders are supported through the value mapping. */
-export function broadcastSupportReason(components: unknown): string | null {
-  const list = (Array.isArray(components) ? components : []) as Record<string, unknown>[];
-  const header = list.find((c) => c.type === "HEADER");
+export function broadcastSupportReason(components: unknown, { allowLoginCode = false }: { allowLoginCode?: boolean } = {}): string | null {
+  const all = list(components);
+  const header = all.find((c) => c.type === "HEADER");
   const format = typeof header?.format === "string" ? header.format.toUpperCase() : "TEXT";
   if (header && !["TEXT", "IMAGE", "VIDEO", "DOCUMENT"].includes(format)) return "This template has a header type that broadcasts cannot send yet (for example a location).";
-  if (list.some((c) => c.type === "CAROUSEL" || c.type === "LIMITED_TIME_OFFER")) return "Carousel and limited-time-offer templates cannot be broadcast yet.";
+  if (all.some((c) => c.type === "CAROUSEL" || c.type === "LIMITED_TIME_OFFER")) return "Carousel and limited-time-offer templates cannot be broadcast yet.";
+  const body = all.find((c) => c.type === "BODY");
+  if ([format === "TEXT" ? header?.text : undefined, body?.text].some((text) => readPlaceholders(text).format === "mixed")) {
+    return "This template mixes numbered and named placeholders, so WhatsApp cannot fill it in. Make a new version of it.";
+  }
+  for (const b of buttonsOf(all)) {
+    const type = buttonType(b);
+    if (isLoginCodeButton(b)) {
+      if (allowLoginCode) continue;
+      return "Login-code templates send a new code to one person at a time, so they cannot be broadcast.";
+    }
+    if (type && !SENDABLE_BUTTONS.has(type)) return `This template has a ${BUTTON_NAMES[type] ?? type.toLowerCase().replace(/_/g, " ")} button, which broadcasts cannot fill in yet.`;
+  }
   return null;
 }

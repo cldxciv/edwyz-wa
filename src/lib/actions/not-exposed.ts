@@ -52,6 +52,7 @@ export const NOT_EXPOSED: readonly RouteEntry[] = Object.freeze([
   // ===== platform, auth, plumbing =====
   { route: "/api/admin/**", methods: all, reason: "platform" },
   { route: "/api/auth/**", methods: all, reason: "auth" },
+  { route: "/api/account/**", methods: all, reason: "auth", note: "The member's own password and name, on the Account page." },
   { route: "/api/eddy/**", methods: all, reason: "plumbing" },
   { route: "/api/actions/**", methods: all, reason: "plumbing", note: "Card buttons only; undo_last_action reaches the undo route through invoke.ts." },
   { route: "/api/notices/**", methods: all, reason: "plumbing" },
@@ -80,11 +81,14 @@ export const NOT_EXPOSED: readonly RouteEntry[] = Object.freeze([
   { route: "/api/approvals", methods: ["POST"], reason: "secret", note: "Returns a public approval link once." },
 
   // ===== account =====
+  { route: "/api/billing/change-plan", methods: ["POST"], reason: "account", note: "An upgrade charges the saved payment method at once: the owner changes the plan on the Billing page." },
   { route: "/api/billing/**", methods: all, reason: "account" },
+  { route: "/api/workspace", methods: all, reason: "account", note: "Renaming the workspace (owner), on the Account page." },
   { route: "/api/workspace/ownership", methods: all, reason: "account" },
   { route: "/api/workspace/members/[userId]", methods: all, reason: "account", note: "Role changes and removal." },
   { route: "/api/workspace/invites/[id]", methods: all, reason: "account", note: "Revoking an invite." },
   { route: "/api/meta-connect/disconnect", methods: all, reason: "account" },
+  { route: "/api/projects", methods: all, reason: "account", note: "Starting a new project: a new workspace with its own free trial, from All projects or the workspace menu." },
 
   // ===== money controls (owner-only on the Spending page) =====
   { route: "/api/ads/caps", methods: all, reason: "money_controls" },
@@ -97,6 +101,7 @@ export const NOT_EXPOSED: readonly RouteEntry[] = Object.freeze([
   { route: "/api/inbox/conversations/[id]/attachments", methods: all, reason: "file" },
   { route: "/api/inbox/media/**", methods: all, reason: "file" },
   { route: "/api/templates/media", methods: all, reason: "file" },
+  { route: "/api/broadcasts/media", methods: all, reason: "file", note: "The header file of a broadcast, uploaded in the wizard." },
   { route: "/api/content/media", methods: all, reason: "file" },
   { route: "/api/content/media/[file]", methods: all, reason: "file" },
   { route: "/api/creative/assets/[id]/file", methods: all, reason: "file" },
@@ -137,8 +142,8 @@ export const NOT_EXPOSED: readonly RouteEntry[] = Object.freeze([
   { route: "/api/broadcasts/calendar", methods: all, reason: "page_only" },
   { route: "/api/broadcasts/options", methods: all, reason: "page_only" },
   { route: "/api/broadcasts/overview", methods: all, reason: "page_only" },
-  { route: "/api/chatbots", methods: all, reason: "page_only", note: "The chatbot builder." },
-  { route: "/api/chatbots/[id]", methods: all, reason: "page_only" },
+  { route: "/api/chatbots", methods: ["GET"], reason: "page_only", note: "The chatbot list; Eddy lists them with list_automations and creates them with create_chatbot." },
+  { route: "/api/chatbots/[id]", methods: ["DELETE"], reason: "page_only", note: "Deleting stays on the chatbot page; Eddy reads with get_chatbot and changes the draft with update_chatbot." },
   { route: "/api/chatbots/[id]/archive", methods: all, reason: "page_only" },
   { route: "/api/chatbots/[id]/duplicate", methods: all, reason: "page_only" },
   { route: "/api/chatbots/[id]/sessions", methods: all, reason: "page_only" },
@@ -178,10 +183,15 @@ export const NOT_EXPOSED: readonly RouteEntry[] = Object.freeze([
   { route: "/api/teams", methods: all, reason: "page_only", note: "list_team lists the teams." },
   { route: "/api/teams/[id]", methods: all, reason: "page_only" },
   { route: "/api/teams/[id]/members", methods: all, reason: "page_only" },
+  { route: "/api/templates/[id]", methods: ["PATCH"], reason: "page_only", note: "The template editor saves changes; create_template_draft makes new drafts." },
   { route: "/api/templates/[id]/duplicate", methods: all, reason: "page_only" },
   { route: "/api/templates/sync", methods: all, reason: "page_only" },
+  { route: "/api/templates/accounts", methods: all, reason: "page_only", note: "The template editor's WhatsApp account choice." },
+  { route: "/api/broadcasts/[id]", methods: ["DELETE"], reason: "page_only", note: "The wizard deletes the draft it made when a step changes; cancel_broadcast stops a real one." },
   { route: "/api/workspace/invites", methods: ["GET"], reason: "page_only" },
   { route: "/api/workspace/messaging-limits", methods: all, reason: "page_only", note: "get_workspace_status reports each number's limit." },
+  { route: "/api/projects/overview", methods: all, reason: "page_only", note: "The All projects page, across workspaces; Eddy works inside one workspace and opens the page with open_page." },
+  { route: "/api/promote/**", methods: all, reason: "v2", note: "Instagram and Facebook Page ads (docs/IG-PAGE-ADS-SPEC.md 4.8); PRM-13 gives each route its action." },
 ] satisfies RouteEntry[]);
 
 /** A route an action reaches as an equivalent of its main route (the action's other kinds), checked by role parity too. */
@@ -194,7 +204,6 @@ export const EQUIVALENT_ROUTES: readonly EquivalentRoute[] = Object.freeze([
   { route: "/api/ai-agent/agents/[id]", method: "PATCH", action: "disable_automation", note: "kind ai_agent." },
   { route: "/api/leads/sequences/[id]", method: "PATCH", action: "disable_automation", note: "kind lead_sequence." },
   { route: "/api/commerce/stores/[id]/settings", method: "PUT", action: "disable_automation", note: "kind cart_reminders." },
-  { route: "/api/chatbots/[id]/publish", method: "POST", action: "enable_automation", note: "kind chatbot." },
   { route: "/api/broadcasts/audience", method: "POST", action: "preview_audience", note: "Reach of tags plus a segment or filters." },
 ] satisfies EquivalentRoute[]);
 

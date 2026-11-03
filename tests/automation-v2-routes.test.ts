@@ -198,8 +198,9 @@ describe("updating, moving and converting", () => {
       where: { id: "k", tenantId: "t1", version: 1 },
       data: expect.objectContaining({ version: 2, priority: 50, trigger: { type: "message_received" }, actions: [{ type: "send_text", text: "Prices!" }] }),
     });
+    // Classic replies stay quiet while a person handles the chat; the converted rule does too.
     const converted = db.automationRule.updateMany.mock.calls[0][0].data.filters as { options: { allowWhenHumanActive: boolean } };
-    expect(converted.options.allowWhenHumanActive).toBe(true);
+    expect(converted.options.allowWhenHumanActive).toBe(false);
     db.automationRule.findFirst.mockResolvedValueOnce({ id: "k", tenantId: "t1", version: 2 });
     expect((await convertRoute(call("/api/automation/k/convert"), ctx("k"))).status).toBe(409);
     db.automationRule.updateMany.mockClear();
@@ -348,5 +349,128 @@ describe("dry run", () => {
     expect(body.rule?.id).toBe("c1");
     expect(body.matches).toEqual([{ id: "r1", name: "Price question", does: ["send a text reply"] }]);
     expect((await testRoute(call("/api/automation/test", { text: "x".repeat(1001) }))).status).toBe(400);
+  });
+});
+
+describe("templates a rule can send (P5)", () => {
+  const imageHeader = [{ type: "HEADER", format: "IMAGE" }, { type: "BODY", text: "Sale {{1}}" }];
+  const withTemplate = (extra: Record<string, unknown> = {}) => ({ ...v2Body, actions: [{ type: "send_template", templateId: "tp1", variables: ["x"] }], ...extra });
+
+  it("marks the templates a rule cannot send, with the reason, and gives each template's and number's account", async () => {
+    db.template.findMany.mockResolvedValue([
+      { id: "tp1", name: "promo", language: "en", category: "MARKETING", components: imageHeader, wabaRefId: "w1" },
+      { id: "tp2", name: "track", language: "en", category: "UTILITY", components: [{ type: "BODY", text: "Hi" }, { type: "BUTTONS", buttons: [{ type: "URL", url: "https://x.example.com/{{1}}" }] }], wabaRefId: "w1" },
+      { id: "tp3", name: "hello", language: "en", category: "UTILITY", components: [{ type: "BODY", text: "Hi {{1}}" }], wabaRefId: "w2" },
+      { id: "tp4", name: "long", language: "en", category: "UTILITY", components: [{ type: "BODY", text: "{{21}}" }], wabaRefId: "w2" },
+    ]);
+    for (const m of [db.chatbot, db.leadSequence, db.team, db.membership, db.segment, db.replyMaterial]) m.findMany.mockResolvedValue([]);
+    db.phoneNumber.findMany.mockResolvedValue([{ id: "pn1", displayPhone: "+91 99999", verifiedName: "Shop", wabaRefId: "w1" }]);
+    const body = (await (await optionsRoute(new Request(`${ORIGIN}/api/automation/options`))).json()) as { templates: Record<string, unknown>[]; phoneNumbers: Record<string, unknown>[] };
+    expect(body.templates).toEqual([
+      // A heading picture and a link button value are filled in by the step (D4): sendable, with what the step must fill.
+      expect.objectContaining({ id: "tp1", sendable: true, wabaRefId: "w1", needs: { headerText: false, headerMedia: "image", buttonValue: false } }),
+      expect.objectContaining({ id: "tp2", sendable: true, needs: { headerText: false, headerMedia: null, buttonValue: true } }),
+      expect.objectContaining({ id: "tp3", sendable: true, wabaRefId: "w2", variables: 1, needs: { headerText: false, headerMedia: null, buttonValue: false } }),
+      expect.objectContaining({ id: "tp4", sendable: false, reason: "has too many values" }),
+    ]);
+    expect(body.templates[2]).not.toHaveProperty("reason");
+    expect(body.phoneNumbers[0]).toMatchObject({ id: "pn1", wabaRefId: "w1" });
+  });
+
+  it("refuses to save a step that leaves out the heading picture, heading value or button value its template needs, and saves it once filled", async () => {
+    db.template.count.mockResolvedValue(1);
+    db.template.findMany.mockResolvedValue([{ id: "tp1", name: "promo", components: imageHeader, wabaRefId: "w1" }]);
+    const res = await createRoute(call("/api/automation", withTemplate()));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe('The template "promo" has a picture at the top. Add a https link to it in this step.');
+    expect(db.automationRule.create).not.toHaveBeenCalled();
+
+    const filled = { type: "send_template", templateId: "tp1", variables: ["x"], headerMediaUrl: "{{attribute.photo}}" };
+    expect((await createRoute(call("/api/automation", { ...v2Body, actions: [filled] }))).status).toBe(201);
+    expect(db.automationRule.create.mock.calls[0][0].data.actions).toEqual([filled]);
+
+    const heading = [{ type: "HEADER", format: "TEXT", text: "Order {{1}}" }, { type: "BODY", text: "Hi" }, { type: "BUTTONS", buttons: [{ type: "URL", url: "https://x.example.com/{{1}}" }] }];
+    db.template.findMany.mockResolvedValue([{ id: "tp1", name: "track", components: heading, wabaRefId: "w1" }]);
+    const noHeading = await createRoute(call("/api/automation", { ...v2Body, actions: [{ type: "send_template", templateId: "tp1", variables: [] }] }));
+    expect(((await noHeading.json()) as { error: string }).error).toBe('The template "track" has a value to fill in its heading. Add it in this step.');
+    const noButton = await createRoute(call("/api/automation", { ...v2Body, actions: [{ type: "send_template", templateId: "tp1", variables: [], headerVariable: "A-1" }] }));
+    expect(((await noButton.json()) as { error: string }).error).toBe('The template "track" has a value to fill in its button link. Add it in this step.');
+  });
+
+  it("still refuses a template with more values than a rule can fill in", async () => {
+    db.template.count.mockResolvedValue(1);
+    db.template.findMany.mockResolvedValue([{ id: "tp1", name: "long", components: [{ type: "BODY", text: "{{21}}" }], wabaRefId: "w1" }]);
+    const res = await createRoute(call("/api/automation", withTemplate()));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe('The template "long" has more values than a rule can fill in. Choose another template, or send this one from a broadcast.');
+  });
+
+  it("greys out a coupon-code template and a named-value template with the reason, and refuses to save them with the same reason (D4 follow-up)", async () => {
+    const coupon = [{ type: "BODY", text: "Your code is ready" }, { type: "BUTTONS", buttons: [{ type: "COPY_CODE", example: "SAVE10" }] }];
+    const named = [{ type: "HEADER", format: "TEXT", text: "Hi {{first_name}}" }, { type: "BODY", text: "Your order {{order_id}} is ready" }];
+    const login = [{ type: "BODY", text: "{{1}} is your code." }, { type: "BUTTONS", buttons: [{ type: "OTP", otp_type: "COPY_CODE" }] }];
+    db.template.findMany.mockResolvedValue([
+      { id: "tp1", name: "coupon", language: "en", category: "MARKETING", components: coupon, wabaRefId: "w1" },
+      { id: "tp2", name: "named", language: "en", category: "UTILITY", components: named, wabaRefId: "w1" },
+      { id: "tp3", name: "login", language: "en", category: "AUTHENTICATION", components: login, wabaRefId: "w1" },
+    ]);
+    for (const m of [db.chatbot, db.leadSequence, db.team, db.membership, db.segment, db.replyMaterial]) m.findMany.mockResolvedValue([]);
+    db.phoneNumber.findMany.mockResolvedValue([]);
+    const body = (await (await optionsRoute(new Request(`${ORIGIN}/api/automation/options`))).json()) as { templates: Record<string, unknown>[] };
+    const instead = "Choose another template, or send this one from a broadcast.";
+    expect(body.templates).toEqual([
+      expect.objectContaining({ id: "tp1", sendable: false, reason: "has a coupon code button", instead }),
+      expect.objectContaining({ id: "tp2", sendable: false, reason: "has named values like {{first_name}}", instead }),
+      expect.objectContaining({ id: "tp3", sendable: false, reason: "is a login-code template", instead: "Choose another template." }),
+    ]);
+
+    db.template.count.mockResolvedValue(1);
+    db.template.findMany.mockResolvedValue([{ id: "tp1", name: "coupon", components: coupon, wabaRefId: "w1" }]);
+    const refused = await createRoute(call("/api/automation", withTemplate()));
+    expect(refused.status).toBe(400);
+    expect(((await refused.json()) as { error: string }).error).toBe(`The template "coupon" has a coupon code button, which a rule cannot fill in yet. ${instead}`);
+    db.template.findMany.mockResolvedValue([{ id: "tp1", name: "named", components: named, wabaRefId: "w1" }]);
+    const namedRefused = await createRoute(call("/api/automation", withTemplate({ actions: [{ type: "send_template", templateId: "tp1", variables: [], headerVariable: "Asha" }] })));
+    expect(((await namedRefused.json()) as { error: string }).error).toBe(`The template "named" has named values like {{first_name}}, which a rule cannot fill in yet. ${instead}`);
+    expect(db.automationRule.create).not.toHaveBeenCalled();
+  });
+
+  it("a PATCH with only a new number on a v2 rule takes the v2 path, so the templates are checked against the number's account (D4)", async () => {
+    db.template.count.mockResolvedValue(1);
+    db.template.findMany.mockResolvedValue([{ id: "tp1", name: "hello", components: [{ type: "BODY", text: "Hi {{1}}" }], wabaRefId: "w2" }]);
+    db.phoneNumber.findFirst.mockResolvedValue({ id: "pn1", wabaRefId: "w1" });
+    db.automationRule.findFirst.mockResolvedValue({ ...v2Row, phoneNumberId: null, actions: [{ type: "send_template", templateId: "tp1", variables: ["x"] }] });
+    const refused = await patchRoute(call("/api/automation/r1", { phoneNumberId: "pn1" }, "PATCH"), ctx());
+    expect(refused.status).toBe(400);
+    expect(((await refused.json()) as { error: string }).error).toMatch(/"hello" belongs to a different WhatsApp Business account/);
+    expect(db.automationRule.updateMany).not.toHaveBeenCalled();
+
+    db.phoneNumber.findFirst.mockResolvedValue({ id: "pn1", wabaRefId: "w2" });
+    expect((await patchRoute(call("/api/automation/r1", { phoneNumberId: "pn1" }, "PATCH"), ctx())).status).toBe(200);
+    expect(db.automationRule.updateMany).toHaveBeenCalledWith({ where: { id: "r1", tenantId: "t1", version: 2 }, data: { phoneNumberId: "pn1" } });
+  });
+
+  it("a classic rule patched with only a number keeps the classic path", async () => {
+    db.automationRule.findFirst.mockResolvedValue({ id: "c1", tenantId: "t1", version: 1, type: "keyword" });
+    db.phoneNumber.findFirst.mockResolvedValue({ id: "pn1" });
+    expect((await patchRoute(call("/api/automation/c1", { phoneNumberId: "pn1" }, "PATCH"), ctx("c1"))).status).toBe(200);
+    expect(db.automationRule.updateMany).toHaveBeenCalledWith({ where: { id: "c1", tenantId: "t1" }, data: { phoneNumberId: "pn1" } });
+    expect(db.automationRule.findFirst.mock.calls[0][0]).toEqual({ where: { id: "c1", tenantId: "t1" }, select: { version: true } });
+  });
+
+  it("refuses a template of another WhatsApp Business account than the rule's number, on create and when the number changes", async () => {
+    db.template.count.mockResolvedValue(1);
+    db.template.findMany.mockResolvedValue([{ id: "tp1", name: "hello", components: [{ type: "BODY", text: "Hi {{1}}" }], wabaRefId: "w2" }]);
+    db.phoneNumber.findFirst.mockResolvedValue({ id: "pn1", wabaRefId: "w1" });
+    const res = await createRoute(call("/api/automation", withTemplate({ phoneNumberId: "pn1" })));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(/"hello" belongs to a different WhatsApp Business account/);
+    // Without a number the run picks one of the template's account.
+    expect((await createRoute(call("/api/automation", withTemplate()))).status).toBe(201);
+
+    db.automationRule.findFirst.mockResolvedValue({ ...v2Row, actions: [{ type: "send_template", templateId: "tp1", variables: ["x"] }] });
+    expect((await patchRoute(call("/api/automation/r1", { version: 2, phoneNumberId: "pn1" }, "PATCH"), ctx())).status).toBe(400);
+    db.phoneNumber.findFirst.mockResolvedValue({ id: "pn1", wabaRefId: "w2" });
+    expect((await patchRoute(call("/api/automation/r1", { version: 2, phoneNumberId: "pn1" }, "PATCH"), ctx())).status).toBe(200);
   });
 });

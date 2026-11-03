@@ -10,7 +10,7 @@ import type { JsonSchema } from "@/lib/tenant-mcp/schema";
 import type { ApiScope } from "@/lib/integrations/scopes";
 import type { AutomationEvent } from "@/lib/automation/v2/emit";
 import type { Actor } from "@/lib/tenancy";
-import type { EddyLang, I18nKey, VerifiedPageContext } from "@/lib/eddy/contract";
+import type { EddyLang, I18nKey, MetaScreenHint, VerifiedPageContext } from "@/lib/eddy/contract";
 import type {
   AdsRaiseIntent,
   ApprovalDTO,
@@ -121,7 +121,9 @@ export type UiHint =
   | { kind: "navigate"; path: string; labelKey: I18nKey }
   | { kind: "composer_draft"; conversationId: string; text: string }
   | { kind: "undo"; actionId: string; undoUntil: string }
-  | { kind: "intent"; intent: "open_templates" | "connect_whatsapp" | "connect_facebook"; payload?: Record<string, string> };
+  | { kind: "intent"; intent: "open_templates" | "connect_whatsapp" | "connect_facebook"; payload?: Record<string, string> }
+  /** (IG-PAGE-ADS-SPEC E-R2) an "Opens Meta" button, resolved on the server (eddy/meta-links.ts); never built from model text. */
+  | MetaScreenHint;
 
 /**
  * What a v2 spending action hands to the spend bridge (4.10a): the exact Phase 0 intent and the worst-case figures the card
@@ -171,7 +173,21 @@ export type ActionDef<A extends Record<string, unknown> = Record<string, unknown
   needsWhatsApp?: boolean; // refused with 'not_connected' (or 'reconnect' when the token is unusable) before any work (4.3 G8a)
   callsMeta?: boolean; // refused with 'demo' in the demo workspace (6.14)
   automationEvents?(ctx: ActionCtx, a: A): Promise<AutomationEvent[]>; // the automation v2 events this write would emit (4.2a)
+  /**
+   * (IG-PAGE-ADS-SPEC 1.4, PRM-13; ADS-MCP-CANVA-CREATIVE-SPEC MCC-00) offered to the model only while this platform feature is
+   * on (model-tools.ts); the registry still holds it. See ActionFeature.
+   */
+  feature?: ActionFeature;
 };
+
+/**
+ * The platform features a tool can belong to (the one gating mechanism for every spec; MCC-00). model-tools.ts offers a tool
+ * with a feature only while that feature is in the toolset's feature set, which by default is read from the platform flags:
+ * promote (PROMOTE_ENABLED not off), studio (STUDIO_ENABLED=on), canva (Studio on and Canva configured) and meta_ads_mcp
+ * (META_ADS_MCP=on). Later specs only add members here (social_inbox, social, shop, partnerships, fundraisers) and their
+ * flag in model-tools.ts; they never build a second mechanism, so the default toolsets stay as pinned while their flags are off.
+ */
+export type ActionFeature = "promote" | "studio" | "canva" | "meta_ads_mcp";
 
 /**
  * The model-facing results of a call (4.3). Data only; the card and its nonce go only to the browser.

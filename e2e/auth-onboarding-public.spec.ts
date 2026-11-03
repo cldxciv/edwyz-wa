@@ -120,6 +120,7 @@ test.describe("signup", () => {
     await expect(page.getByText("Too short.")).toBeVisible();
     await pw.blur();
     await expect(page.getByText("Use at least 10 characters. Add 7 more.")).toBeVisible();
+    await expect(page.getByText("Too short.")).toHaveCount(0); // one message, not the meter's hint as well
     await pw.fill("correct horse battery staple");
     await expect(page.getByText(/Strong\.|Good\./).first()).toBeVisible();
     await pw.fill("password12345");
@@ -316,13 +317,27 @@ test.describe("login", () => {
     await expect(alerts(page)).toContainText("Something went wrong");
   });
 
-  test("a signed-in user visiting /login or /signup is not left on a dead end", async ({ page, context }) => {
-    await signupUser(context);
-    await page.goto("/login");
-    await page.waitForLoadState("networkidle");
-    const url = page.url();
-    const hasForm = await page.getByRole("button", { name: "Sign in" }).count();
-    expect(url.includes("/app") || hasForm > 0).toBeTruthy();
+  test("a signed-in visitor to /login or /signup sees only the notice; the form appears only on request", async ({ page, context }) => {
+    const u = await signupUser(context);
+    for (const [path, reveal, field, submit] of [
+      ["/login", "Sign in as someone else", "Email", "Sign in"],
+      ["/signup", "Sign up with a different email", "Your name", "Create workspace"],
+    ] as const) {
+      await page.goto(path);
+      await expect(page.getByText(`You are already signed in as ${u.email}.`)).toBeVisible();
+      // No form at all, so a browser autofill plus a stray Enter cannot sign this browser in to another account.
+      await expect(page.locator("form")).toHaveCount(0);
+      await expect(page.getByRole("textbox")).toHaveCount(0);
+      await page.keyboard.press("Enter");
+      await expect(page).toHaveURL(new RegExp(`${path}$`));
+      await expect(page.getByRole("link", { name: "Continue to the app" })).toHaveAttribute("href", "/app");
+      await page.getByRole("button", { name: reveal }).click();
+      await expect(page.getByLabel(field)).toBeFocused();
+      await expect(page.getByRole("button", { name: submit })).toBeVisible();
+    }
+    await page.goto("/login?next=/app/contacts");
+    await page.getByRole("link", { name: "Continue to the app" }).click();
+    await page.waitForURL(/\/app\/contacts/);
   });
 });
 
@@ -373,11 +388,20 @@ test.describe("forgot and reset password", () => {
     await expect(page.getByText(/valid email/)).toBeVisible();
   });
 
-  test("reset password: missing token shows guidance with a link to request a new one", async ({ page }) => {
+  test("reset password: missing token gives the same advice as forgot password, and a way back to sign in", async ({ page }) => {
+    await page.goto("/forgot-password");
+    const canSend = await resetFormShown(page);
     await page.goto("/reset-password");
     await expect(alerts(page)).toContainText("incomplete");
-    await page.getByRole("link", { name: "request a new one" }).click();
-    await expect(page).toHaveURL(/\/forgot-password/);
+    if (canSend) {
+      await expect(page.getByRole("link", { name: "request a new one" })).toHaveAttribute("href", "/forgot-password");
+    } else {
+      // No new link can be sent while email is off, so the page does not offer one.
+      await expect(page.getByRole("link", { name: "request a new one" })).toHaveCount(0);
+      await expect(alerts(page).getByRole("link", { name: /@/ })).toHaveAttribute("href", /^mailto:.+subject=Password%20reset/);
+    }
+    await page.getByRole("link", { name: "Back to sign in" }).click();
+    await expect(page).toHaveURL(/\/login/);
   });
 
   test("reset password: bad and expired tokens fail clearly; valid token changes the password and ends old sessions", async ({ page, context }) => {
@@ -463,5 +487,38 @@ test.describe("verify email", () => {
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     const body = await page.locator("body").innerText();
     test.info().annotations.push({ type: "info", description: `verify prompt in UI: ${/verify|confirm your email/i.test(body)}` });
+  });
+});
+
+test.describe("public addresses", () => {
+  test("the sitemap lists the docs subpages, and every listed page loads", async ({ request }) => {
+    const xml = await (await request.get("/sitemap.xml")).text();
+    const locs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => new URL(m[1]).pathname);
+    for (const p of ["/docs/authentication", "/docs/endpoints", "/docs/webhooks", "/docs/rate-limits", "/docs/errors"]) expect(locs).toContain(p);
+    for (const p of locs) expect((await request.get(p)).status(), p).toBe(200);
+  });
+
+  test("an unknown public API path answers in the documented error shape", async ({ request }) => {
+    const res = await request.get("/api/ext/v3/nope");
+    expect(res.status()).toBe(404);
+    expect(await res.json()).toMatchObject({ ok: false, error: { code: "not_found" }, timestamp: expect.any(String) });
+    // Other unknown API paths keep the plain JSON 404.
+    expect(await (await request.get("/api/nope")).json()).toEqual({ error: "Not found." });
+  });
+
+  test("a spending request link that does not work leads to Spending limits", async ({ page }) => {
+    await page.goto("/s/abc");
+    await expect(page.getByRole("heading", { name: "This link doesn't work" })).toBeVisible();
+    await expect(page.getByText("Settings > Spending limits in Edwyz WA.")).toBeVisible();
+    await page.getByRole("link", { name: "Open Spending limits" }).click();
+    await expect(page).toHaveURL(/\/login\?next=%2Fapp%2Fsettings%2Fspending|\/app\/settings\/spending/);
+  });
+
+  test("the data deletion status page is dated like the other legal pages", async ({ page }) => {
+    await page.goto("/data-deletion");
+    const line = (await page.getByText(/^Last updated /).first().innerText()).trim();
+    await page.goto("/data-deletion/status");
+    await expect(page.getByText(line)).toBeVisible();
+    await expect(page.getByText(/^Effective /)).toHaveCount(0);
   });
 });

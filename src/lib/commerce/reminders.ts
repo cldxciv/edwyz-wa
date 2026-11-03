@@ -1,9 +1,10 @@
+import { type BuiltComponent, type VariableMap, buildRecipientComponents, templateSlots } from "@/lib/broadcasts/mapping";
+import { mayReceive } from "@/lib/contacts/opt-out";
 import { prisma } from "@/lib/db";
 import { sendTemplateMessage } from "@/lib/inbox/service";
 import { tenantMayRunBackground } from "@/lib/tenant-state";
 import { HttpError } from "@/lib/tenancy";
-import { templateVariables } from "@/lib/templates/validate";
-import { bodyVariableCount, getSettings, gapsFor, type CommerceSettings } from "./settings";
+import { getSettings, gapsFor, reminderSupportReason, type CommerceSettings } from "./settings";
 import { isExpired, nextReminderAfter } from "./schedule";
 
 const BATCH = 20;
@@ -41,15 +42,54 @@ function firstNameOf(items: unknown, contactName: string | null): string {
   return raw.trim().split(/\s+/)[0] || "there";
 }
 
-/** Body parameters by position: 1 first name, 2 cart total, 3 checkout URL. Only as many as the template declares. */
-export function buildReminderComponents(templateComponents: unknown, values: { firstName: string; total: string; url: string }) {
-  const count = bodyVariableCount(templateComponents);
-  if (count === 0) return [];
-  const byPosition = [values.firstName, values.total, values.url];
-  const list = Array.isArray(templateComponents) ? templateComponents : [];
-  const body = list.find((c) => c && (c as { type?: string }).type === "BODY") as { text?: string } | undefined;
-  const positions = templateVariables(body?.text ?? "");
-  return [{ type: "body", parameters: positions.map((n) => ({ type: "text", text: byPosition[n - 1] ?? "-" })) }];
+type ReminderValues = { firstName: string; total: string; url: string };
+
+/**
+ * What a website button's {{1}} becomes: the part of the checkout link after the button's fixed start. A button that is just the
+ * store's address ("https://shop.example/{{1}}") gets the checkout link's path, which works on a custom domain too. Null when the
+ * checkout link does not fit the button.
+ */
+export function checkoutSuffix(buttonUrl: string, checkoutUrl: string): string | null {
+  const base = buttonUrl.split("{{")[0];
+  if (base && checkoutUrl.startsWith(base) && checkoutUrl.length > base.length) return checkoutUrl.slice(base.length);
+  try {
+    const button = new URL(base);
+    const checkout = new URL(checkoutUrl);
+    if (button.pathname !== "/" || button.search) return null;
+    const rest = `${checkout.pathname}${checkout.search}`.replace(/^\/+/, "");
+    return rest || null;
+  } catch {
+    return null;
+  }
+}
+
+/** The reminder's fixed value mapping: {{1}} first name, {{2}} cart total, {{3}} checkout link, and the checkout link in website buttons. */
+function reminderMap(templateComponents: unknown, values: ReminderValues): VariableMap | null {
+  const byPosition: Record<string, string> = { "1": values.firstName, "2": values.total, "3": values.url };
+  const buttons = (Array.isArray(templateComponents) ? templateComponents : []).find((c) => c && (c as { type?: string }).type === "BUTTONS") as { buttons?: { url?: unknown }[] } | undefined;
+  const map: VariableMap = {};
+  for (const slot of templateSlots(templateComponents)) {
+    if (slot.kind === "body" && byPosition[slot.key]) map[slot.key] = { source: "static", value: byPosition[slot.key] };
+    else if (slot.kind === "button_url") {
+      const url = buttons?.buttons?.[slot.buttonIndex]?.url;
+      const suffix = typeof url === "string" ? checkoutSuffix(url, values.url) : null;
+      if (!suffix) return null;
+      map[slot.key] = { source: "static", value: suffix };
+    } else return null;
+  }
+  return map;
+}
+
+/**
+ * The send components of a reminder, through the same value mapping broadcasts use. Throws HttpError(422) when the template cannot
+ * be filled (settings refuse such templates; this catches one changed at Meta since, or a checkout link that does not fit its button).
+ */
+export function buildReminderComponents(templateComponents: unknown, values: ReminderValues): BuiltComponent[] {
+  const reason = reminderSupportReason(templateComponents);
+  const map = reason ? null : reminderMap(templateComponents, values);
+  const built = map ? buildRecipientComponents(templateComponents, { name: null, attributes: {} }, map, "fail") : null;
+  if (!built?.ok) throw new HttpError(422, reason ?? "The reminder template could not be filled in for this cart.");
+  return built.components;
 }
 
 const setStatus = (cart: CartRow, status: string) =>
@@ -119,7 +159,9 @@ export async function processCart(cart: CartRow, now: Date): Promise<Outcome> {
     where: { tenantId: cart.tenantId, phone: cart.phone },
     select: { id: true, name: true, optIn: true, optedOutAt: true },
   });
-  if (!contact || !contact.optIn || contact.optedOutAt) {
+  // A cart reminder is marketing whatever its template says (Meta counts cart recovery as marketing), so it needs the WhatsApp
+  // opt-in recorded in Edwyz (a Shopify marketing consent never counts) and no opt-out (lib/contacts/opt-out.ts).
+  if (!contact || !contact.optIn || !mayReceive(contact, "marketing")) {
     await setStatus(cart, "opted_out");
     return "opted_out";
   }
@@ -137,12 +179,12 @@ export async function processCart(cart: CartRow, now: Date): Promise<Outcome> {
   }
 
   if (!(await claim(cart, settings, now))) return "lost_claim";
-  const components = buildReminderComponents(template.components, {
-    firstName: firstNameOf(cart.items, contact.name),
-    total: formatTotal(cart.totalMinor, cart.currency),
-    url: cart.checkoutUrl,
-  });
   try {
+    const components = buildReminderComponents(template.components, {
+      firstName: firstNameOf(cart.items, contact.name),
+      total: formatTotal(cart.totalMinor, cart.currency),
+      url: cart.checkoutUrl,
+    });
     await sendTemplateMessage({
       tenantId: cart.tenantId,
       phoneNumberId: settings.phoneNumberId,

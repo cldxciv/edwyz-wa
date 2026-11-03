@@ -30,12 +30,14 @@ export type AdCampaignAvgAggregateOutputType = {
   dailyBudgetMinor: number | null
   lifetimeBudgetMinor: number | null
   targetCostPerResultMinor: number | null
+  runDays: number | null
 }
 
 export type AdCampaignSumAggregateOutputType = {
   dailyBudgetMinor: number | null
   lifetimeBudgetMinor: bigint | null
   targetCostPerResultMinor: bigint | null
+  runDays: number | null
 }
 
 export type AdCampaignMinAggregateOutputType = {
@@ -62,6 +64,18 @@ export type AdCampaignMinAggregateOutputType = {
   lifetimeBudgetMinor: bigint | null
   targetCostPerResultMinor: bigint | null
   sandbox: boolean | null
+  goal: string | null
+  surface: string | null
+  sourceKind: string | null
+  sourceRef: string | null
+  sourcePostTargetId: string | null
+  placementMode: string | null
+  reviewState: string | null
+  reviewCheckedAt: Date | null
+  advantageState: string | null
+  discardedAt: Date | null
+  runDays: number | null
+  startMode: string | null
 }
 
 export type AdCampaignMaxAggregateOutputType = {
@@ -88,6 +102,18 @@ export type AdCampaignMaxAggregateOutputType = {
   lifetimeBudgetMinor: bigint | null
   targetCostPerResultMinor: bigint | null
   sandbox: boolean | null
+  goal: string | null
+  surface: string | null
+  sourceKind: string | null
+  sourceRef: string | null
+  sourcePostTargetId: string | null
+  placementMode: string | null
+  reviewState: string | null
+  reviewCheckedAt: Date | null
+  advantageState: string | null
+  discardedAt: Date | null
+  runDays: number | null
+  startMode: string | null
 }
 
 export type AdCampaignCountAggregateOutputType = {
@@ -114,6 +140,18 @@ export type AdCampaignCountAggregateOutputType = {
   lifetimeBudgetMinor: number
   targetCostPerResultMinor: number
   sandbox: number
+  goal: number
+  surface: number
+  sourceKind: number
+  sourceRef: number
+  sourcePostTargetId: number
+  placementMode: number
+  reviewState: number
+  reviewCheckedAt: number
+  advantageState: number
+  discardedAt: number
+  runDays: number
+  startMode: number
   _all: number
 }
 
@@ -122,12 +160,14 @@ export type AdCampaignAvgAggregateInputType = {
   dailyBudgetMinor?: true
   lifetimeBudgetMinor?: true
   targetCostPerResultMinor?: true
+  runDays?: true
 }
 
 export type AdCampaignSumAggregateInputType = {
   dailyBudgetMinor?: true
   lifetimeBudgetMinor?: true
   targetCostPerResultMinor?: true
+  runDays?: true
 }
 
 export type AdCampaignMinAggregateInputType = {
@@ -154,6 +194,18 @@ export type AdCampaignMinAggregateInputType = {
   lifetimeBudgetMinor?: true
   targetCostPerResultMinor?: true
   sandbox?: true
+  goal?: true
+  surface?: true
+  sourceKind?: true
+  sourceRef?: true
+  sourcePostTargetId?: true
+  placementMode?: true
+  reviewState?: true
+  reviewCheckedAt?: true
+  advantageState?: true
+  discardedAt?: true
+  runDays?: true
+  startMode?: true
 }
 
 export type AdCampaignMaxAggregateInputType = {
@@ -180,6 +232,18 @@ export type AdCampaignMaxAggregateInputType = {
   lifetimeBudgetMinor?: true
   targetCostPerResultMinor?: true
   sandbox?: true
+  goal?: true
+  surface?: true
+  sourceKind?: true
+  sourceRef?: true
+  sourcePostTargetId?: true
+  placementMode?: true
+  reviewState?: true
+  reviewCheckedAt?: true
+  advantageState?: true
+  discardedAt?: true
+  runDays?: true
+  startMode?: true
 }
 
 export type AdCampaignCountAggregateInputType = {
@@ -206,6 +270,18 @@ export type AdCampaignCountAggregateInputType = {
   lifetimeBudgetMinor?: true
   targetCostPerResultMinor?: true
   sandbox?: true
+  goal?: true
+  surface?: true
+  sourceKind?: true
+  sourceRef?: true
+  sourcePostTargetId?: true
+  placementMode?: true
+  reviewState?: true
+  reviewCheckedAt?: true
+  advantageState?: true
+  discardedAt?: true
+  runDays?: true
+  startMode?: true
   _all?: true
 }
 
@@ -319,6 +395,18 @@ export type AdCampaignGroupByOutputType = {
   lifetimeBudgetMinor: bigint | null
   targetCostPerResultMinor: bigint | null
   sandbox: boolean
+  goal: string | null
+  surface: string
+  sourceKind: string | null
+  sourceRef: string | null
+  sourcePostTargetId: string | null
+  placementMode: string
+  reviewState: string | null
+  reviewCheckedAt: Date | null
+  advantageState: string | null
+  discardedAt: Date | null
+  runDays: number | null
+  startMode: string | null
   _count: AdCampaignCountAggregateOutputType | null
   _avg: AdCampaignAvgAggregateOutputType | null
   _sum: AdCampaignSumAggregateOutputType | null
@@ -368,7 +456,20 @@ export type AdCampaignWhereInput = {
   lifetimeBudgetMinor?: Prisma.BigIntNullableFilter<"AdCampaign"> | bigint | number | null
   targetCostPerResultMinor?: Prisma.BigIntNullableFilter<"AdCampaign"> | bigint | number | null
   sandbox?: Prisma.BoolFilter<"AdCampaign"> | boolean
+  goal?: Prisma.StringNullableFilter<"AdCampaign"> | string | null
+  surface?: Prisma.StringFilter<"AdCampaign"> | string
+  sourceKind?: Prisma.StringNullableFilter<"AdCampaign"> | string | null
+  sourceRef?: Prisma.StringNullableFilter<"AdCampaign"> | string | null
+  sourcePostTargetId?: Prisma.StringNullableFilter<"AdCampaign"> | string | null
+  placementMode?: Prisma.StringFilter<"AdCampaign"> | string
+  reviewState?: Prisma.StringNullableFilter<"AdCampaign"> | string | null
+  reviewCheckedAt?: Prisma.DateTimeNullableFilter<"AdCampaign"> | Date | string | null
+  advantageState?: Prisma.StringNullableFilter<"AdCampaign"> | string | null
+  discardedAt?: Prisma.DateTimeNullableFilter<"AdCampaign"> | Date | string | null
+  runDays?: Prisma.IntNullableFilter<"AdCampaign"> | number | null
+  startMode?: Prisma.StringNullableFilter<"AdCampaign"> | string | null
   adSets?: Prisma.AdSetListRelationFilter
+  adTest?: Prisma.XOR<Prisma.AdTestNullableScalarRelationFilter, Prisma.AdTestWhereInput> | null
 }
 
 export type AdCampaignOrderByWithRelationInput = {
@@ -395,7 +496,20 @@ export type AdCampaignOrderByWithRelationInput = {
   lifetimeBudgetMinor?: Prisma.SortOrderInput | Prisma.SortOrder
   targetCostPerResultMinor?: Prisma.SortOrderInput | Prisma.SortOrder
   sandbox?: Prisma.SortOrder
+  goal?: Prisma.SortOrderInput | Prisma.SortOrder
+  surface?: Prisma.SortOrder
+  sourceKind?: Prisma.SortOrderInput | Prisma.SortOrder
+  sourceRef?: Prisma.SortOrderInput | Prisma.SortOrder
+  sourcePostTargetId?: Prisma.SortOrderInput | Prisma.SortOrder
+  placementMode?: Prisma.SortOrder
+  reviewState?: Prisma.SortOrderInput | Prisma.SortOrder
+  reviewCheckedAt?: Prisma.SortOrderInput | Prisma.SortOrder
+  advantageState?: Prisma.SortOrderInput | Prisma.SortOrder
+  discardedAt?: Prisma.SortOrderInput | Prisma.SortOrder
+  runDays?: Prisma.SortOrderInput | Prisma.SortOrder
+  startMode?: Prisma.SortOrderInput | Prisma.SortOrder
   adSets?: Prisma.AdSetOrderByRelationAggregateInput
+  adTest?: Prisma.AdTestOrderByWithRelationInput
 }
 
 export type AdCampaignWhereUniqueInput = Prisma.AtLeast<{
@@ -425,7 +539,20 @@ export type AdCampaignWhereUniqueInput = Prisma.AtLeast<{
   lifetimeBudgetMinor?: Prisma.BigIntNullableFilter<"AdCampaign"> | bigint | number | null
   targetCostPerResultMinor?: Prisma.BigIntNullableFilter<"AdCampaign"> | bigint | number | null
   sandbox?: Prisma.BoolFilter<"AdCampaign"> | boolean
+  goal?: Prisma.StringNullableFilter<"AdCampaign"> | string | null
+  surface?: Prisma.StringFilter<"AdCampaign"> | string
+  sourceKind?: Prisma.StringNullableFilter<"AdCampaign"> | string | null
+  sourceRef?: Prisma.StringNullableFilter<"AdCampaign"> | string | null
+  sourcePostTargetId?: Prisma.StringNullableFilter<"AdCampaign"> | string | null
+  placementMode?: Prisma.StringFilter<"AdCampaign"> | string
+  reviewState?: Prisma.StringNullableFilter<"AdCampaign"> | string | null
+  reviewCheckedAt?: Prisma.DateTimeNullableFilter<"AdCampaign"> | Date | string | null
+  advantageState?: Prisma.StringNullableFilter<"AdCampaign"> | string | null
+  discardedAt?: Prisma.DateTimeNullableFilter<"AdCampaign"> | Date | string | null
+  runDays?: Prisma.IntNullableFilter<"AdCampaign"> | number | null
+  startMode?: Prisma.StringNullableFilter<"AdCampaign"> | string | null
   adSets?: Prisma.AdSetListRelationFilter
+  adTest?: Prisma.XOR<Prisma.AdTestNullableScalarRelationFilter, Prisma.AdTestWhereInput> | null
 }, "id">
 
 export type AdCampaignOrderByWithAggregationInput = {
@@ -452,6 +579,18 @@ export type AdCampaignOrderByWithAggregationInput = {
   lifetimeBudgetMinor?: Prisma.SortOrderInput | Prisma.SortOrder
   targetCostPerResultMinor?: Prisma.SortOrderInput | Prisma.SortOrder
   sandbox?: Prisma.SortOrder
+  goal?: Prisma.SortOrderInput | Prisma.SortOrder
+  surface?: Prisma.SortOrder
+  sourceKind?: Prisma.SortOrderInput | Prisma.SortOrder
+  sourceRef?: Prisma.SortOrderInput | Prisma.SortOrder
+  sourcePostTargetId?: Prisma.SortOrderInput | Prisma.SortOrder
+  placementMode?: Prisma.SortOrder
+  reviewState?: Prisma.SortOrderInput | Prisma.SortOrder
+  reviewCheckedAt?: Prisma.SortOrderInput | Prisma.SortOrder
+  advantageState?: Prisma.SortOrderInput | Prisma.SortOrder
+  discardedAt?: Prisma.SortOrderInput | Prisma.SortOrder
+  runDays?: Prisma.SortOrderInput | Prisma.SortOrder
+  startMode?: Prisma.SortOrderInput | Prisma.SortOrder
   _count?: Prisma.AdCampaignCountOrderByAggregateInput
   _avg?: Prisma.AdCampaignAvgOrderByAggregateInput
   _max?: Prisma.AdCampaignMaxOrderByAggregateInput
@@ -486,6 +625,18 @@ export type AdCampaignScalarWhereWithAggregatesInput = {
   lifetimeBudgetMinor?: Prisma.BigIntNullableWithAggregatesFilter<"AdCampaign"> | bigint | number | null
   targetCostPerResultMinor?: Prisma.BigIntNullableWithAggregatesFilter<"AdCampaign"> | bigint | number | null
   sandbox?: Prisma.BoolWithAggregatesFilter<"AdCampaign"> | boolean
+  goal?: Prisma.StringNullableWithAggregatesFilter<"AdCampaign"> | string | null
+  surface?: Prisma.StringWithAggregatesFilter<"AdCampaign"> | string
+  sourceKind?: Prisma.StringNullableWithAggregatesFilter<"AdCampaign"> | string | null
+  sourceRef?: Prisma.StringNullableWithAggregatesFilter<"AdCampaign"> | string | null
+  sourcePostTargetId?: Prisma.StringNullableWithAggregatesFilter<"AdCampaign"> | string | null
+  placementMode?: Prisma.StringWithAggregatesFilter<"AdCampaign"> | string
+  reviewState?: Prisma.StringNullableWithAggregatesFilter<"AdCampaign"> | string | null
+  reviewCheckedAt?: Prisma.DateTimeNullableWithAggregatesFilter<"AdCampaign"> | Date | string | null
+  advantageState?: Prisma.StringNullableWithAggregatesFilter<"AdCampaign"> | string | null
+  discardedAt?: Prisma.DateTimeNullableWithAggregatesFilter<"AdCampaign"> | Date | string | null
+  runDays?: Prisma.IntNullableWithAggregatesFilter<"AdCampaign"> | number | null
+  startMode?: Prisma.StringNullableWithAggregatesFilter<"AdCampaign"> | string | null
 }
 
 export type AdCampaignCreateInput = {
@@ -512,7 +663,20 @@ export type AdCampaignCreateInput = {
   lifetimeBudgetMinor?: bigint | number | null
   targetCostPerResultMinor?: bigint | number | null
   sandbox?: boolean
+  goal?: string | null
+  surface?: string
+  sourceKind?: string | null
+  sourceRef?: string | null
+  sourcePostTargetId?: string | null
+  placementMode?: string
+  reviewState?: string | null
+  reviewCheckedAt?: Date | string | null
+  advantageState?: string | null
+  discardedAt?: Date | string | null
+  runDays?: number | null
+  startMode?: string | null
   adSets?: Prisma.AdSetCreateNestedManyWithoutCampaignInput
+  adTest?: Prisma.AdTestCreateNestedOneWithoutCampaignInput
 }
 
 export type AdCampaignUncheckedCreateInput = {
@@ -539,7 +703,20 @@ export type AdCampaignUncheckedCreateInput = {
   lifetimeBudgetMinor?: bigint | number | null
   targetCostPerResultMinor?: bigint | number | null
   sandbox?: boolean
+  goal?: string | null
+  surface?: string
+  sourceKind?: string | null
+  sourceRef?: string | null
+  sourcePostTargetId?: string | null
+  placementMode?: string
+  reviewState?: string | null
+  reviewCheckedAt?: Date | string | null
+  advantageState?: string | null
+  discardedAt?: Date | string | null
+  runDays?: number | null
+  startMode?: string | null
   adSets?: Prisma.AdSetUncheckedCreateNestedManyWithoutCampaignInput
+  adTest?: Prisma.AdTestUncheckedCreateNestedOneWithoutCampaignInput
 }
 
 export type AdCampaignUpdateInput = {
@@ -566,7 +743,20 @@ export type AdCampaignUpdateInput = {
   lifetimeBudgetMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   targetCostPerResultMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   sandbox?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  goal?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  surface?: Prisma.StringFieldUpdateOperationsInput | string
+  sourceKind?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourceRef?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourcePostTargetId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  placementMode?: Prisma.StringFieldUpdateOperationsInput | string
+  reviewState?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  reviewCheckedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  advantageState?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  discardedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  runDays?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  startMode?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   adSets?: Prisma.AdSetUpdateManyWithoutCampaignNestedInput
+  adTest?: Prisma.AdTestUpdateOneWithoutCampaignNestedInput
 }
 
 export type AdCampaignUncheckedUpdateInput = {
@@ -593,7 +783,20 @@ export type AdCampaignUncheckedUpdateInput = {
   lifetimeBudgetMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   targetCostPerResultMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   sandbox?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  goal?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  surface?: Prisma.StringFieldUpdateOperationsInput | string
+  sourceKind?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourceRef?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourcePostTargetId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  placementMode?: Prisma.StringFieldUpdateOperationsInput | string
+  reviewState?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  reviewCheckedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  advantageState?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  discardedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  runDays?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  startMode?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   adSets?: Prisma.AdSetUncheckedUpdateManyWithoutCampaignNestedInput
+  adTest?: Prisma.AdTestUncheckedUpdateOneWithoutCampaignNestedInput
 }
 
 export type AdCampaignCreateManyInput = {
@@ -620,6 +823,18 @@ export type AdCampaignCreateManyInput = {
   lifetimeBudgetMinor?: bigint | number | null
   targetCostPerResultMinor?: bigint | number | null
   sandbox?: boolean
+  goal?: string | null
+  surface?: string
+  sourceKind?: string | null
+  sourceRef?: string | null
+  sourcePostTargetId?: string | null
+  placementMode?: string
+  reviewState?: string | null
+  reviewCheckedAt?: Date | string | null
+  advantageState?: string | null
+  discardedAt?: Date | string | null
+  runDays?: number | null
+  startMode?: string | null
 }
 
 export type AdCampaignUpdateManyMutationInput = {
@@ -646,6 +861,18 @@ export type AdCampaignUpdateManyMutationInput = {
   lifetimeBudgetMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   targetCostPerResultMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   sandbox?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  goal?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  surface?: Prisma.StringFieldUpdateOperationsInput | string
+  sourceKind?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourceRef?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourcePostTargetId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  placementMode?: Prisma.StringFieldUpdateOperationsInput | string
+  reviewState?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  reviewCheckedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  advantageState?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  discardedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  runDays?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  startMode?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
 }
 
 export type AdCampaignUncheckedUpdateManyInput = {
@@ -672,6 +899,18 @@ export type AdCampaignUncheckedUpdateManyInput = {
   lifetimeBudgetMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   targetCostPerResultMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   sandbox?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  goal?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  surface?: Prisma.StringFieldUpdateOperationsInput | string
+  sourceKind?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourceRef?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourcePostTargetId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  placementMode?: Prisma.StringFieldUpdateOperationsInput | string
+  reviewState?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  reviewCheckedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  advantageState?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  discardedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  runDays?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  startMode?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
 }
 
 export type AdCampaignCountOrderByAggregateInput = {
@@ -698,12 +937,25 @@ export type AdCampaignCountOrderByAggregateInput = {
   lifetimeBudgetMinor?: Prisma.SortOrder
   targetCostPerResultMinor?: Prisma.SortOrder
   sandbox?: Prisma.SortOrder
+  goal?: Prisma.SortOrder
+  surface?: Prisma.SortOrder
+  sourceKind?: Prisma.SortOrder
+  sourceRef?: Prisma.SortOrder
+  sourcePostTargetId?: Prisma.SortOrder
+  placementMode?: Prisma.SortOrder
+  reviewState?: Prisma.SortOrder
+  reviewCheckedAt?: Prisma.SortOrder
+  advantageState?: Prisma.SortOrder
+  discardedAt?: Prisma.SortOrder
+  runDays?: Prisma.SortOrder
+  startMode?: Prisma.SortOrder
 }
 
 export type AdCampaignAvgOrderByAggregateInput = {
   dailyBudgetMinor?: Prisma.SortOrder
   lifetimeBudgetMinor?: Prisma.SortOrder
   targetCostPerResultMinor?: Prisma.SortOrder
+  runDays?: Prisma.SortOrder
 }
 
 export type AdCampaignMaxOrderByAggregateInput = {
@@ -730,6 +982,18 @@ export type AdCampaignMaxOrderByAggregateInput = {
   lifetimeBudgetMinor?: Prisma.SortOrder
   targetCostPerResultMinor?: Prisma.SortOrder
   sandbox?: Prisma.SortOrder
+  goal?: Prisma.SortOrder
+  surface?: Prisma.SortOrder
+  sourceKind?: Prisma.SortOrder
+  sourceRef?: Prisma.SortOrder
+  sourcePostTargetId?: Prisma.SortOrder
+  placementMode?: Prisma.SortOrder
+  reviewState?: Prisma.SortOrder
+  reviewCheckedAt?: Prisma.SortOrder
+  advantageState?: Prisma.SortOrder
+  discardedAt?: Prisma.SortOrder
+  runDays?: Prisma.SortOrder
+  startMode?: Prisma.SortOrder
 }
 
 export type AdCampaignMinOrderByAggregateInput = {
@@ -756,12 +1020,25 @@ export type AdCampaignMinOrderByAggregateInput = {
   lifetimeBudgetMinor?: Prisma.SortOrder
   targetCostPerResultMinor?: Prisma.SortOrder
   sandbox?: Prisma.SortOrder
+  goal?: Prisma.SortOrder
+  surface?: Prisma.SortOrder
+  sourceKind?: Prisma.SortOrder
+  sourceRef?: Prisma.SortOrder
+  sourcePostTargetId?: Prisma.SortOrder
+  placementMode?: Prisma.SortOrder
+  reviewState?: Prisma.SortOrder
+  reviewCheckedAt?: Prisma.SortOrder
+  advantageState?: Prisma.SortOrder
+  discardedAt?: Prisma.SortOrder
+  runDays?: Prisma.SortOrder
+  startMode?: Prisma.SortOrder
 }
 
 export type AdCampaignSumOrderByAggregateInput = {
   dailyBudgetMinor?: Prisma.SortOrder
   lifetimeBudgetMinor?: Prisma.SortOrder
   targetCostPerResultMinor?: Prisma.SortOrder
+  runDays?: Prisma.SortOrder
 }
 
 export type AdCampaignScalarRelationFilter = {
@@ -781,6 +1058,20 @@ export type AdCampaignUpdateOneRequiredWithoutAdSetsNestedInput = {
   upsert?: Prisma.AdCampaignUpsertWithoutAdSetsInput
   connect?: Prisma.AdCampaignWhereUniqueInput
   update?: Prisma.XOR<Prisma.XOR<Prisma.AdCampaignUpdateToOneWithWhereWithoutAdSetsInput, Prisma.AdCampaignUpdateWithoutAdSetsInput>, Prisma.AdCampaignUncheckedUpdateWithoutAdSetsInput>
+}
+
+export type AdCampaignCreateNestedOneWithoutAdTestInput = {
+  create?: Prisma.XOR<Prisma.AdCampaignCreateWithoutAdTestInput, Prisma.AdCampaignUncheckedCreateWithoutAdTestInput>
+  connectOrCreate?: Prisma.AdCampaignCreateOrConnectWithoutAdTestInput
+  connect?: Prisma.AdCampaignWhereUniqueInput
+}
+
+export type AdCampaignUpdateOneRequiredWithoutAdTestNestedInput = {
+  create?: Prisma.XOR<Prisma.AdCampaignCreateWithoutAdTestInput, Prisma.AdCampaignUncheckedCreateWithoutAdTestInput>
+  connectOrCreate?: Prisma.AdCampaignCreateOrConnectWithoutAdTestInput
+  upsert?: Prisma.AdCampaignUpsertWithoutAdTestInput
+  connect?: Prisma.AdCampaignWhereUniqueInput
+  update?: Prisma.XOR<Prisma.XOR<Prisma.AdCampaignUpdateToOneWithWhereWithoutAdTestInput, Prisma.AdCampaignUpdateWithoutAdTestInput>, Prisma.AdCampaignUncheckedUpdateWithoutAdTestInput>
 }
 
 export type AdCampaignCreateWithoutAdSetsInput = {
@@ -807,6 +1098,19 @@ export type AdCampaignCreateWithoutAdSetsInput = {
   lifetimeBudgetMinor?: bigint | number | null
   targetCostPerResultMinor?: bigint | number | null
   sandbox?: boolean
+  goal?: string | null
+  surface?: string
+  sourceKind?: string | null
+  sourceRef?: string | null
+  sourcePostTargetId?: string | null
+  placementMode?: string
+  reviewState?: string | null
+  reviewCheckedAt?: Date | string | null
+  advantageState?: string | null
+  discardedAt?: Date | string | null
+  runDays?: number | null
+  startMode?: string | null
+  adTest?: Prisma.AdTestCreateNestedOneWithoutCampaignInput
 }
 
 export type AdCampaignUncheckedCreateWithoutAdSetsInput = {
@@ -833,6 +1137,19 @@ export type AdCampaignUncheckedCreateWithoutAdSetsInput = {
   lifetimeBudgetMinor?: bigint | number | null
   targetCostPerResultMinor?: bigint | number | null
   sandbox?: boolean
+  goal?: string | null
+  surface?: string
+  sourceKind?: string | null
+  sourceRef?: string | null
+  sourcePostTargetId?: string | null
+  placementMode?: string
+  reviewState?: string | null
+  reviewCheckedAt?: Date | string | null
+  advantageState?: string | null
+  discardedAt?: Date | string | null
+  runDays?: number | null
+  startMode?: string | null
+  adTest?: Prisma.AdTestUncheckedCreateNestedOneWithoutCampaignInput
 }
 
 export type AdCampaignCreateOrConnectWithoutAdSetsInput = {
@@ -875,6 +1192,19 @@ export type AdCampaignUpdateWithoutAdSetsInput = {
   lifetimeBudgetMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   targetCostPerResultMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   sandbox?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  goal?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  surface?: Prisma.StringFieldUpdateOperationsInput | string
+  sourceKind?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourceRef?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourcePostTargetId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  placementMode?: Prisma.StringFieldUpdateOperationsInput | string
+  reviewState?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  reviewCheckedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  advantageState?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  discardedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  runDays?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  startMode?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  adTest?: Prisma.AdTestUpdateOneWithoutCampaignNestedInput
 }
 
 export type AdCampaignUncheckedUpdateWithoutAdSetsInput = {
@@ -901,6 +1231,191 @@ export type AdCampaignUncheckedUpdateWithoutAdSetsInput = {
   lifetimeBudgetMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   targetCostPerResultMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   sandbox?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  goal?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  surface?: Prisma.StringFieldUpdateOperationsInput | string
+  sourceKind?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourceRef?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourcePostTargetId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  placementMode?: Prisma.StringFieldUpdateOperationsInput | string
+  reviewState?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  reviewCheckedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  advantageState?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  discardedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  runDays?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  startMode?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  adTest?: Prisma.AdTestUncheckedUpdateOneWithoutCampaignNestedInput
+}
+
+export type AdCampaignCreateWithoutAdTestInput = {
+  id?: string
+  tenantId: string
+  adAccountAssetId: string
+  metaCampaignId?: string | null
+  name: string
+  template: string
+  objective: string
+  status?: string
+  dailyBudgetMinor: number
+  currency?: string
+  startsAt?: Date | string | null
+  endsAt?: Date | string | null
+  specialAdCategory?: string
+  createdByUserId?: string | null
+  launchedAt?: Date | string | null
+  lastError?: string | null
+  createdAt?: Date | string
+  updatedAt?: Date | string
+  origin?: string
+  assistantKey?: string | null
+  lifetimeBudgetMinor?: bigint | number | null
+  targetCostPerResultMinor?: bigint | number | null
+  sandbox?: boolean
+  goal?: string | null
+  surface?: string
+  sourceKind?: string | null
+  sourceRef?: string | null
+  sourcePostTargetId?: string | null
+  placementMode?: string
+  reviewState?: string | null
+  reviewCheckedAt?: Date | string | null
+  advantageState?: string | null
+  discardedAt?: Date | string | null
+  runDays?: number | null
+  startMode?: string | null
+  adSets?: Prisma.AdSetCreateNestedManyWithoutCampaignInput
+}
+
+export type AdCampaignUncheckedCreateWithoutAdTestInput = {
+  id?: string
+  tenantId: string
+  adAccountAssetId: string
+  metaCampaignId?: string | null
+  name: string
+  template: string
+  objective: string
+  status?: string
+  dailyBudgetMinor: number
+  currency?: string
+  startsAt?: Date | string | null
+  endsAt?: Date | string | null
+  specialAdCategory?: string
+  createdByUserId?: string | null
+  launchedAt?: Date | string | null
+  lastError?: string | null
+  createdAt?: Date | string
+  updatedAt?: Date | string
+  origin?: string
+  assistantKey?: string | null
+  lifetimeBudgetMinor?: bigint | number | null
+  targetCostPerResultMinor?: bigint | number | null
+  sandbox?: boolean
+  goal?: string | null
+  surface?: string
+  sourceKind?: string | null
+  sourceRef?: string | null
+  sourcePostTargetId?: string | null
+  placementMode?: string
+  reviewState?: string | null
+  reviewCheckedAt?: Date | string | null
+  advantageState?: string | null
+  discardedAt?: Date | string | null
+  runDays?: number | null
+  startMode?: string | null
+  adSets?: Prisma.AdSetUncheckedCreateNestedManyWithoutCampaignInput
+}
+
+export type AdCampaignCreateOrConnectWithoutAdTestInput = {
+  where: Prisma.AdCampaignWhereUniqueInput
+  create: Prisma.XOR<Prisma.AdCampaignCreateWithoutAdTestInput, Prisma.AdCampaignUncheckedCreateWithoutAdTestInput>
+}
+
+export type AdCampaignUpsertWithoutAdTestInput = {
+  update: Prisma.XOR<Prisma.AdCampaignUpdateWithoutAdTestInput, Prisma.AdCampaignUncheckedUpdateWithoutAdTestInput>
+  create: Prisma.XOR<Prisma.AdCampaignCreateWithoutAdTestInput, Prisma.AdCampaignUncheckedCreateWithoutAdTestInput>
+  where?: Prisma.AdCampaignWhereInput
+}
+
+export type AdCampaignUpdateToOneWithWhereWithoutAdTestInput = {
+  where?: Prisma.AdCampaignWhereInput
+  data: Prisma.XOR<Prisma.AdCampaignUpdateWithoutAdTestInput, Prisma.AdCampaignUncheckedUpdateWithoutAdTestInput>
+}
+
+export type AdCampaignUpdateWithoutAdTestInput = {
+  id?: Prisma.StringFieldUpdateOperationsInput | string
+  tenantId?: Prisma.StringFieldUpdateOperationsInput | string
+  adAccountAssetId?: Prisma.StringFieldUpdateOperationsInput | string
+  metaCampaignId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  name?: Prisma.StringFieldUpdateOperationsInput | string
+  template?: Prisma.StringFieldUpdateOperationsInput | string
+  objective?: Prisma.StringFieldUpdateOperationsInput | string
+  status?: Prisma.StringFieldUpdateOperationsInput | string
+  dailyBudgetMinor?: Prisma.IntFieldUpdateOperationsInput | number
+  currency?: Prisma.StringFieldUpdateOperationsInput | string
+  startsAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  endsAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  specialAdCategory?: Prisma.StringFieldUpdateOperationsInput | string
+  createdByUserId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  launchedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  origin?: Prisma.StringFieldUpdateOperationsInput | string
+  assistantKey?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  lifetimeBudgetMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  targetCostPerResultMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  sandbox?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  goal?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  surface?: Prisma.StringFieldUpdateOperationsInput | string
+  sourceKind?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourceRef?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourcePostTargetId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  placementMode?: Prisma.StringFieldUpdateOperationsInput | string
+  reviewState?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  reviewCheckedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  advantageState?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  discardedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  runDays?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  startMode?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  adSets?: Prisma.AdSetUpdateManyWithoutCampaignNestedInput
+}
+
+export type AdCampaignUncheckedUpdateWithoutAdTestInput = {
+  id?: Prisma.StringFieldUpdateOperationsInput | string
+  tenantId?: Prisma.StringFieldUpdateOperationsInput | string
+  adAccountAssetId?: Prisma.StringFieldUpdateOperationsInput | string
+  metaCampaignId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  name?: Prisma.StringFieldUpdateOperationsInput | string
+  template?: Prisma.StringFieldUpdateOperationsInput | string
+  objective?: Prisma.StringFieldUpdateOperationsInput | string
+  status?: Prisma.StringFieldUpdateOperationsInput | string
+  dailyBudgetMinor?: Prisma.IntFieldUpdateOperationsInput | number
+  currency?: Prisma.StringFieldUpdateOperationsInput | string
+  startsAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  endsAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  specialAdCategory?: Prisma.StringFieldUpdateOperationsInput | string
+  createdByUserId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  launchedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  origin?: Prisma.StringFieldUpdateOperationsInput | string
+  assistantKey?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  lifetimeBudgetMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  targetCostPerResultMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  sandbox?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  goal?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  surface?: Prisma.StringFieldUpdateOperationsInput | string
+  sourceKind?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourceRef?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  sourcePostTargetId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  placementMode?: Prisma.StringFieldUpdateOperationsInput | string
+  reviewState?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  reviewCheckedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  advantageState?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  discardedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  runDays?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  startMode?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  adSets?: Prisma.AdSetUncheckedUpdateManyWithoutCampaignNestedInput
 }
 
 
@@ -958,7 +1473,20 @@ export type AdCampaignSelect<ExtArgs extends runtime.Types.Extensions.InternalAr
   lifetimeBudgetMinor?: boolean
   targetCostPerResultMinor?: boolean
   sandbox?: boolean
+  goal?: boolean
+  surface?: boolean
+  sourceKind?: boolean
+  sourceRef?: boolean
+  sourcePostTargetId?: boolean
+  placementMode?: boolean
+  reviewState?: boolean
+  reviewCheckedAt?: boolean
+  advantageState?: boolean
+  discardedAt?: boolean
+  runDays?: boolean
+  startMode?: boolean
   adSets?: boolean | Prisma.AdCampaign$adSetsArgs<ExtArgs>
+  adTest?: boolean | Prisma.AdCampaign$adTestArgs<ExtArgs>
   _count?: boolean | Prisma.AdCampaignCountOutputTypeDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["adCampaign"]>
 
@@ -986,6 +1514,18 @@ export type AdCampaignSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Ex
   lifetimeBudgetMinor?: boolean
   targetCostPerResultMinor?: boolean
   sandbox?: boolean
+  goal?: boolean
+  surface?: boolean
+  sourceKind?: boolean
+  sourceRef?: boolean
+  sourcePostTargetId?: boolean
+  placementMode?: boolean
+  reviewState?: boolean
+  reviewCheckedAt?: boolean
+  advantageState?: boolean
+  discardedAt?: boolean
+  runDays?: boolean
+  startMode?: boolean
 }, ExtArgs["result"]["adCampaign"]>
 
 export type AdCampaignSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
@@ -1012,6 +1552,18 @@ export type AdCampaignSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Ex
   lifetimeBudgetMinor?: boolean
   targetCostPerResultMinor?: boolean
   sandbox?: boolean
+  goal?: boolean
+  surface?: boolean
+  sourceKind?: boolean
+  sourceRef?: boolean
+  sourcePostTargetId?: boolean
+  placementMode?: boolean
+  reviewState?: boolean
+  reviewCheckedAt?: boolean
+  advantageState?: boolean
+  discardedAt?: boolean
+  runDays?: boolean
+  startMode?: boolean
 }, ExtArgs["result"]["adCampaign"]>
 
 export type AdCampaignSelectScalar = {
@@ -1038,11 +1590,24 @@ export type AdCampaignSelectScalar = {
   lifetimeBudgetMinor?: boolean
   targetCostPerResultMinor?: boolean
   sandbox?: boolean
+  goal?: boolean
+  surface?: boolean
+  sourceKind?: boolean
+  sourceRef?: boolean
+  sourcePostTargetId?: boolean
+  placementMode?: boolean
+  reviewState?: boolean
+  reviewCheckedAt?: boolean
+  advantageState?: boolean
+  discardedAt?: boolean
+  runDays?: boolean
+  startMode?: boolean
 }
 
-export type AdCampaignOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "tenantId" | "adAccountAssetId" | "metaCampaignId" | "name" | "template" | "objective" | "status" | "dailyBudgetMinor" | "currency" | "startsAt" | "endsAt" | "specialAdCategory" | "createdByUserId" | "launchedAt" | "lastError" | "createdAt" | "updatedAt" | "origin" | "assistantKey" | "lifetimeBudgetMinor" | "targetCostPerResultMinor" | "sandbox", ExtArgs["result"]["adCampaign"]>
+export type AdCampaignOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "tenantId" | "adAccountAssetId" | "metaCampaignId" | "name" | "template" | "objective" | "status" | "dailyBudgetMinor" | "currency" | "startsAt" | "endsAt" | "specialAdCategory" | "createdByUserId" | "launchedAt" | "lastError" | "createdAt" | "updatedAt" | "origin" | "assistantKey" | "lifetimeBudgetMinor" | "targetCostPerResultMinor" | "sandbox" | "goal" | "surface" | "sourceKind" | "sourceRef" | "sourcePostTargetId" | "placementMode" | "reviewState" | "reviewCheckedAt" | "advantageState" | "discardedAt" | "runDays" | "startMode", ExtArgs["result"]["adCampaign"]>
 export type AdCampaignInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   adSets?: boolean | Prisma.AdCampaign$adSetsArgs<ExtArgs>
+  adTest?: boolean | Prisma.AdCampaign$adTestArgs<ExtArgs>
   _count?: boolean | Prisma.AdCampaignCountOutputTypeDefaultArgs<ExtArgs>
 }
 export type AdCampaignIncludeCreateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {}
@@ -1052,6 +1617,7 @@ export type $AdCampaignPayload<ExtArgs extends runtime.Types.Extensions.Internal
   name: "AdCampaign"
   objects: {
     adSets: Prisma.$AdSetPayload<ExtArgs>[]
+    adTest: Prisma.$AdTestPayload<ExtArgs> | null
   }
   scalars: runtime.Types.Extensions.GetPayloadResult<{
     id: string
@@ -1077,6 +1643,18 @@ export type $AdCampaignPayload<ExtArgs extends runtime.Types.Extensions.Internal
     lifetimeBudgetMinor: bigint | null
     targetCostPerResultMinor: bigint | null
     sandbox: boolean
+    goal: string | null
+    surface: string
+    sourceKind: string | null
+    sourceRef: string | null
+    sourcePostTargetId: string | null
+    placementMode: string
+    reviewState: string | null
+    reviewCheckedAt: Date | null
+    advantageState: string | null
+    discardedAt: Date | null
+    runDays: number | null
+    startMode: string | null
   }, ExtArgs["result"]["adCampaign"]>
   composites: {}
 }
@@ -1472,6 +2050,7 @@ readonly fields: AdCampaignFieldRefs;
 export interface Prisma__AdCampaignClient<T, Null = never, ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs, GlobalOmitOptions = {}> extends Prisma.PrismaPromise<T> {
   readonly [Symbol.toStringTag]: "PrismaPromise"
   adSets<T extends Prisma.AdCampaign$adSetsArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.AdCampaign$adSetsArgs<ExtArgs>>): Prisma.PrismaPromise<runtime.Types.Result.GetResult<Prisma.$AdSetPayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
+  adTest<T extends Prisma.AdCampaign$adTestArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.AdCampaign$adTestArgs<ExtArgs>>): Prisma.Prisma__AdTestClient<runtime.Types.Result.GetResult<Prisma.$AdTestPayload<ExtArgs>, T, "findUniqueOrThrow", GlobalOmitOptions> | null, null, ExtArgs, GlobalOmitOptions>
   /**
    * Attaches callbacks for the resolution and/or rejection of the Promise.
    * @param onfulfilled The callback to execute when the Promise is resolved.
@@ -1524,6 +2103,18 @@ export interface AdCampaignFieldRefs {
   readonly lifetimeBudgetMinor: Prisma.FieldRef<"AdCampaign", 'BigInt'>
   readonly targetCostPerResultMinor: Prisma.FieldRef<"AdCampaign", 'BigInt'>
   readonly sandbox: Prisma.FieldRef<"AdCampaign", 'Boolean'>
+  readonly goal: Prisma.FieldRef<"AdCampaign", 'String'>
+  readonly surface: Prisma.FieldRef<"AdCampaign", 'String'>
+  readonly sourceKind: Prisma.FieldRef<"AdCampaign", 'String'>
+  readonly sourceRef: Prisma.FieldRef<"AdCampaign", 'String'>
+  readonly sourcePostTargetId: Prisma.FieldRef<"AdCampaign", 'String'>
+  readonly placementMode: Prisma.FieldRef<"AdCampaign", 'String'>
+  readonly reviewState: Prisma.FieldRef<"AdCampaign", 'String'>
+  readonly reviewCheckedAt: Prisma.FieldRef<"AdCampaign", 'DateTime'>
+  readonly advantageState: Prisma.FieldRef<"AdCampaign", 'String'>
+  readonly discardedAt: Prisma.FieldRef<"AdCampaign", 'DateTime'>
+  readonly runDays: Prisma.FieldRef<"AdCampaign", 'Int'>
+  readonly startMode: Prisma.FieldRef<"AdCampaign", 'String'>
 }
     
 
@@ -1938,6 +2529,25 @@ export type AdCampaign$adSetsArgs<ExtArgs extends runtime.Types.Extensions.Inter
   take?: number
   skip?: number
   distinct?: Prisma.AdSetScalarFieldEnum | Prisma.AdSetScalarFieldEnum[]
+}
+
+/**
+ * AdCampaign.adTest
+ */
+export type AdCampaign$adTestArgs<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
+  /**
+   * Select specific fields to fetch from the AdTest
+   */
+  select?: Prisma.AdTestSelect<ExtArgs> | null
+  /**
+   * Omit specific fields from the AdTest
+   */
+  omit?: Prisma.AdTestOmit<ExtArgs> | null
+  /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.AdTestInclude<ExtArgs> | null
+  where?: Prisma.AdTestWhereInput
 }
 
 /**

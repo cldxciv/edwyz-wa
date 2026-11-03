@@ -32,6 +32,14 @@ export type InsightSnapshotAvgAggregateOutputType = {
   clicks: number | null
   results: number | null
   frequency: number | null
+  reach: number | null
+  linkClicks: number | null
+  thruplays: number | null
+  videoP25: number | null
+  videoP50: number | null
+  videoP75: number | null
+  videoP100: number | null
+  messagingStarts: number | null
 }
 
 export type InsightSnapshotSumAggregateOutputType = {
@@ -40,6 +48,14 @@ export type InsightSnapshotSumAggregateOutputType = {
   clicks: number | null
   results: number | null
   frequency: number | null
+  reach: number | null
+  linkClicks: number | null
+  thruplays: number | null
+  videoP25: number | null
+  videoP50: number | null
+  videoP75: number | null
+  videoP100: number | null
+  messagingStarts: number | null
 }
 
 export type InsightSnapshotMinAggregateOutputType = {
@@ -55,6 +71,14 @@ export type InsightSnapshotMinAggregateOutputType = {
   frequency: number | null
   qualityRanking: string | null
   createdAt: Date | null
+  reach: number | null
+  linkClicks: number | null
+  thruplays: number | null
+  videoP25: number | null
+  videoP50: number | null
+  videoP75: number | null
+  videoP100: number | null
+  messagingStarts: number | null
 }
 
 export type InsightSnapshotMaxAggregateOutputType = {
@@ -70,6 +94,14 @@ export type InsightSnapshotMaxAggregateOutputType = {
   frequency: number | null
   qualityRanking: string | null
   createdAt: Date | null
+  reach: number | null
+  linkClicks: number | null
+  thruplays: number | null
+  videoP25: number | null
+  videoP50: number | null
+  videoP75: number | null
+  videoP100: number | null
+  messagingStarts: number | null
 }
 
 export type InsightSnapshotCountAggregateOutputType = {
@@ -86,6 +118,14 @@ export type InsightSnapshotCountAggregateOutputType = {
   qualityRanking: number
   raw: number
   createdAt: number
+  reach: number
+  linkClicks: number
+  thruplays: number
+  videoP25: number
+  videoP50: number
+  videoP75: number
+  videoP100: number
+  messagingStarts: number
   _all: number
 }
 
@@ -96,6 +136,14 @@ export type InsightSnapshotAvgAggregateInputType = {
   clicks?: true
   results?: true
   frequency?: true
+  reach?: true
+  linkClicks?: true
+  thruplays?: true
+  videoP25?: true
+  videoP50?: true
+  videoP75?: true
+  videoP100?: true
+  messagingStarts?: true
 }
 
 export type InsightSnapshotSumAggregateInputType = {
@@ -104,6 +152,14 @@ export type InsightSnapshotSumAggregateInputType = {
   clicks?: true
   results?: true
   frequency?: true
+  reach?: true
+  linkClicks?: true
+  thruplays?: true
+  videoP25?: true
+  videoP50?: true
+  videoP75?: true
+  videoP100?: true
+  messagingStarts?: true
 }
 
 export type InsightSnapshotMinAggregateInputType = {
@@ -119,6 +175,14 @@ export type InsightSnapshotMinAggregateInputType = {
   frequency?: true
   qualityRanking?: true
   createdAt?: true
+  reach?: true
+  linkClicks?: true
+  thruplays?: true
+  videoP25?: true
+  videoP50?: true
+  videoP75?: true
+  videoP100?: true
+  messagingStarts?: true
 }
 
 export type InsightSnapshotMaxAggregateInputType = {
@@ -134,6 +198,14 @@ export type InsightSnapshotMaxAggregateInputType = {
   frequency?: true
   qualityRanking?: true
   createdAt?: true
+  reach?: true
+  linkClicks?: true
+  thruplays?: true
+  videoP25?: true
+  videoP50?: true
+  videoP75?: true
+  videoP100?: true
+  messagingStarts?: true
 }
 
 export type InsightSnapshotCountAggregateInputType = {
@@ -150,6 +222,14 @@ export type InsightSnapshotCountAggregateInputType = {
   qualityRanking?: true
   raw?: true
   createdAt?: true
+  reach?: true
+  linkClicks?: true
+  thruplays?: true
+  videoP25?: true
+  videoP50?: true
+  videoP75?: true
+  videoP100?: true
+  messagingStarts?: true
   _all?: true
 }
 
@@ -253,6 +333,14 @@ export type InsightSnapshotGroupByOutputType = {
   qualityRanking: string | null
   raw: runtime.JsonValue | null
   createdAt: Date
+  reach: number | null
+  linkClicks: number | null
+  thruplays: number | null
+  videoP25: number | null
+  videoP50: number | null
+  videoP75: number | null
+  videoP100: number | null
+  messagingStarts: number | null
   _count: InsightSnapshotCountAggregateOutputType | null
   _avg: InsightSnapshotAvgAggregateOutputType | null
   _sum: InsightSnapshotSumAggregateOutputType | null
@@ -292,6 +380,14 @@ export type InsightSnapshotWhereInput = {
   qualityRanking?: Prisma.StringNullableFilter<"InsightSnapshot"> | string | null
   raw?: Prisma.JsonNullableFilter<"InsightSnapshot">
   createdAt?: Prisma.DateTimeFilter<"InsightSnapshot"> | Date | string
+  reach?: Prisma.IntNullableFilter<"InsightSnapshot"> | number | null
+  linkClicks?: Prisma.IntNullableFilter<"InsightSnapshot"> | number | null
+  thruplays?: Prisma.IntNullableFilter<"InsightSnapshot"> | number | null
+  videoP25?: Prisma.IntNullableFilter<"InsightSnapshot"> | number | null
+  videoP50?: Prisma.IntNullableFilter<"InsightSnapshot"> | number | null
+  videoP75?: Prisma.IntNullableFilter<"InsightSnapshot"> | number | null
+  videoP100?: Prisma.IntNullableFilter<"InsightSnapshot"> | number | null
+  messagingStarts?: Prisma.IntNullableFilter<"InsightSnapshot"> | number | null
 }
 
 export type InsightSnapshotOrderByWithRelationInput = {
@@ -308,6 +404,14 @@ export type InsightSnapshotOrderByWithRelationInput = {
   qualityRanking?: Prisma.SortOrderInput | Prisma.SortOrder
   raw?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  reach?: Prisma.SortOrderInput | Prisma.SortOrder
+  linkClicks?: Prisma.SortOrderInput | Prisma.SortOrder
+  thruplays?: Prisma.SortOrderInput | Prisma.SortOrder
+  videoP25?: Prisma.SortOrderInput | Prisma.SortOrder
+  videoP50?: Prisma.SortOrderInput | Prisma.SortOrder
+  videoP75?: Prisma.SortOrderInput | Prisma.SortOrder
+  videoP100?: Prisma.SortOrderInput | Prisma.SortOrder
+  messagingStarts?: Prisma.SortOrderInput | Prisma.SortOrder
 }
 
 export type InsightSnapshotWhereUniqueInput = Prisma.AtLeast<{
@@ -328,6 +432,14 @@ export type InsightSnapshotWhereUniqueInput = Prisma.AtLeast<{
   qualityRanking?: Prisma.StringNullableFilter<"InsightSnapshot"> | string | null
   raw?: Prisma.JsonNullableFilter<"InsightSnapshot">
   createdAt?: Prisma.DateTimeFilter<"InsightSnapshot"> | Date | string
+  reach?: Prisma.IntNullableFilter<"InsightSnapshot"> | number | null
+  linkClicks?: Prisma.IntNullableFilter<"InsightSnapshot"> | number | null
+  thruplays?: Prisma.IntNullableFilter<"InsightSnapshot"> | number | null
+  videoP25?: Prisma.IntNullableFilter<"InsightSnapshot"> | number | null
+  videoP50?: Prisma.IntNullableFilter<"InsightSnapshot"> | number | null
+  videoP75?: Prisma.IntNullableFilter<"InsightSnapshot"> | number | null
+  videoP100?: Prisma.IntNullableFilter<"InsightSnapshot"> | number | null
+  messagingStarts?: Prisma.IntNullableFilter<"InsightSnapshot"> | number | null
 }, "id" | "tenantId_entityType_entityMetaId_date">
 
 export type InsightSnapshotOrderByWithAggregationInput = {
@@ -344,6 +456,14 @@ export type InsightSnapshotOrderByWithAggregationInput = {
   qualityRanking?: Prisma.SortOrderInput | Prisma.SortOrder
   raw?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  reach?: Prisma.SortOrderInput | Prisma.SortOrder
+  linkClicks?: Prisma.SortOrderInput | Prisma.SortOrder
+  thruplays?: Prisma.SortOrderInput | Prisma.SortOrder
+  videoP25?: Prisma.SortOrderInput | Prisma.SortOrder
+  videoP50?: Prisma.SortOrderInput | Prisma.SortOrder
+  videoP75?: Prisma.SortOrderInput | Prisma.SortOrder
+  videoP100?: Prisma.SortOrderInput | Prisma.SortOrder
+  messagingStarts?: Prisma.SortOrderInput | Prisma.SortOrder
   _count?: Prisma.InsightSnapshotCountOrderByAggregateInput
   _avg?: Prisma.InsightSnapshotAvgOrderByAggregateInput
   _max?: Prisma.InsightSnapshotMaxOrderByAggregateInput
@@ -368,6 +488,14 @@ export type InsightSnapshotScalarWhereWithAggregatesInput = {
   qualityRanking?: Prisma.StringNullableWithAggregatesFilter<"InsightSnapshot"> | string | null
   raw?: Prisma.JsonNullableWithAggregatesFilter<"InsightSnapshot">
   createdAt?: Prisma.DateTimeWithAggregatesFilter<"InsightSnapshot"> | Date | string
+  reach?: Prisma.IntNullableWithAggregatesFilter<"InsightSnapshot"> | number | null
+  linkClicks?: Prisma.IntNullableWithAggregatesFilter<"InsightSnapshot"> | number | null
+  thruplays?: Prisma.IntNullableWithAggregatesFilter<"InsightSnapshot"> | number | null
+  videoP25?: Prisma.IntNullableWithAggregatesFilter<"InsightSnapshot"> | number | null
+  videoP50?: Prisma.IntNullableWithAggregatesFilter<"InsightSnapshot"> | number | null
+  videoP75?: Prisma.IntNullableWithAggregatesFilter<"InsightSnapshot"> | number | null
+  videoP100?: Prisma.IntNullableWithAggregatesFilter<"InsightSnapshot"> | number | null
+  messagingStarts?: Prisma.IntNullableWithAggregatesFilter<"InsightSnapshot"> | number | null
 }
 
 export type InsightSnapshotCreateInput = {
@@ -384,6 +512,14 @@ export type InsightSnapshotCreateInput = {
   qualityRanking?: string | null
   raw?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Date | string
+  reach?: number | null
+  linkClicks?: number | null
+  thruplays?: number | null
+  videoP25?: number | null
+  videoP50?: number | null
+  videoP75?: number | null
+  videoP100?: number | null
+  messagingStarts?: number | null
 }
 
 export type InsightSnapshotUncheckedCreateInput = {
@@ -400,6 +536,14 @@ export type InsightSnapshotUncheckedCreateInput = {
   qualityRanking?: string | null
   raw?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Date | string
+  reach?: number | null
+  linkClicks?: number | null
+  thruplays?: number | null
+  videoP25?: number | null
+  videoP50?: number | null
+  videoP75?: number | null
+  videoP100?: number | null
+  messagingStarts?: number | null
 }
 
 export type InsightSnapshotUpdateInput = {
@@ -416,6 +560,14 @@ export type InsightSnapshotUpdateInput = {
   qualityRanking?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   raw?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  reach?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  linkClicks?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  thruplays?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  videoP25?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  videoP50?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  videoP75?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  videoP100?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  messagingStarts?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
 }
 
 export type InsightSnapshotUncheckedUpdateInput = {
@@ -432,6 +584,14 @@ export type InsightSnapshotUncheckedUpdateInput = {
   qualityRanking?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   raw?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  reach?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  linkClicks?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  thruplays?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  videoP25?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  videoP50?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  videoP75?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  videoP100?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  messagingStarts?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
 }
 
 export type InsightSnapshotCreateManyInput = {
@@ -448,6 +608,14 @@ export type InsightSnapshotCreateManyInput = {
   qualityRanking?: string | null
   raw?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Date | string
+  reach?: number | null
+  linkClicks?: number | null
+  thruplays?: number | null
+  videoP25?: number | null
+  videoP50?: number | null
+  videoP75?: number | null
+  videoP100?: number | null
+  messagingStarts?: number | null
 }
 
 export type InsightSnapshotUpdateManyMutationInput = {
@@ -464,6 +632,14 @@ export type InsightSnapshotUpdateManyMutationInput = {
   qualityRanking?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   raw?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  reach?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  linkClicks?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  thruplays?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  videoP25?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  videoP50?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  videoP75?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  videoP100?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  messagingStarts?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
 }
 
 export type InsightSnapshotUncheckedUpdateManyInput = {
@@ -480,6 +656,14 @@ export type InsightSnapshotUncheckedUpdateManyInput = {
   qualityRanking?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   raw?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  reach?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  linkClicks?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  thruplays?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  videoP25?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  videoP50?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  videoP75?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  videoP100?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  messagingStarts?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
 }
 
 export type InsightSnapshotTenantIdEntityTypeEntityMetaIdDateCompoundUniqueInput = {
@@ -503,6 +687,14 @@ export type InsightSnapshotCountOrderByAggregateInput = {
   qualityRanking?: Prisma.SortOrder
   raw?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  reach?: Prisma.SortOrder
+  linkClicks?: Prisma.SortOrder
+  thruplays?: Prisma.SortOrder
+  videoP25?: Prisma.SortOrder
+  videoP50?: Prisma.SortOrder
+  videoP75?: Prisma.SortOrder
+  videoP100?: Prisma.SortOrder
+  messagingStarts?: Prisma.SortOrder
 }
 
 export type InsightSnapshotAvgOrderByAggregateInput = {
@@ -511,6 +703,14 @@ export type InsightSnapshotAvgOrderByAggregateInput = {
   clicks?: Prisma.SortOrder
   results?: Prisma.SortOrder
   frequency?: Prisma.SortOrder
+  reach?: Prisma.SortOrder
+  linkClicks?: Prisma.SortOrder
+  thruplays?: Prisma.SortOrder
+  videoP25?: Prisma.SortOrder
+  videoP50?: Prisma.SortOrder
+  videoP75?: Prisma.SortOrder
+  videoP100?: Prisma.SortOrder
+  messagingStarts?: Prisma.SortOrder
 }
 
 export type InsightSnapshotMaxOrderByAggregateInput = {
@@ -526,6 +726,14 @@ export type InsightSnapshotMaxOrderByAggregateInput = {
   frequency?: Prisma.SortOrder
   qualityRanking?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  reach?: Prisma.SortOrder
+  linkClicks?: Prisma.SortOrder
+  thruplays?: Prisma.SortOrder
+  videoP25?: Prisma.SortOrder
+  videoP50?: Prisma.SortOrder
+  videoP75?: Prisma.SortOrder
+  videoP100?: Prisma.SortOrder
+  messagingStarts?: Prisma.SortOrder
 }
 
 export type InsightSnapshotMinOrderByAggregateInput = {
@@ -541,6 +749,14 @@ export type InsightSnapshotMinOrderByAggregateInput = {
   frequency?: Prisma.SortOrder
   qualityRanking?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  reach?: Prisma.SortOrder
+  linkClicks?: Prisma.SortOrder
+  thruplays?: Prisma.SortOrder
+  videoP25?: Prisma.SortOrder
+  videoP50?: Prisma.SortOrder
+  videoP75?: Prisma.SortOrder
+  videoP100?: Prisma.SortOrder
+  messagingStarts?: Prisma.SortOrder
 }
 
 export type InsightSnapshotSumOrderByAggregateInput = {
@@ -549,6 +765,14 @@ export type InsightSnapshotSumOrderByAggregateInput = {
   clicks?: Prisma.SortOrder
   results?: Prisma.SortOrder
   frequency?: Prisma.SortOrder
+  reach?: Prisma.SortOrder
+  linkClicks?: Prisma.SortOrder
+  thruplays?: Prisma.SortOrder
+  videoP25?: Prisma.SortOrder
+  videoP50?: Prisma.SortOrder
+  videoP75?: Prisma.SortOrder
+  videoP100?: Prisma.SortOrder
+  messagingStarts?: Prisma.SortOrder
 }
 
 export type NullableFloatFieldUpdateOperationsInput = {
@@ -575,6 +799,14 @@ export type InsightSnapshotSelect<ExtArgs extends runtime.Types.Extensions.Inter
   qualityRanking?: boolean
   raw?: boolean
   createdAt?: boolean
+  reach?: boolean
+  linkClicks?: boolean
+  thruplays?: boolean
+  videoP25?: boolean
+  videoP50?: boolean
+  videoP75?: boolean
+  videoP100?: boolean
+  messagingStarts?: boolean
 }, ExtArgs["result"]["insightSnapshot"]>
 
 export type InsightSnapshotSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
@@ -591,6 +823,14 @@ export type InsightSnapshotSelectCreateManyAndReturn<ExtArgs extends runtime.Typ
   qualityRanking?: boolean
   raw?: boolean
   createdAt?: boolean
+  reach?: boolean
+  linkClicks?: boolean
+  thruplays?: boolean
+  videoP25?: boolean
+  videoP50?: boolean
+  videoP75?: boolean
+  videoP100?: boolean
+  messagingStarts?: boolean
 }, ExtArgs["result"]["insightSnapshot"]>
 
 export type InsightSnapshotSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
@@ -607,6 +847,14 @@ export type InsightSnapshotSelectUpdateManyAndReturn<ExtArgs extends runtime.Typ
   qualityRanking?: boolean
   raw?: boolean
   createdAt?: boolean
+  reach?: boolean
+  linkClicks?: boolean
+  thruplays?: boolean
+  videoP25?: boolean
+  videoP50?: boolean
+  videoP75?: boolean
+  videoP100?: boolean
+  messagingStarts?: boolean
 }, ExtArgs["result"]["insightSnapshot"]>
 
 export type InsightSnapshotSelectScalar = {
@@ -623,9 +871,17 @@ export type InsightSnapshotSelectScalar = {
   qualityRanking?: boolean
   raw?: boolean
   createdAt?: boolean
+  reach?: boolean
+  linkClicks?: boolean
+  thruplays?: boolean
+  videoP25?: boolean
+  videoP50?: boolean
+  videoP75?: boolean
+  videoP100?: boolean
+  messagingStarts?: boolean
 }
 
-export type InsightSnapshotOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "tenantId" | "entityType" | "entityMetaId" | "date" | "spendMinor" | "impressions" | "clicks" | "results" | "frequency" | "qualityRanking" | "raw" | "createdAt", ExtArgs["result"]["insightSnapshot"]>
+export type InsightSnapshotOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "tenantId" | "entityType" | "entityMetaId" | "date" | "spendMinor" | "impressions" | "clicks" | "results" | "frequency" | "qualityRanking" | "raw" | "createdAt" | "reach" | "linkClicks" | "thruplays" | "videoP25" | "videoP50" | "videoP75" | "videoP100" | "messagingStarts", ExtArgs["result"]["insightSnapshot"]>
 
 export type $InsightSnapshotPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "InsightSnapshot"
@@ -644,6 +900,14 @@ export type $InsightSnapshotPayload<ExtArgs extends runtime.Types.Extensions.Int
     qualityRanking: string | null
     raw: runtime.JsonValue | null
     createdAt: Date
+    reach: number | null
+    linkClicks: number | null
+    thruplays: number | null
+    videoP25: number | null
+    videoP50: number | null
+    videoP75: number | null
+    videoP100: number | null
+    messagingStarts: number | null
   }, ExtArgs["result"]["insightSnapshot"]>
   composites: {}
 }
@@ -1080,6 +1344,14 @@ export interface InsightSnapshotFieldRefs {
   readonly qualityRanking: Prisma.FieldRef<"InsightSnapshot", 'String'>
   readonly raw: Prisma.FieldRef<"InsightSnapshot", 'Json'>
   readonly createdAt: Prisma.FieldRef<"InsightSnapshot", 'DateTime'>
+  readonly reach: Prisma.FieldRef<"InsightSnapshot", 'Int'>
+  readonly linkClicks: Prisma.FieldRef<"InsightSnapshot", 'Int'>
+  readonly thruplays: Prisma.FieldRef<"InsightSnapshot", 'Int'>
+  readonly videoP25: Prisma.FieldRef<"InsightSnapshot", 'Int'>
+  readonly videoP50: Prisma.FieldRef<"InsightSnapshot", 'Int'>
+  readonly videoP75: Prisma.FieldRef<"InsightSnapshot", 'Int'>
+  readonly videoP100: Prisma.FieldRef<"InsightSnapshot", 'Int'>
+  readonly messagingStarts: Prisma.FieldRef<"InsightSnapshot", 'Int'>
 }
     
 

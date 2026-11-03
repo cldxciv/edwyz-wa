@@ -16,7 +16,7 @@ export const TENANT_FILTERS: TenantFilter[] = ["all", "trial", "paying", "suspen
 const DELETION_PREFIX = "workspace-deletion:";
 
 /** Workspaces whose owner asked for deletion and that no one has erased yet, with the date the 30 day promise runs out. */
-async function pendingDeletionRequests(): Promise<Map<string, { requestedAt: string; deleteBy: string }>> {
+export async function pendingDeletionRequests(): Promise<Map<string, { requestedAt: string; deleteBy: string }>> {
   const rows = await prisma.platformSetting.findMany({
     where: { key: { startsWith: DELETION_PREFIX }, value: { path: ["status"], equals: "requested" } },
     select: { key: true, value: true },
@@ -34,7 +34,9 @@ export function tenantWhere(filter: TenantFilter, q: string, now = new Date()) {
   const where: Record<string, unknown> = {};
   if (q) where.OR = [{ name: { contains: q, mode: "insensitive" } }, { slug: { contains: q, mode: "insensitive" } }];
   if (filter === "deleted") where.deletedAt = { not: null };
-  else where.deletedAt = null;
+  // Deletion requests list deleted workspaces too: one an admin soft-deleted, or whose erase stopped partway, is still owed an
+  // erase, and the overview counts it (getPlatformMetrics), so the list it links to must show it.
+  else if (filter !== "deletion_requested") where.deletedAt = null;
   if (filter === "suspended") where.status = "suspended";
   if (filter === "exempt") where.billingExempt = true;
   if (filter === "trial") Object.assign(where, { trialEndsAt: { gt: now }, billingExempt: false, subscription: { is: null } });

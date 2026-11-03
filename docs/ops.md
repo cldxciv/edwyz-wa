@@ -2,11 +2,11 @@
 
 Run book for the platform on the shared VPS now and on an independent VPS later. Deploy steps are in `deploy/README-deploy.md`.
 
-Contents: 1 single instance and the worker daemon, 2 shared rate limiting and migration guide, 3 health and readiness, 4 logging, 5 metrics and alerts, 6 CSP rollout, 7 environment validation, 8 backups and restore, 9 nginx, 10 required secrets, 11 demo workspace, 12 WhatsApp token health and reconnecting, 13 opt-in gating of marketing sends, 14 Meta App Review readiness, 15 spend controls and Eddy (flags, runbook, every new environment variable).
+Contents: 1 single instance and the worker daemon, 2 shared rate limiting and the remaining per-process state, 3 health and readiness, 4 logging and error reporting, 5 metrics and alerts, 6 CSP rollout, 7 environment validation, 8 backups and restore, 9 nginx, 10 required secrets, 11 demo workspace, 12 WhatsApp token health and reconnecting, 13 opt-in gating of marketing sends, 14 Meta App Review readiness, 15 spend controls and Eddy (flags, runbook, every new environment variable).
 
 ## 1. Run the web app as a single pm2 instance, and the worker daemon beside it
 
-Until every in-memory limiter and guard in section 2 has been switched and the remaining per-process state (table at the end of section 2) is accepted, the web app must be one process. Rate limits, the approval-form nonce set, the BYO tool-call cache, the compat idempotency map and the AI in-flight guard live in process memory. They reset on every restart and are per process. With more than one web instance every limit is multiplied by the instance count.
+Every rate limiter except the two on public callback endpoints now counts in Postgres through the shared limiter (section 2), so limits survive restarts and would hold across processes. The two exceptions, `csp-report` and `meta-deauthorize`, are `memoryOnly` so anonymous callers write no rows. The web app must still be one process, because of the per-process state in the last table of section 2: the approval-form nonce set, the MCP confirm-token set, the compat idempotency map, the live inbox connection count, the AI reply in-flight guard, Eddy's count of turns streaming at once and those two limiters. They reset on every restart, and with more than one web instance each would be split or multiplied by the instance count.
 
 - Start the web app with exactly one instance (fork mode, or `-i 1`). Never use `-i max` or cluster mode with more than 1.
 - The worker is a separate pm2 process and may be scaled on its own; it does not hold these limiters. Both processes are defined in `deploy/ecosystem.config.cjs` (apps `edwyz-wa` and `edwyz-wa-worker`, one fork-mode instance each; no other tenant's pm2 app is listed or touched): `cd /var/www/edwyz-wa && pm2 startOrReload deploy/ecosystem.config.cjs --update-env && pm2 save`.
@@ -40,43 +40,49 @@ How it works:
 
 - `consume` decides from memory and writes its hits to Postgres in the background, batched into one upsert per key per round trip. Counts from other processes, and from before a restart, arrive with the first reply, so enforcement converges within milliseconds. The first hit for a key in a fresh process is always allowed (a restart can give an attacker at most one extra try per key).
 - `consumeShared` returns the database count. It costs one round trip per call (about 0.2 to 1 ms on the same host). Saturated keys are answered from memory without a query. Use one style (`consume` or `consumeShared`) per limiter.
-- Storage (env `RATELIMIT_BACKEND`): `settings` (default) is one `PlatformSetting` row per key, `rl:<name>:<sha256(key)[0..32]>`, value `{count, exp}`, written with `INSERT ... ON CONFLICT DO UPDATE ... RETURNING` (atomic, window reset inside the same statement). Keys are hashed, so emails and IPs never reach the database. `table` uses the `RateLimitBucket` table requested in `docs/schema-requests.md`. `memory` keeps everything in the process and is the default under `NODE_ENV=test`, so other test suites need no database. `createLimiter(..., { memoryOnly: true })` pins one limiter to memory (used by `/api/csp-report`).
-- Cost of the `settings` backend: one row per active key (rows live until a sweep removes them a minute after expiry; the limiter sweeps every 5 minutes, `sweepExpiredLimits()` can also run as a worker periodic task) and one write per batch. Writes to `PlatformSetting` create dead tuples that autovacuum cleans. It is fine up to roughly 50 limited requests per second in total; beyond that move to the `table` backend (unlogged, indexed on `expiresAt`). The sweep uses a `LIKE 'rl:%'` scan of `PlatformSetting`, which stays small.
+- Storage (env `RATELIMIT_BACKEND`): `settings` (default) is one `PlatformSetting` row per key, `rl:<name>:<sha256(key)[0..32]>`, value `{count, exp}`, written with `INSERT ... ON CONFLICT DO UPDATE ... RETURNING` (atomic, window reset inside the same statement). Keys are hashed, so emails and IPs never reach the database. `memory` keeps everything in the process and is the default under `NODE_ENV=test`, so other test suites need no database (in production it is a warning: counts reset on every restart). `createLimiter(..., { memoryOnly: true })` pins one limiter to memory (used by `/api/csp-report` and `/api/meta/deauthorize`). `table` would use the `RateLimitBucket` table requested in `docs/schema-requests.md`, which has no migration yet: `check-env` refuses the value, and if it is set anyway the first "table does not exist" answer moves every limiter to `settings` with one `ratelimit.table_missing` warning.
+- Cost of the `settings` backend: one row per active key (rows live until a sweep removes them a minute after expiry; the limiter sweeps every 5 minutes, `sweepExpiredLimits()` can also run as a worker periodic task) and one write per batch. Writes to `PlatformSetting` create dead tuples that autovacuum cleans. It is fine up to roughly 50 limited requests per second in total; beyond that the `table` backend (unlogged, indexed on `expiresAt`) needs its migration first. The sweep uses a `LIKE 'rl:%'` scan of `PlatformSetting`, which stays small.
 - If Postgres fails, the limiter keeps counting locally, retries after 5 seconds and logs one `ratelimit.degraded` warning a minute. It never throws and never blocks a request.
 - Under the RLS plan (`docs/rls-plan.md`) `PlatformSetting` is a system table; the limiter must then use the system connection, or move to `RateLimitBucket` with a policy for `edwyz_app`.
 - Forgetting to change `consume` calls is safe: the call stays synchronous. Calling `consumeShared` without `await` is not: a Promise is truthy, so `if (!limiter.consumeShared(k))` never trips. Always `await` it.
 
-### Migration guide: every in-memory limiter and guard in the repo
+### The limiters that used to live in memory (migration done)
 
-Switch a limiter by changing the import, adding a unique `name` as third argument, and (optionally) calling `consumeShared`. Names below are suggestions; they must be unique per limiter.
+Every limiter imports `createLimiter` from `@/lib/ratelimit` with a unique stable name; nothing imports the old in-memory factory any more. `tests/ratelimit-migration.test.ts` fails when a file defines its own limiter again, reuses a name or drops one of the names below. Limiters added later (signup, inbox sends, new chats and exports, broadcast and template uploads, spend approvals, Eddy turns and actions, Shopify ownership checks, password and ownership changes) were built on the shared limiter from the start; `grep -rn 'createLimiter(' src` lists them all. A new limiter follows the same pattern: `createLimiter(max, windowMs, "<unique-name>")`, and `consumeShared` where an extra guess matters.
 
-| File and line | What | Limit | Switch |
-|---|---|---|---|
-| `src/lib/auth/ratelimit.ts:4` | The in-memory factory itself, used by all below. `ipLimiter`, `pairLimiter`, `emailCeiling` (lines 31 to 33) back `checkLoginLimits`, called from `api/auth/login` and `api/auth/accept-invite` | 30, 10, 100 per 15 min | Re-export or replace `createLimiter` with the shared one; names `login-ip`, `login-pair`, `login-email`. For exact counting make `checkLoginLimits` async with `consumeShared` and await it in both routes. `clearLoginLimit` becomes `await pairLimiter.reset(...)` |
-| `src/lib/admin/security.ts:8` | `attemptLimiter` (TOTP attempts, line 30) | 5 per 15 min per user | `admin-totp`; use `consumeShared` |
-| `src/lib/approvals/guards.ts:7-10` | `decideIpLimiter`, `decideTokenLimiter`, `viewIpLimiter`, `resendUserLimiter`; used in `api/approvals/[id]/decide`, `.../resend`, `app/approve/[token]/page.tsx` | 20 per 15 min, 10 per 1 h, 120 per 5 min, 10 per 1 h | `approval-decide-ip`, `approval-decide-token`, `approval-view-ip`, `approval-resend-user`; `consumeShared` for the two decide limiters |
-| `src/lib/approvals/guards.ts:13` | `usedNonces` Map (replay set, not a limiter) | 15 min TTL | Not covered by this module. Needs a unique-insert: `INSERT INTO "PlatformSetting" (key, value, "updatedAt") VALUES ('nonce:'\|\|hash, '{}', now()) ON CONFLICT DO NOTHING RETURNING key` (row returned = first use). Replay of a nonce is harmless today because the decision itself is single use |
-| `src/lib/email/limits.ts:4-8` | `forgotIpLimiter`, `forgotEmailLimiter`, `verifyLimiter`, `resetLimiter`, `resendLimiter`; used in four `api/auth` routes | 10, 3, 20, 10 per 15 min; 3 per 1 h | `forgot-ip`, `forgot-email`, `verify-ip`, `reset-ip`, `resend-user`; `resetEmailLimits` calls `clear()` (now returns a Promise; local state clears synchronously) |
-| `src/lib/compat/runtime.ts:11` | `limiter` per API token (line 51) | 30 per 10 s | `compat-token` (hot path, three queries per second at the limit; fine) |
-| `src/lib/integrations/apikeys.ts:15` | `limiter` per API key (line 108) | 60 per min | `apikey` |
-| `src/lib/tenant-mcp/server.ts:14` | `limiter` per MCP key (line 101) | 60 per min | `tenant-mcp` |
-| `src/lib/inbox/suggest.ts:16` | `limiter` per tenant and user (line 20) | 10 per min | `inbox-suggest` |
-| `src/app/api/inbox/conversations/[id]/attachments/route.ts:8` | `limiter` per tenant and user (line 18) | 30 per min | `inbox-upload` |
-| `src/lib/byo-mcp/index.ts:14` | `calls` Map of timestamps (sliding log, `takeRateSlot`) | 30 per min per tenant | Replace the Map with `createLimiter(RATE_LIMIT_CALLS, RATE_WINDOW_MS, "byo-mcp")` (fixed window instead of sliding) |
-| `src/lib/tenant-mcp/send-guard.ts:13-14` | `usedTokens` (confirm token replay) and `reservations` (sends per key per hour and per recipient per day) | 20 per key per hour, 3 per recipient per day | Limits can use the shared limiter (`mcp-send-key`, `mcp-send-recipient`); `usedTokens` needs the unique-insert described for `usedNonces` |
+| File | Limiters (names) | Limit |
+|---|---|---|
+| `src/lib/auth/ratelimit.ts` | `login-ip`, `login-pair`, `login-email`; `checkLoginLimits` awaits `consumeShared` in `api/auth/login` and `api/auth/accept-invite` | 30, 10, 100 per 15 min |
+| `src/lib/admin/security.ts` | `admin-totp` (TOTP attempts, `consumeShared`) | 5 per 15 min per user |
+| `src/lib/approvals/guards.ts` | `approval-decide-ip`, `approval-decide-token`, `approval-view-ip`, `approval-resend-user` | 20 per 15 min, 10 per 1 h, 120 per 5 min, 10 per 1 h |
+| `src/lib/email/limits.ts` | `forgot-ip`, `forgot-email`, `verify-ip`, `reset-ip`, `resend-user` | 10, 3, 20, 10 per 15 min; 3 per 1 h |
+| `src/lib/compat/runtime.ts` | `compat-token` | 30 per 10 s |
+| `src/lib/integrations/apikeys.ts` | `apikey` | 60 per min |
+| `src/lib/tenant-mcp/server.ts` | `tenant-mcp` | 60 per min |
+| `src/lib/inbox/suggest.ts` | `inbox-suggest` | 10 per min |
+| `src/lib/byo-mcp/index.ts` | `byo-mcp` (fixed window) | 30 per min per tenant |
+| `src/app/api/inbox/conversations/[id]/attachments/route.ts` | `inbox-upload` | 30 per min |
+| `src/app/api/inbox/media/[messageId]/route.ts` | `inbox-media` | 600 per min |
+| `src/app/api/csp-report/route.ts` | `csp-report` (`memoryOnly`: public endpoint, no rows written) | 120 per min per address |
+| `src/app/api/meta/deauthorize/route.ts` | `meta-deauthorize` (`memoryOnly`: public Meta callback, no rows written) | 60 per min per address |
+| `src/lib/actions/card-http.ts` | `actions-confirm` (Eddy's card routes, EDDY-SPEC 4.3) | 30 per min |
 
-Searched and found no Map-based limiter in `src/lib/content`, `src/lib/creative` or `src/lib/leads` (`leads/ingest.ts:23` is a local variable inside a function). `src/lib/chatbots/engine.ts` throttles bot messages per session inside the persisted session variables (`vars.__sent`), so it already survives restarts.
+`src/lib/tenant-mcp/send-guard.ts` counts sends per key per hour and per recipient per day in a durable ledger (`mcp-send:` rows), not in memory. `src/lib/chatbots/engine.ts` throttles bot messages per session inside the persisted session variables (`vars.__sent`), so it already survives restarts.
 
-Per-process state that is not a rate limit and stays in memory (acceptable with a single web instance; each is a cache or a gauge):
+Per-process state that stays in memory (acceptable with a single web instance; this is why the web app stays one process):
 
 | File | State | Note |
 |---|---|---|
-| `src/lib/inbox/stream.ts:11` | `connections` per tenant, max 20 live SSE connections | A gauge of open sockets; per process by nature |
-| `src/lib/compat/idempotency.ts:11` | `inflight` Map of promises | Coalesces concurrent identical sends in one process; cross-process exactness needs the schema request already in `docs/schema-requests.md` |
-| `src/lib/ai-agent/index.ts:26` | `inFlight` Set | Prevents two parallel AI replies for one conversation in one process |
-| `src/lib/byo-mcp/index.ts:15`, `src/lib/tenant-state.ts:5`, `src/lib/commerce/webhook-guard.ts:10` | Caches (tool list, tenant status for 30 s, unknown shop domains for 60 s) | Staleness only |
+| `src/lib/approvals/guards.ts` | `usedNonces` Map (approval-form replay set, 15 min) | Moving it needs a unique-insert: `INSERT INTO "PlatformSetting" (key, value, "updatedAt") VALUES ('nonce:'\|\|hash, '{}', now()) ON CONFLICT DO NOTHING RETURNING key` (row returned = first use). A replayed nonce is harmless today because the decision itself is single use |
+| `src/lib/tenant-mcp/send-guard.ts` | `usedTokens` Map (MCP confirm-token replay) | Same unique-insert as `usedNonces` |
+| `src/lib/inbox/stream.ts` | `connections` per tenant, max 20 live SSE connections | A gauge of open sockets; per process by nature |
+| `src/lib/compat/idempotency.ts` | `inflight` Map of promises | Coalesces concurrent identical sends in one process; cross-process exactness needs the schema request already in `docs/schema-requests.md` |
+| `src/lib/ai-agent/index.ts` | `inFlight` Set | Prevents two parallel AI replies for one conversation in one process |
+| Eddy (`EDDY_MAX_CONCURRENT_TURNS`) | turns streaming at once | Counted per web instance |
+| `src/lib/byo-mcp/index.ts`, `src/lib/tenant-state.ts`, `src/lib/commerce/webhook-guard.ts` | Caches (tool list, tenant status for 30 s, unknown shop domains for 60 s) | Staleness only |
+| `src/app/api/csp-report/route.ts`, `src/app/api/meta/deauthorize/route.ts` | The `memoryOnly` limiters `csp-report` and `meta-deauthorize` | Reset on restart, and each web instance would count on its own. nginx's `wa_meta` zone also limits `/api/meta/` per address |
 
-After the table above is applied, the remaining single-instance requirement is `usedNonces`, `usedTokens`, `inflight`, `inFlight` and `connections`.
+The single-instance requirement is `usedNonces`, `usedTokens`, `inflight`, `inFlight`, `connections`, Eddy's turn count and the two `memoryOnly` limiters.
 
 ## 3. Health and readiness
 
@@ -95,7 +101,7 @@ await prisma.$executeRaw`INSERT INTO "PlatformSetting" (key, value, "updatedAt")
   ON CONFLICT (key) DO UPDATE SET "updatedAt" = now()`;
 ```
 
-`GET /health/ready` (public): `{ "status": "ready", "checks": { "database": true, "schema": true, "migrations": true } }`, 200 or 503 `not_ready`. It checks that the database answers, that `Tenant`, `Job` and `PlatformSetting` exist, and that `_prisma_migrations` has no unfinished row. If the migrations table does not exist (migrations applied by hand with psql, as on the current VPS) the schema check stands in for it. If it exists, the app role needs `GRANT SELECT ON "_prisma_migrations" TO edwyz_wa_app`, otherwise `migrations` is false. A ready answer is cached for 5 s, a failure for 1 s. Use it for the deploy verification step and for an external load balancer on the independent server; use `/health` for uptime monitors.
+`GET /health/ready` (public): `{ "status": "ready", "checks": { "database": true, "schema": true, "migrations": true } }`, 200 or 503 `not_ready`. It checks that the database answers, that `Tenant`, `Job` and `PlatformSetting` exist, and that the newest migration is applied: `LATEST_MIGRATION` in `src/app/health/checks.ts` names the newest folder in `prisma/migrations` and something only it creates (a table, a column or an enum value; today the `flagged` value of `TemplateStatus` from `0011_template_flagged`). Migrations on the current VPS are applied by hand with psql, so there is no `_prisma_migrations` ledger, and this marker is what catches a release whose migration was forgotten (its routes would otherwise answer 500 while the probe said ready). Every new migration updates the constant in the same change; `tests/ops-health.test.ts` fails while it names an older folder or a marker the migration's SQL does not create. If `_prisma_migrations` exists, it must also have no unfinished row, and the app role needs `GRANT SELECT ON "_prisma_migrations" TO edwyz_wa_app`, otherwise `migrations` is false. A ready answer is cached for 5 s, a failure for 1 s. Use it for the deploy verification step and for an external load balancer on the independent server; use `/health` for uptime monitors.
 
 ## 4. Logging (`src/lib/log.ts`)
 
@@ -109,11 +115,23 @@ rlog.error("send failed", { err: e, queue: "send" });                   // err i
 response.headers.set(REQUEST_ID_HEADER, id);
 ```
 
-Redaction is applied to every line before it is written: keys matching token, secret, password, authorization, cookie, credential, api key, signature, email, phone, pin and otp are replaced; keys `body`, `text`, `content`, `caption`, `message`, `messages`, `payload`, `html`, `preview`, `subject` and `raw` are replaced (message bodies are never logged); inside any string, emails, phone-like digit runs, `Bearer` values, JWTs and `EAA...` Meta tokens are scrubbed. Depth, array length and string length are bounded. The proxy sets `x-request-id` on page requests and responses; API routes call `requestLogger` themselves.
+Redaction is applied to every line before it is written: keys matching token, secret, password, authorization, cookie, credential, api key, signature, email, phone, pin and otp are replaced; keys `body`, `text`, `content`, `caption`, `message`, `messages`, `payload`, `html`, `preview`, `subject` and `raw` are replaced (message bodies are never logged); inside any string, emails, phone-like digit runs, `Bearer` values, JWTs and `EAA...` Meta tokens are scrubbed. Depth, array length and string length are bounded.
 
-Error reporting hook: `setErrorReporter(({ err, context, requestId }) => ...)` is called for every `log.error` that carries an `err` field, with scrubbed data only. No vendor is bundled; register one in `src/instrumentation.ts` when chosen. A reporter that throws is ignored.
+Request ids: nginx sends `X-Request-Id $request_id` from `location /` (pages and most API routes) and from the Eddy, actions, notices and header upload blocks of `deploy/nginx-wa.edwyz.com.conf`; the proxy (`src/proxy.ts`) reuses it (or mints one) on page requests and responses, and the log helpers reuse it on API routes. The other proxied blocks do not send it yet: `/webhooks/`, `/api/meta/`, `/api/ext/`, `/api/mcp`, `/api/inbox/conversations/<id>/attachments` and `/api/content/media`. Lines from those routes (including `webhook.signature_rejected` and `webhook.store_failed`) carry an id the app mints, as does the cron tick, which calls the app on 127.0.0.1 without nginx. Adding `proxy_set_header X-Request-Id $request_id;` to those blocks would give them nginx's id too. Where failures are logged:
 
-Log rotation: install `pm2 install pm2-logrotate` and set `max_size 20M`, `retain 14`, `compress true` (or a logrotate rule for `/root/.pm2/logs/edwyz-wa-*.log`). Without rotation the disk (about 4.5 GB free on the shared VPS) fills slowly.
+| Line | Written by | Carries |
+|---|---|---|
+| `api.unexpected` | `errorResponse()` in `src/lib/tenancy.ts`, which every API route calls in its `catch`, for anything that is not an `HttpError` (the 500 "Something went wrong.") | `err` (class name and code, plus a scrubbed message except for Prisma errors), `reqId`, and `method` and `path` when the route passes its request (`errorResponse(e, request)`). The same id goes back in the response's `x-request-id` header, so a customer's failed request can be found: `pm2 logs edwyz-wa --nostream --lines 2000 \| grep <id>`. Without the request the id is minted for that line |
+| `request.unhandled` | `onRequestError` in `src/instrumentation.ts`: a page, layout or server action that throws, or a route that throws past its own `catch` | `err`, `reqId`, `method`, the route pattern (`/app/inbox/[id]`, never the concrete path, which can carry a token), `routeType`, and the `digest` shown on the error page |
+| `webhook.signature_rejected`, `webhook.store_failed` | `/webhooks/whatsapp` | `reqId` (minted by the app: nginx's `/webhooks/` block sends no id); for the store failure `err` (Meta retries the 500) |
+| `razorpay.signature_rejected`, `razorpay.webhook_failed` | `/api/webhooks/razorpay` | `reqId` (nginx's, through `location /`); for the failure `err` |
+| `worker.heartbeat_failed` | `/api/internal/tick` | `err`. A failed pass is `api.unexpected` with an id the app mints, because the cron calls the app directly |
+
+Other modules still write plain `console` lines with a `[module]` prefix; move them to `@/lib/log` when touching them.
+
+Error reporting hook: `setErrorReporter(({ err, context, requestId }) => ...)` is called for every `log.error` that carries an `err` field (all the lines above except the signature rejections), with scrubbed data only. No vendor is bundled (an owner decision); register one in `register()` in `src/instrumentation.ts`, where a comment marks the place. The reporter is kept on `globalThis`, so the one registered there also sees errors logged from the route bundles. A reporter that throws is ignored.
+
+Log rotation: `deploy/logrotate-edwyz-wa` (installed as `/etc/logrotate.d/edwyz-wa`) rotates wa's cron logs `/var/log/edwyz-wa-*.log` and, in a second block with `copytruncate`, pm2's logs of the two apps (`/root/.pm2/logs/edwyz-wa*.log`, daily or at 20 MB, 14 kept). On the shared VPS the owner chose this over pm2-logrotate, which would also rotate the other tenants' pm2 logs (`deploy/README-deploy.md` A step 8.1). Without rotation the disk (about 4.3 GB free on the shared VPS) fills slowly: `alert-wa.sh` alone appends a line every 5 minutes.
 
 ## 5. Metrics and alerts
 
@@ -156,7 +174,7 @@ Alert guidance (the same rules, for an external monitor too; send to the on-call
 | metrics `queued` | above 1000, or growing for 3 checks | Warn |
 | `/health/ready` | not 200 after a deploy | Roll back (deploy runbook) |
 | Backups | newest file in `/root/backups/wa/` older than 26 h, or smaller than half the previous one, or backup volume under 15% free | Page the owner |
-| Logs | `env.invalid` at startup; `ratelimit.degraded` repeating; `csp.violations` spiking; `Webhook signature` rejections | Warn |
+| Logs | `env.invalid` at startup; `api.unexpected` or `request.unhandled` repeating (same route); `ratelimit.degraded` repeating or `ratelimit.table_missing`; `csp.violations` spiking; `webhook.signature_rejected` or `razorpay.signature_rejected` bursts; any `webhook.store_failed` | Warn |
 | nginx | 5xx share above 2% over 5 minutes (`awk '$9 ~ /^5/' /var/log/nginx/access.log`), 429 bursts on `/webhooks/` | Warn |
 | TLS | certificate expires in under 14 days | Warn (certbot renew failing) |
 
@@ -171,20 +189,23 @@ Minimal cron check (adjust the mail command to the VPS mail setup): `* * * * * r
 - `report-only` (default, also for any unrecognised value): the previous policy (`'unsafe-inline'` scripts) is still enforced as `Content-Security-Policy`, and the strict nonce policy is sent as `Content-Security-Policy-Report-Only`. Nothing can break; violations are posted to `/api/csp-report`.
 - `enforce`: the strict nonce policy is the only policy.
 
-Strict policy: `script-src 'self' 'nonce-...' 'strict-dynamic' https://connect.facebook.net https://checkout.razorpay.com` (no inline, no eval in production), `frame-src` for `www.facebook.com`, `web.facebook.com`, `staticxx.facebook.com` (the SDK's cross-domain iframe) and Razorpay, `connect-src 'self' https://graph.facebook.com` plus Razorpay, `object-src 'none'`, `frame-ancestors 'none'`. `style-src` keeps `'unsafe-inline'` because React style attributes cannot carry a nonce. `'strict-dynamic'` is what lets the nonced Next.js bundles load the Facebook SDK that `ConnectWhatsApp.tsx` adds with `document.createElement("script")`.
+Strict policy: `script-src 'self' 'nonce-...' 'sha256-...' 'strict-dynamic' https://connect.facebook.net https://checkout.razorpay.com` (no inline, no eval in production), `frame-src` for `www.facebook.com`, `web.facebook.com`, `staticxx.facebook.com` (the SDK's cross-domain iframe) and Razorpay, `connect-src 'self' https://graph.facebook.com` plus Razorpay, `img-src 'self' data: blob: https:`, `media-src 'self' blob: https:` (inbox video, audio and voice notes, including https links an automation sends), `object-src 'none'`, `frame-ancestors 'none'`. `style-src` keeps `'unsafe-inline'` because React style attributes cannot carry a nonce. `'strict-dynamic'` is what lets the nonced Next.js bundles load the Facebook SDK that `ConnectWhatsApp.tsx` adds with `document.createElement("script")`. The `'sha256-...'` source is `THEME_INIT_SCRIPT_HASH`: the hash of the root layout's inline theme script (`THEME_INIT_SCRIPT` in `src/components/app/theme-core.ts`), which runs before first paint on every page and carries no nonce. `'strict-dynamic'` ignores `'self'` and hosts but honours hashes. Change the script and the constant together; `tests/ops-csp.test.ts` recomputes the hash and prints the new value when they differ.
+
+The enforced legacy policy (report-only mode) has the same `img-src` (with `blob:` for the composer's preview of a picked image) and `media-src`, and never a hash or nonce in `script-src`: a browser that sees one ignores `'unsafe-inline'`.
 
 `/api/csp-report` accepts both report formats, is rate limited per IP, stores nothing and logs only aggregated counts per directive once a minute: `{"msg":"csp.violations","total":14,"byDirective":{"script-src-elem":14}}`. URLs and samples are dropped on purpose.
 
 Rollout:
 
 1. Deploy with the default. Watch `pm2 logs edwyz-wa | grep csp.violations` for a week while loading every page type, including the Embedded Signup popup flow and Razorpay checkout in test mode.
-2. Precondition for enforcing: Next.js only stamps the nonce on pages rendered per request. Pages that are prerendered at build time (at the last build: `/`, `/login`, `/signup`, `/privacy`, `/terms`, `/docs/*`, `/forgot-password`, `/reset-password`, `/verify-email`, `/accept-invite`, `/data-deletion`) carry inline scripts without a nonce and would be blocked. They show up as `script-src-elem` violations. Fix: make the root layout dynamic (`await connection()` from `next/server` in `src/app/layout.tsx`, owned by the coordinator), rebuild, and confirm the violation counts drop to zero.
+2. Precondition for enforcing: Next.js only stamps the nonce on pages rendered per request. The public pages (`src/app/(site)/layout.tsx`), the sign-in pages (`src/app/(auth)/layout.tsx`), the app and the admin console are force-dynamic, so they get it, and the root layout's own inline theme script is allowed by its hash (above), not a nonce. What Next still prerenders at build time is `/offline` (the installable app's offline page), the 404 page for unknown public paths and the web app manifest: their Next.js scripts carry no nonce and show up as `script-src-elem` violations on those pages only. Under `enforce` those scripts are blocked. `/offline` is plain HTML that works without them. The 404 page does not fully: its links and the header's links work, but the header's mobile menu button (`MobileNav` in `src/components/site/mobile-nav.tsx`, a client component) needs the scripts, so on a phone the Menu button on the 404 page does nothing. The service worker registration in the root layout does not run on these two pages either, which is harmless because every other page registers it. The fix is to render the 404 page per request (for example `await connection()` from `next/server` in `src/app/not-found.tsx`), which is not done yet. Confirm that the remaining violation counts come only from those two pages (load each page type while watching the counts), then go on, accepting the inert menu button on the 404 page or after that fix.
 3. Set `CSP_MODE=enforce` in `.env`, `pm2 restart edwyz-wa --update-env`, repeat the page walk. Rollback is removing the line and restarting.
 4. Add any host that legitimately appears in violations (the SDK may need `https://www.facebook.com` in `connect-src`) to `src/lib/security/csp.ts` and its test, never `'unsafe-inline'` to `script-src`.
 
 ## 7. Environment validation
 
 - `node scripts/check-env.mjs /var/www/edwyz-wa/.env` before every deploy (a file argument is checked as production). It prints `ERROR`, `WARN` and `OFF` lines, names only, never values, and exits 1 on errors. Required: `DATABASE_URL` (postgres URL with host and database), `SESSION_SECRET` (32+ characters), `ENCRYPTION_KEY` (32 bytes, base64), `WORKER_SECRET` (16+ characters) and `STATE_SECRET` (32+ characters in production, which is what a file argument is checked as; 16+ elsewhere), `CSP_MODE` if set. In production also `CREATIVE_MEDIA_SECRET` and `CONTENT_MEDIA_SECRET` (section 10). Warnings: empty `META_APP_SECRET` (webhook signatures cannot be verified, so events are rejected), `META_APP_ID`, `META_VERIFY_TOKEN`, `META_ES_CONFIG_ID`, `PLATFORM_ADMIN_EMAILS`, secrets that share a value, `SITE_URL` not https, more than one web instance.
+- Also checked: `RATELIMIT_BACKEND` must be `settings` or `memory` (error; `table` needs a migration that does not exist yet, section 2), and `memory` in production is a warning. In production, a warning names an email verification gate that is off: with `SMTP_USER` empty and `EMAIL_VERIFICATION_REQUIRED` unset (the gate in `src/lib/auth/verification.ts` turns on by itself once `SMTP_USER` is set), with `EMAIL_VERIFICATION_REQUIRED=false`, or with it `true` while no mail can be sent (every new signup would stay read-only). Any value of `EMAIL_VERIFICATION_REQUIRED` other than true or false is a warning everywhere. In production `ANTHROPIC_API_KEY` without `EDDY_ANTHROPIC_KEY_DEDICATED=true` is a warning even with Eddy off, because the AI reply bot, inbox suggestions and creative copy spend on the same key (section 15.1).
 - At boot (`src/instrumentation.ts`, nodejs runtime only) the app logs each problem and one `startup` line: counts, `cspMode`, and the optional features that are off (AI, Eddy and creative copy; Razorpay; SMTP; Meta Connect login config), without values. `MAX_DAILY_BUDGET_MINOR` is no longer a feature: it is deprecated and only warns when set (section 15). The spend and Eddy flags are checked too (section 15.1): a typo is an error, never a silent fallback. `ENV_STRICT=1` makes the app refuse to start on errors; leave it off until the env check passes in the deploy runbook, otherwise a bad `.env` puts pm2 in a restart loop.
 - The rules are in `src/lib/env-rules.mjs` (plain JavaScript so the script runs on bare Node) and re-exported with types from `src/lib/env.ts`.
 
@@ -243,8 +264,8 @@ Automated: `install -m 755 deploy/restore-check-wa.sh /usr/local/sbin/restore-ch
 2. Install `deploy/nginx-wa.edwyz.com.conf` as the site, then `nginx -t && systemctl reload nginx`.
 3. Rate limits per client address, answered with 429: `/webhooks/` 30 req/s burst 60, `/api/ext/` 10 req/s burst 20, `/api/mcp` 5 req/s burst 10, `/api/meta/` 5 req/s burst 20, and Eddy's `/api/eddy/turn`, `/api/eddy/`, `/api/actions/` and `/api/notices/` 2 req/s burst 10 (zone `wa_eddy`).
 3a. Eddy's blocks (Eddy spec 7.10) repeat every `proxy_set_header` of `location /` (nginx does not inherit them into another location: without `Host` the same-origin check refuses every turn, without the client address every per-address limit sees 127.0.0.1) and set `gzip off`. The exact `location = /api/eddy/turn` block streams server-sent events: `proxy_buffering off`, `proxy_cache off`, `proxy_read_timeout 180s` (the route lives 150 s and sends a keepalive every 15 s). `tests/deploy-nginx-eddy.test.ts` fails when any of these is missing. On staging, check that events arrive one by one with no compression: `curl -N --compressed -H 'content-type: application/json' -b '<session cookie>' -H 'Origin: https://wa.edwyz.com' -d '{"text":"hi","page":"/app"}' https://<host>/api/eddy/turn -D -` must show no `Content-Encoding` header and print events as they come.
-4. Body limits: 4 MB everywhere. 110 MB only for `POST /api/content/media` and the inbox attachment upload `POST /api/inbox/conversations/<id>/attachments`, both with `proxy_request_buffering off` so uploads stream to the app.
-5. The catch-all location sends `X-Request-Id $request_id`; the app reuses it in logs and responses.
+4. Body limits: 4 MB everywhere. 110 MB only for `POST /api/content/media` and the inbox attachment upload `POST /api/inbox/conversations/<id>/attachments`, both with `proxy_request_buffering off` so uploads stream to the app. 17 MB for the template and broadcast header uploads `POST /api/templates/media` and `POST /api/broadcasts/media` (WhatsApp's 16 MB header limit).
+5. The catch-all location, Eddy's four blocks and the two header upload blocks send `X-Request-Id $request_id`; the app reuses it in logs and responses. The other proxied blocks do not send it yet, so the app mints an id there (section 4 lists them).
 
 Lock down internal routes (optional, security review F17): `/api/internal/tick` and `/api/internal/metrics` are guarded by `WORKER_SECRET` but reachable from the internet. Before enabling the commented `location /api/internal/` block (allow 127.0.0.1, deny all) check how the tick cron calls the app: `grep -h tick /etc/cron.d/edwyz-wa`. If it uses `https://wa.edwyz.com/...` change it to `http://127.0.0.1:3500/api/internal/tick` first, otherwise the tick stops. Verify with a tick after the nginx reload.
 
@@ -285,7 +306,7 @@ Embedded Signup returns a business token. With the 60-day-expiry configuration M
 
 ## 13. Opt-in gating of marketing sends
 
-Rule: a template whose category is MARKETING is sent only to a contact with `optIn = true` and no `optedOutAt` (STOP). Utility and authentication templates need only "not opted out". The gate is central: `sendTemplateMessage` in `src/lib/inbox/service.ts` checks the contact and the template inside the function for every caller (HTTP 422, nothing queued), and the callers below also check earlier to give a better answer. The gate fails closed: a template the workspace has no row for (not synced, or synced only under another WhatsApp account) is treated as marketing, so it needs the opt-in too (the same name and language under another account of the workspace uses that row's category). STOP is checked again when the queued message is sent (`processSendJob` fails a template for a contact who opted out meanwhile with `opted_out`). Free-form messages (text, media, interactive) are different: they are allowed only inside the 24-hour window.
+Rule: a template whose category is MARKETING is sent only to a contact with `optIn = true` and no `optedOutAt` (STOP). An opt-out stops marketing only (owner default 1, 2026-10-31; the one helper is `mayReceive` in `src/lib/contacts/opt-out.ts`): utility and authentication templates (order and delivery updates, login codes) and replies inside the 24-hour window (teammates, the AI agent, chatbots and rules answering the customer) still go to a contact who opted out. The STOP words are stop, stop all, unsubscribe, opt out, cancel, end and quit, whole message only, plus the words each workspace adds in Inbox settings (`stopWords` in the `inbox:settings:<tenantId>` row); a tap on a marketing template's "Stop promotions" button counts too. A Shopify marketing consent never sets the WhatsApp opt-in (owner default 2). The gate is central: `sendTemplateMessage` in `src/lib/inbox/service.ts` checks the contact and the template inside the function for every caller (HTTP 422, nothing queued), and the callers below also check earlier to give a better answer. The gate fails closed: a template the workspace has no row for (not synced, or synced only under another WhatsApp account) is treated as marketing, so it needs the opt-in too (the same name and language under another account of the workspace uses that row's category). STOP is checked again when the queued message is sent (`processSendJob` fails a marketing template, by the category stamped when it was queued, for a contact who opted out meanwhile with `opted_out`). Free-form messages (text, media, interactive) are different: they are allowed only inside the 24-hour window.
 
 | Send path | Where it is gated | Behaviour for a non-opted-in contact | Tests |
 |---|---|---|---|
@@ -307,6 +328,8 @@ In the "real gate" tests the caller's own pre-check is made to pass (a stale sna
 ## 14. Meta App Review readiness for the WhatsApp permissions
 
 The package for `whatsapp_business_messaging` and `whatsapp_business_management` (reviewer login steps, screencast script, test number instructions, pre-recording checklist) is `docs/app-review/whatsapp-production-readiness.md`; the per-permission texts are `docs/app-review/whatsapp_business_messaging.md` and `whatsapp_business_management.md`.
+
+State (checked 2026-10-30): nothing is in review. The App Review submission is an unsubmitted draft (submission id 1799953447868194) with 22 items, and Submit stays disabled until every item has its description, screencast, API test calls and agreement. Until advanced access is granted, a Facebook account without a role on the app cannot connect a number (Embedded Signup answers "Feature unavailable"), so add people who must connect before then as app testers. Per-item state and the next steps: `docs/app-review/status.md`.
 
 ## 15. Spend controls and Eddy
 
@@ -331,7 +354,7 @@ Eddy (Eddy spec 5.1, 5.10, 7.10, 12.1a).
 
 | Variable | Default | Values | What it does | Startup check |
 |---|---|---|---|---|
-| `ANTHROPIC_API_KEY` | unset | the key | Existing. Without it every AI feature, Eddy included, is off. | listed under OFF |
+| `ANTHROPIC_API_KEY` | unset | the key | Existing. Without it every AI feature, Eddy included, is off. | listed under OFF; warning in production when set without `EDDY_ANTHROPIC_KEY_DEDICATED=true` (with Eddy off too: the AI reply bot, inbox suggestions and creative copy spend on it) |
 | `EDDY_ENABLED` | `false` | `false`, `true` | The platform switch. Each workspace owner still turns Eddy on in Settings (off by default, Eddy decision 6). | error on a typo; warning when `true` without `ANTHROPIC_API_KEY`; warning in production when `true` without `EDDY_ANTHROPIC_KEY_DEDICATED=true` |
 | `EDDY_ANTHROPIC_KEY_DEDICATED` | `false` | `false`, `true` | The operator's statement that wa uses its own Anthropic key with a monthly spend limit set in the Anthropic console (spend decision 10, Eddy decision 14). Recommended to the owner, not a blocker: until then the gateway hard stop, the new-workspace AI limits and Eddy being off by default protect spend. | error on a typo |
 | `EDDY_PHASE` | `1` | `1`, `2` | `2` allows v2 spending actions, only after the Phase 0 gates. | error on any other value |
@@ -349,7 +372,7 @@ Eddy (Eddy spec 5.1, 5.10, 7.10, 12.1a).
 | `EDDY_INJECTION_SCREEN` | `off` | `off`, `on` | The optional Haiku injection screen; each screen call goes through the gateway and counts in the turn. | error |
 | `EDDY_FAKE_MODEL` | unset | `scripted` | The scripted model for e2e and staging. | error in production |
 
-`.env.example` documents the development values; its owner keeps it in step with these tables.
+`.env.example` lists every variable in these tables (and `CSP_MODE`, `ENV_STRICT`, `LOG_LEVEL`, `RATELIMIT_BACKEND`) with its safe default or an empty line, and no longer lists `MAX_DAILY_BUDGET_MINOR`; `tests/ops-observability.test.ts` fails when a variable the env rules check is missing from it, or when it does not pass `checkEnv` apart from the secrets it leaves empty.
 
 ### 15.2 The spend tripwire (`SPEND_TRIPWIRE`, spend spec 4.7)
 
@@ -366,7 +389,7 @@ Every Graph request passes `tripwire()` in `run()` of `src/lib/graph/index.ts` b
 - Switch to `enforce` only after 7 days in a row with zero `spend.tripwire.bypass` rows, and record the date in MIGRATIONS-APPLIED. In `enforce` an unpermitted raise fails with HTTP 500, code `spend_bypass` ("This change was stopped by a spending safety check, and nothing was sent to Meta.") and nothing reaches Meta.
 - Way back: `SPEND_TRIPWIRE=report` and a restart.
 
-The static twin is `tests/spend-bypass.test.ts` (spend spec 4.12): it runs in `npm test` and before every build, and each allowlist entry carries a reason. Rule B2 still allows the three old Anthropic callers until WP-13 moves them behind the gateway.
+The static twin is `tests/spend-bypass.test.ts` (spend spec 4.12): it runs in `npm test`, in CI before `next build` (`.github/workflows/wa-ci.yml` at the repository root), and in the deploy runbook before the release build (`deploy/README-deploy.md` A step 1); `npm run build` on its own does not run it. Each allowlist entry carries a reason. Rule B2 still allows the three old Anthropic callers until WP-13 moves them behind the gateway.
 
 ### 15.3 Eddy runbook (Eddy spec 7.10)
 

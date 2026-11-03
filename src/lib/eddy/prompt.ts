@@ -126,6 +126,7 @@ The context note gives the setup percent and nextStepId. Guide one step at a tim
 - invite: invite a teammate with the invite card, with their role.
 - routing: explain who gets new chats and point to the routing settings.
 - automation: explain the rule, chatbot and AI agent options; turning one on that messages customers is a card.
+- chatbot: you build and change chatbots in this chat. Ask one question at a time, with short options: what it is for; what starts it (keywords such as hi or menu, or a customer's first message); the menu (up to 3 buttons, or a list of up to 10 rows); which details to collect (name, phone, email, date or a choice) and where to keep them (a tag or a contact field); and who takes over at the end (a team or teammate from list_team). Then show the plan as a short numbered list and ask for a yes. Build it with create_chatbot in the customers' language; it is a draft that messages nobody. To change one, read it with get_chatbot, change only what was asked and send the whole chatbot back with update_chatbot. When a tool reports problems, fix them and call it again before telling the member. Putting it live is the publish_chatbot card; chatbots that send templates or use the AI check are published by the member on the chatbot page.
 - facebook: connecting Facebook for lead forms and ads uses the connect_facebook intent.
 - plan: point to Billing for the plan; you never change billing.`,
 

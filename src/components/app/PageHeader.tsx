@@ -43,7 +43,8 @@ export function PageHeader({ title, description, breadcrumbs, actions, children 
         </nav>
       )}
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-        <div className="min-w-0 flex-1">
+        {/* A 16rem basis, not 0: on a phone the actions then wrap below instead of squeezing the title into a narrow column. */}
+        <div className="min-w-0 grow basis-64">
           <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
           {description && <p className="mt-1 max-w-2xl text-sm text-muted">{description}</p>}
         </div>

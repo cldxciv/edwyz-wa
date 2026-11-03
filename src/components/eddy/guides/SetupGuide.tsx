@@ -172,7 +172,8 @@ export function SetupGuideView(p: SetupGuideViewProps) {
   // Below the greeting the guide is extra: it appears once the setup is known to be unfinished, never as a spinner or an error.
   if (p.hideWhenComplete && (!model || model.complete || model.cards.length === 0)) return null;
   const [current, ...later] = model?.cards ?? [];
-  const progress: ProgressStep[] = data ? data.steps.filter((s) => !s.dismissed).map((s) => ({ id: s.id, label: stepTitle(lang, s.id), state: s.state === "done" ? "done" : s.id === data.summary.nextStepId ? "current" : "todo" })) : [];
+  // The steps asked of the owner, as the setup page counts them ("3 of 4 done"); optional ones are only in the cards below.
+  const progress: ProgressStep[] = data ? data.steps.filter((s) => !s.dismissed && s.state !== "optional").map((s) => ({ id: s.id, label: stepTitle(lang, s.id), state: s.state === "done" ? "done" : s.id === data.summary.nextStepId ? "current" : "todo" })) : [];
   let body: ReactNode;
   if (p.loading && !data) body = <Spinner label={tp(lang, "panel.setup.loading")} />;
   else if (p.error && !data) {
@@ -210,7 +211,7 @@ export function SetupGuideView(p: SetupGuideViewProps) {
         <h3 id={headingId} className="text-sm font-semibold">
           {tp(lang, "panel.setup.title")}
         </h3>
-        {data && <span className="text-xs text-muted">{tp(lang, "panel.setup.progress", { done: data.summary.done, total: data.summary.total })}</span>}
+        {data && <span className="text-xs text-muted">{tp(lang, "panel.setup.progress", { done: data.summary.done, total: data.summary.asked ?? data.summary.total })}</span>}
       </div>
       {body}
     </section>

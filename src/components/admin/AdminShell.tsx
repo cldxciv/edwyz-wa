@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { SessionKeepAlive } from "@/components/app/SessionKeepAlive";
 import { buttonSizes, buttonVariants, cn } from "@/components/ui";
 
 const NAV = [
@@ -17,6 +18,8 @@ const NAV = [
 export function AdminShell({ email, current, children }: { email: string; current: string; children: ReactNode }) {
   return (
     <>
+      {/* Renews the 15-minute sign-in while an admin page is open, as the app does; without it admin pages answer 404 after 15 minutes. */}
+      <SessionKeepAlive />
       <a
         href="#admin-main"
         data-shell-skip

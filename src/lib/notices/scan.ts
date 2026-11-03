@@ -3,8 +3,15 @@
  *
  * - Workspaces: only those with Eddy switched on or with proactive notices on (EddyWorkspaceSetting.enabled or
  *   .proactiveNotices; a workspace with no setting row has the defaults, and proactive notices default to on). Deleted
- *   workspaces are skipped. At most MAX_TENANTS_PER_RUN workspaces are scanned per run; the next run carries on from a
- *   rotation cursor, so the cost per run stays flat however many workspaces there are (12.2 risk 12).
+ *   workspaces are skipped. At most MAX_TENANTS_PER_RUN workspaces are scanned per run, SCAN_CONCURRENCY at a time, and a
+ *   run starts no new workspace after SCAN_BUDGET_MS; the next run carries on from a rotation cursor (the last workspace
+ *   actually scanned), so the cost per run stays flat however many workspaces there are (12.2 risk 12) and a run never
+ *   holds the worker pass, or the once-a-minute tick, for long.
+ * - Due work only: before a batch is scanned, each producer's `due` pre-check finds, with a few indexed queries for the
+ *   whole batch, the workspaces where it may have something to publish, and every workspace where one of its kinds is still
+ *   open is added (it may resolve). A producer runs only there, and a workspace where nothing is due costs no query at all,
+ *   so an idle workspace is nearly free however many there are; setup spaces out its own checks (producers/setup.ts). A
+ *   pre-check that fails runs its producer everywhere.
  * - Producers are deterministic, read-only on everything but the notice store, and never call AI. Each keeps its own cursor
  *   in NoticeScanState (tenantId, scanner = the producer's name). They never edit webhooks/processor.ts and never write a
  *   Phase 0 table (they read SpendBreaker, SpendApproval, SpendControl and the AI counters).
@@ -30,6 +37,10 @@ import { producer as setup } from "./producers/setup";
 export const NOTICE_SCAN_EVERY_MS = 120_000;
 /** Workspaces scanned per run; the rotation cursor carries on next run. */
 export const MAX_TENANTS_PER_RUN = 100;
+/** Workspaces scanned side by side (each one's producers still run in turn). Small: the pass shares the app's database pool. */
+export const SCAN_CONCURRENCY = 4;
+/** A run starts no new workspace after this long; the rotation cursor carries on from the last one scanned. */
+export const SCAN_BUDGET_MS = 10_000;
 /** The rotation cursor's NoticeScanState row (not a workspace). */
 export const ROTATION_TENANT = "*";
 export const ROTATION_SCANNER = "rotation";
@@ -59,6 +70,14 @@ export type NoticeProducer = {
   skipDemo?: boolean;
   /** Skipped when the workspace has no WhatsApp number. */
   numberBased?: boolean;
+  /**
+   * The workspaces among `tenantIds` where this producer may have something new to publish (a superset is fine, a miss is
+   * not), from a few queries for the whole batch. The scan adds the workspaces with an open notice of its kinds (so they
+   * can resolve), unless `dueIsComplete`. Without it, the producer runs in every workspace.
+   */
+  due?(tenantIds: readonly string[], now: Date): Promise<Iterable<string>>;
+  /** `due` alone decides, open notices or not (setup re-checks a settled checklist on its own schedule). */
+  dueIsComplete?: boolean;
   run(ctx: ProducerContext): Promise<ProducerResult>;
 };
 
@@ -101,11 +120,47 @@ export async function eligibleTenants(after: string, limit: number): Promise<str
   return out;
 }
 
+/** Per producer, the workspaces of a batch where it runs (null: all of them): its `due` pre-check plus its open kinds. */
+export type DueMap = ReadonlyMap<string, ReadonlySet<string> | null>;
+
+/** The due work of a batch (see the header): one query for the open notices, then each producer's pre-check in turn. Never throws. */
+export async function dueWorkspaces(tenantIds: readonly string[], producers: readonly NoticeProducer[], now: Date): Promise<DueMap> {
+  const out = new Map<string, ReadonlySet<string> | null>(producers.map((p) => [p.name, null]));
+  if (tenantIds.length === 0 || !producers.some((p) => p.due)) return out;
+  let open: { tenantId: string; kind: string }[];
+  try {
+    const rows = await prisma.notice.groupBy({ by: ["tenantId", "kind"], where: { tenantId: { in: [...tenantIds] }, resolvedAt: null } });
+    open = rows;
+  } catch (error) {
+    console.error(`[notices] open notices could not be read: ${describeError(error)}`);
+    return out;
+  }
+  for (const p of producers) {
+    if (!p.due) continue;
+    try {
+      const due = new Set(await p.due(tenantIds, now));
+      if (!p.dueIsComplete) for (const n of open) if ((p.kinds as readonly string[]).includes(n.kind)) due.add(n.tenantId);
+      out.set(p.name, due);
+    } catch (error) {
+      console.error(`[notices] pre-check ${p.name} failed, so it runs everywhere: ${describeError(error)}`);
+    }
+  }
+  return out;
+}
+
+/** Whether any producer has work in this workspace. */
+export const anyDue = (due: DueMap, tenantId: string): boolean => [...due.values()].some((set) => set === null || set.has(tenantId));
+
 // ===== One workspace =====
 
 export type TenantScanResult = { tenantId: string; ran: string[]; skipped: string[]; failed: string[]; published: number; resolved: number };
 
-export type ScanDeps = { producers?: readonly NoticeProducer[]; isDemo?: (tenantId: string) => Promise<boolean> };
+export type ScanDeps = {
+  producers?: readonly NoticeProducer[];
+  isDemo?: (tenantId: string) => Promise<boolean>;
+  /** From dueWorkspaces: a producer runs only in the workspaces listed for it. Without it, every producer runs. */
+  due?: DueMap;
+};
 
 /** Runs every producer for one workspace and saves their cursors. Never throws. */
 export async function scanTenant(tenantId: string, now: Date = new Date(), deps: ScanDeps = {}): Promise<TenantScanResult> {
@@ -125,7 +180,8 @@ export async function scanTenant(tenantId: string, now: Date = new Date(), deps:
     return result;
   }
   for (const p of deps.producers ?? PRODUCERS) {
-    if ((p.skipDemo && demo) || (p.numberBased && !hasNumber)) {
+    const due = deps.due?.get(p.name);
+    if ((p.skipDemo && demo) || (p.numberBased && !hasNumber) || (due && !due.has(tenantId))) {
       result.skipped.push(p.name);
       continue;
     }
@@ -155,10 +211,13 @@ export async function scanTenant(tenantId: string, now: Date = new Date(), deps:
 
 export type ScanRunResult = { tenants: number; published: number; resolved: number; failed: number };
 
-/** The `notices.scan` task: the next workspaces in rotation, each scanned in turn. Never throws. */
-export async function runNoticeScan(opts: { now?: Date; maxTenants?: number } & ScanDeps = {}): Promise<ScanRunResult> {
+/** The `notices.scan` task: the next workspaces in rotation, a few at a time, until the batch or the time budget runs out. Never throws. */
+export async function runNoticeScan(opts: { now?: Date; maxTenants?: number; concurrency?: number; budgetMs?: number } & ScanDeps = {}): Promise<ScanRunResult> {
   const now = opts.now ?? new Date();
   const max = opts.maxTenants ?? MAX_TENANTS_PER_RUN;
+  const concurrency = Math.max(1, opts.concurrency ?? SCAN_CONCURRENCY);
+  const budget = opts.budgetMs ?? SCAN_BUDGET_MS;
+  const started = Date.now();
   const out: ScanRunResult = { tenants: 0, published: 0, resolved: 0, failed: 0 };
   try {
     const rotation = (await readCursors(ROTATION_TENANT)).get(ROTATION_SCANNER);
@@ -172,12 +231,22 @@ export async function runNoticeScan(opts: { now?: Date; maxTenants?: number } & 
       tenants = [...first, ...rest];
       nextAfter = rest.length ? rest[rest.length - 1] : "";
     }
-    for (const tenantId of tenants) {
-      const r = await scanTenant(tenantId, now, opts);
-      out.tenants++;
-      out.published += r.published;
-      out.resolved += r.resolved;
-      out.failed += r.failed.length;
+    // Only the workspaces with due work are scanned; the rest of the batch costs nothing this run.
+    const due = await dueWorkspaces(tenants, opts.producers ?? PRODUCERS, now);
+    tenants = tenants.filter((tenantId) => anyDue(due, tenantId));
+    const deps: ScanDeps = { ...opts, due };
+    for (let i = 0; i < tenants.length; i += concurrency) {
+      if (i > 0 && Date.now() - started > budget) {
+        // Out of time: the next run starts after the last workspace scanned, so none is skipped.
+        nextAfter = tenants[i - 1];
+        break;
+      }
+      for (const r of await Promise.all(tenants.slice(i, i + concurrency).map((tenantId) => scanTenant(tenantId, now, deps)))) {
+        out.tenants++;
+        out.published += r.published;
+        out.resolved += r.resolved;
+        out.failed += r.failed.length;
+      }
     }
     await writeCursor(ROTATION_TENANT, ROTATION_SCANNER, { after: nextAfter }, now);
   } catch (error) {

@@ -26,7 +26,8 @@ export type GuideKind = "connect" | "template" | "broadcast" | "facebook" | "lin
 /** GET /api/setup's answer, as the guide reads it. */
 export type SetupData = {
   steps: SetupStep[];
-  summary: { done: number; total: number; nextStepId: StepId | null; complete: boolean };
+  /** asked: the steps asked of the owner (done plus todo), the count the setup page shows. */
+  summary: { done: number; total: number; asked?: number; nextStepId: StepId | null; complete: boolean };
   canDismiss: boolean;
 };
 

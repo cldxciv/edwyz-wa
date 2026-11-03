@@ -306,6 +306,20 @@ describe("page context: route map, inbox ?c=, id check, latest selection until t
     expect(routePage(null)).toEqual({ id: "app" });
   });
 
+  it("(E-R4, IG-PAGE-ADS-SPEC 6.3) maps Boost a post, New ad, Audiences and the form builder before the campaign pattern", () => {
+    expect(routePage("/app/ads/boost")).toEqual({ id: "ads.boost" });
+    expect(routePage("/app/ads/create")).toEqual({ id: "ads.create" });
+    expect(pageContextFromLocation("/app/ads/create", "?goal=lead_form")).toEqual({ id: "ads.create" });
+    expect(routePage("/app/ads/audiences")).toEqual({ id: "ads.audiences" });
+    expect(routePage("/app/leads/forms/new")).toEqual({ id: "leads.forms_new" });
+    expect(routePage("/app/leads/forms")).toEqual({ id: "leads.forms" });
+    // /app/ads/boost is a page, never a campaign called "boost"; a real campaign id still reads as the campaign page.
+    expect(routePage("/app/ads/boost")).not.toEqual({ id: "ads.detail" });
+    expect(routePage("/app/ads/cmp_42")).toEqual({ id: "ads.detail" });
+    expect(routePage("/app/ads/new")).toEqual({ id: "ads.new" });
+    expect(routePage("/app/ads/boost/extra")).toEqual({ id: "app" });
+  });
+
   it("checks every id against /^[A-Za-z0-9_-]{1,64}$/ and drops anything else", () => {
     expect(safeId("cv_1-A")).toBe("cv_1-A");
     for (const bad of ["", "a".repeat(65), "a.b", "a b", "<x>", "../x", "%2e", 5, null]) expect(safeId(bad), String(bad)).toBeUndefined();
@@ -1195,6 +1209,8 @@ describe("shell integration", () => {
     expect(markup).toContain('width="20"');
     expect(markup).toContain('aria-expanded="false"');
     expect(launcherLabel("en", 2, false)).toBe("Ask Eddy, 2 things need you");
+    expect(launcherLabel("en", 1, false)).toBe("Ask Eddy, 1 thing needs you");
+    expect(launcherLabel("hinglish", 1, false)).toBe("Eddy se poochhiye, 1 cheez aapka wait kar rahi hai");
     expect(launcherLabel("hi", 0, false)).toBe("Eddy से पूछें");
     expect(launcherLabel("en", 0, true)).toBe("Ask Eddy, still working on your last message");
     expect(launcherAvatarState({ working: false, needsYou: 2, ready: true })).toBe("needs_action");

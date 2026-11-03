@@ -1,6 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import { cookies, headers } from "next/headers";
+import Link from "next/link";
 import { ApprovalReview } from "@/components/spend/ApprovalReview";
+import { buttonSizes, buttonVariants } from "@/components/ui/Button";
+import { cn } from "@/components/ui/cn";
 import { getActor } from "@/lib/auth";
 import { createLimiter } from "@/lib/ratelimit";
 import { loadApprovalByToken } from "@/lib/spend/summary";
@@ -55,11 +58,21 @@ function Shell({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Every request also waits on this page. Signed out, the app sends the person through sign-in and back here. */
+function SpendingLimitsLink() {
+  return (
+    <Link href="/app/settings/spending" className={cn("mt-5 inline-flex items-center justify-center rounded-lg font-medium", buttonVariants.secondary, buttonSizes.md)}>
+      Open Spending limits
+    </Link>
+  );
+}
+
 function InvalidLink() {
   return (
     <Shell>
       <h1 className="text-xl font-semibold">This link doesn&apos;t work</h1>
-      <p className="mt-2 text-sm text-muted">It may be incomplete or mistyped. Requests waiting for you are also under Settings &gt; Spending limits in Edwyz.</p>
+      <p className="mt-2 text-sm text-muted">It may be incomplete or mistyped. Requests waiting for you are also under Settings &gt; Spending limits in Edwyz WA.</p>
+      <SpendingLimitsLink />
     </Shell>
   );
 }
@@ -69,7 +82,8 @@ function TooManyTries() {
   return (
     <Shell>
       <h1 className="text-xl font-semibold">Too many tries from this network</h1>
-      <p className="mt-2 text-sm text-muted">Your link is fine. Wait a few minutes and open it again, or open Settings &gt; Spending limits in Edwyz, where the request is waiting too.</p>
+      <p className="mt-2 text-sm text-muted">Your link is fine. Wait a few minutes and open it again, or open Settings &gt; Spending limits in Edwyz WA, where the request is waiting too.</p>
+      <SpendingLimitsLink />
     </Shell>
   );
 }

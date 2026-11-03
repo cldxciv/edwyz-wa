@@ -21,24 +21,38 @@ export function variableCount(text: string): number {
 
 export type Sendable = { ok: true; variables: number } | { ok: false; reason: string };
 
-/** The inline picker fills body variables only. Media headers and button variables need the Templates page. */
-export function inlineSendable(components: unknown): Sendable {
+/** What a sender that fills body values only (the inbox picker, automation rules) cannot fill in, or null when nothing. */
+export type SendProblem = "media_header" | "header_variable" | "button_variable" | "too_many_variables";
+
+export function templateSendProblem(components: unknown): SendProblem | null {
   const list = asComponents(components);
   for (const c of list) {
     const type = typeOf(c);
     if (type === "HEADER") {
       const format = typeof c.format === "string" ? c.format.toUpperCase() : "TEXT";
-      if (format !== "TEXT") return { ok: false, reason: "Has a media header. Send it from Broadcasts." };
-      if (/\{\{/.test(textOf(c))) return { ok: false, reason: "Has a variable in the header. Send it from Broadcasts." };
+      if (format !== "TEXT") return "media_header";
+      if (/\{\{/.test(textOf(c))) return "header_variable";
     }
     if (type === "BUTTONS" && Array.isArray(c.buttons)) {
       const needsValue = c.buttons.some((b) => b && typeof b === "object" && /\{\{/.test(String((b as { url?: unknown }).url ?? "")));
-      if (needsValue) return { ok: false, reason: "Has a button with a variable. Send it from Broadcasts." };
+      if (needsValue) return "button_variable";
     }
   }
-  const count = variableCount(bodyText(list));
-  if (count > MAX_VARIABLES) return { ok: false, reason: "Has too many variables." };
-  return { ok: true, variables: count };
+  return variableCount(bodyText(list)) > MAX_VARIABLES ? "too_many_variables" : null;
+}
+
+const INLINE_REASON: Record<SendProblem, string> = {
+  media_header: "Has a media header. Send it from Broadcasts.",
+  header_variable: "Has a variable in the header. Send it from Broadcasts.",
+  button_variable: "Has a button with a variable. Send it from Broadcasts.",
+  too_many_variables: "Has too many variables.",
+};
+
+/** The inline picker fills body variables only. Media headers and button variables need the Templates page. */
+export function inlineSendable(components: unknown): Sendable {
+  const problem = templateSendProblem(components);
+  if (problem) return { ok: false, reason: INLINE_REASON[problem] };
+  return { ok: true, variables: variableCount(bodyText(components)) };
 }
 
 /** Replaces {{n}} with the given values; unfilled ones stay visible as {{n}}. */

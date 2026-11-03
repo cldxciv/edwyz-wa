@@ -6,6 +6,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 const db = vi.hoisted(() => {
   const model = () => ({ findUnique: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn(), delete: vi.fn() });
   const prisma: Record<string, unknown> = Object.fromEntries(["contact", "conversation", "message", "note", "automationRun", "ruleExecution", "broadcastRecipient"].map((n) => [n, model()]));
+  // promote/forget.ts forgetContact (PRM-11) first looks for the workspace's customer-list audiences on Meta: none here.
+  prisma.adAudience = { findMany: vi.fn(async () => []) };
   prisma.$transaction = (fn: (tx: unknown) => unknown) => fn(prisma);
   return prisma as Record<string, Record<string, ReturnType<typeof vi.fn>>>;
 });

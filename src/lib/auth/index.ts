@@ -21,8 +21,13 @@ const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 // copy (an agent and an admin are told different things), a member's own Eddy preferences change nothing for anyone else,
 // and deleting one's own Eddy history must work in every workspace state. Every write Eddy would make still goes through
 // /api/actions/ and its per-action paywall. PUT /api/eddy/settings (switching Eddy on starts AI spend) keeps the paywall.
-const PAYWALL_EXEMPT_PREFIXES = ["/api/auth/", "/api/billing/", "/api/actions/", "/api/spend/", "/api/notices/"];
-const PAYWALL_EXEMPT_PATHS = new Set(["/api/notices", "/api/eddy/turn", "/api/eddy/prefs", "/api/eddy/conversations"]);
+// /api/account/: a member's own password and name. They belong to the person, not the workspace, so an unpaid workspace must not
+// stop anyone changing their password.
+// /api/projects (exact path, POST only writes there): starting a new project creates a different workspace, owned by the
+// person, and writes nothing in the current one. Its own rules (src/lib/projects/rules.ts: no suspended project of theirs, the
+// unpaid cap) apply instead, the same ones the All projects page reports.
+const PAYWALL_EXEMPT_PREFIXES = ["/api/auth/", "/api/billing/", "/api/actions/", "/api/spend/", "/api/notices/", "/api/account/"];
+const PAYWALL_EXEMPT_PATHS = new Set(["/api/notices", "/api/eddy/turn", "/api/eddy/prefs", "/api/eddy/conversations", "/api/projects"]);
 const PAYWALL_EXEMPT_PATTERNS = [/^\/api\/eddy\/conversations\/[A-Za-z0-9_-]{1,64}$/];
 
 /** Whether a write to this path skips the workspace-state check in getActor (see the lists above). */
@@ -52,12 +57,21 @@ async function enforceWorkspaceState(actor: Actor, request: Request): Promise<vo
   await assertTenantCanWrite(actor.tenantId);
 }
 
+export type GetActorOptions = {
+  /**
+   * Skip the locked or suspended workspace check for writes. Only for the platform admin console (requireAdminIdentity), whose
+   * writes act on other workspaces and are guarded by their own admin rule: the admin's own workspace running out of trial must
+   * not lock them out of the console, including the TOTP step-up.
+   */
+  skipWorkspaceState?: boolean;
+};
+
 /**
  * The role in the token is never trusted: membership, the user and the workspace are re-read on every call.
  * API keys (wak_) are not accepted here: they work only on routes that authenticate keys themselves (v1, compat, MCP),
  * where scope and rate limit are enforced.
  */
-export async function getActor(request: Request): Promise<Actor> {
+export async function getActor(request: Request, options: GetActorOptions = {}): Promise<Actor> {
   const token = extractToken(request);
   const claims = token ? verifyAccessToken(token) : null;
   if (!claims) throw new HttpError(401, "Not signed in.");
@@ -93,6 +107,6 @@ export async function getActor(request: Request): Promise<Actor> {
 
   const actor: Actor = { userId: membership.userId, tenantId: membership.tenantId, role: membership.role };
   if (!READ_METHODS.has(request.method)) assertEmailVerifiedForWrite(membership.user?.emailVerifiedAt, pathOf(request));
-  await enforceWorkspaceState(actor, request);
+  if (!options.skipWorkspaceState) await enforceWorkspaceState(actor, request);
   return actor;
 }

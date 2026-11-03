@@ -1,6 +1,7 @@
 /**
- * Worst-case maths of the ads pot (docs/SPEND-CONTROLS-SPEC.md 4.5). Pure: no database, no network, no clock (callers pass
- * `now`). Integer bigint arithmetic throughout, rounding UP (3.1), so nothing overflows and nothing is under-counted.
+ * Worst-case maths of the ads pot (docs/SPEND-CONTROLS-SPEC.md 4.5). Pure: no database, no network, and no clock except
+ * runWorstCase's default `now` (callers pass `now`). Integer bigint arithmetic throughout, rounding UP (3.1), so nothing
+ * overflows and nothing is under-counted.
  *
  * Meta may spend up to 75% over an ad set's daily budget on one day (its rule uses the day's HIGHEST budget, so a mid-day cut
  * does not lower today's worst case) and at most 7x the week's highest daily budget per Sunday-to-Saturday week, both in the
@@ -18,10 +19,14 @@
  * - (critic) Ad set budget sharing found on: 2.1x a day (ceil210(x) = (21x + 9) / 10) and 8.4x a week.
  * - External risk (only when Meta's limit is managed, decision 2.3.4): E = the highest daily outside spend of the last 7 days;
  *   day risk max(0, E - outside spend today); the month walk runs with D = E. Always shown as an estimate.
+ * - runWorstCase (docs/IG-PAGE-ADS-SPEC.md 6.2, request P0-5): the cost card's figures for one ad set's run, from the same walk.
+ *   Its part for this month IS remainingMonth and its today IS dayRisk, so the card never shows less than reserveAds sets aside.
+ *   Until P0-10 lands it walks from today whatever the start date says (D32, 6.1 rule 16), exactly like remainingMonth.
  *
  * The shapes (CommitmentMath, CommitmentSpend) match src/lib/spend/commitments.ts, so the book can use this module directly.
+ * The only clock read is runWorstCase's default `now`, for a caller that passes none; everything else takes `now`.
  */
-import { addDays, compareDays, dayKey, monthEndDay, resolveTimeZone, weekStartOfDay } from "./periods";
+import { addDays, compareDays, dayKey, monthEndDay, nextMonthKey, resolveTimeZone, startOfLocalDay, weekStartOfDay } from "./periods";
 
 /** A campaign whose end passed this long ago can no longer spend (clock skew allowance). */
 export const ENDED_GRACE_MS = 15 * 60_000;
@@ -120,26 +125,22 @@ export function endDayOf(c: Pick<CommitmentMath, "endsAt">, timeZone: string): s
   return c.endsAt ? dayKey(c.endsAt, resolveTimeZone(timeZone)) : null;
 }
 
+/** One day of the walk: the account day and what it can still take. */
+type WalkDay = { day: string; take: bigint };
+
 /**
- * The worst case from now to the end date or the end of the account month, whichever is first (4.5). See the module header
- * for the walk. `timeZone` is the ad account's zone; an unknown zone falls back to Asia/Kolkata.
+ * The day walk (4.5) of a daily-budget commitment, from `today` to `horizon`, both included. Each day takes min(its day cap -
+ * spent today (today only), what is left of its Sunday week's room). The current week's room is the week cap of max(D, weekPeak)
+ * minus the spend already made that week (days before today, also in the previous month, plus today's); a later week starts
+ * at the week cap of D, and a week carries on across a month boundary. No lifetime cap: callers apply it.
  */
-export function remainingMonth(c: CommitmentMath, now: Date, timeZone: string, spend: CommitmentSpend): bigint {
-  if (hasEnded(c, now)) return 0n;
-  const left = lifetimeLeft(c, spend);
-  if (isLifetimeOnly(c)) return left ?? 0n;
+function walkDays(c: CommitmentMath, today: string, horizon: string, spend: CommitmentSpend): WalkDay[] {
   const d = max0(c.dailyBudgetMinor ?? 0n);
   const peakToday = maxB(c.peakToday, d);
   const weekPeak = maxB(c.weekPeak, peakToday);
-  const tz = resolveTimeZone(timeZone);
-  const today = dayKey(now, tz);
-  const monthEnd = monthEndDay(today.slice(0, 7));
-  const endDay = endDayOf(c, tz) ?? monthEnd;
-  const horizon = compareDays(endDay, monthEnd) < 0 ? endDay : monthEnd;
-  if (compareDays(horizon, today) < 0) return 0n;
   const spentToday = max0(spend.today ?? 0n);
   const thisWeek = weekStartOfDay(today);
-  let sum = 0n;
+  const days: WalkDay[] = [];
   let week = "";
   let room = 0n;
   for (let day = today; compareDays(day, horizon) <= 0; day = addDays(day, 1)) {
@@ -156,8 +157,26 @@ export function remainingMonth(c: CommitmentMath, now: Date, timeZone: string, s
     const cap = day === today ? max0(dayCap(peakToday, c.sharing) - spentToday) : dayCap(d, c.sharing);
     const take = max0(minB(cap, room));
     room -= take;
-    sum += take;
+    days.push({ day, take });
   }
+  return days;
+}
+
+/**
+ * The worst case from now to the end date or the end of the account month, whichever is first (4.5). See the module header
+ * for the walk. `timeZone` is the ad account's zone; an unknown zone falls back to Asia/Kolkata.
+ */
+export function remainingMonth(c: CommitmentMath, now: Date, timeZone: string, spend: CommitmentSpend): bigint {
+  if (hasEnded(c, now)) return 0n;
+  const left = lifetimeLeft(c, spend);
+  if (isLifetimeOnly(c)) return left ?? 0n;
+  const tz = resolveTimeZone(timeZone);
+  const today = dayKey(now, tz);
+  const monthEnd = monthEndDay(today.slice(0, 7));
+  const endDay = endDayOf(c, tz) ?? monthEnd;
+  const horizon = compareDays(endDay, monthEnd) < 0 ? endDay : monthEnd;
+  if (compareDays(horizon, today) < 0) return 0n;
+  const sum = sumMinor(walkDays(c, today, horizon, spend).map((w) => w.take));
   return left === null ? sum : minB(sum, left);
 }
 
@@ -209,4 +228,85 @@ export function sumMinor(values: Iterable<bigint>): bigint {
   let total = 0n;
   for (const v of values) total += v;
   return total;
+}
+
+// =====================================================================================================================
+// The cost card's run (docs/IG-PAGE-ADS-SPEC.md 6.2, Phase 0 request P0-5)
+// =====================================================================================================================
+
+/** The longest run runWorstCase walks, in days from today to the end day (a promotion runs at most 90). */
+export const RUN_MAX_DAYS = 400;
+
+/** One ad set's run as the cost card sees it. Versions (3.8) are one input each, with their share as Phase 0 sees it. */
+export type RunWorstCaseInput = {
+  /** D, the ad set's daily budget in the ad account's minor units. */
+  dailyMinor: bigint;
+  /** When the ads start. Until P0-10 the walk ignores it and starts today (D32); only aboutMinor uses it. */
+  startsAt: Date;
+  /** When the ads end. Its account day is the last day counted. */
+  endsAt: Date;
+  /** The ad account's IANA zone; an unknown zone falls back to Asia/Kolkata. */
+  tz: string;
+  /** The highest daily budget this account day, when the ad set already ran today (at least dailyMinor). */
+  peakTodayMinor?: bigint;
+  /** The highest daily budget this Sunday-to-Saturday week (at least peakTodayMinor). */
+  weekPeakMinor?: bigint;
+  /** Spend per account day ("YYYY-MM-DD"), as CommitmentSpend.byDay. Today's key is today's spend. */
+  spentByDay?: ReadonlyMap<string, bigint>;
+  /** The instant to compute at. The clock when omitted. */
+  now?: Date;
+};
+
+export type RunWorstCase = {
+  /** "At most": the most the run can spend from now to its end day, in one walk whose weeks carry on across months. */
+  totalMinor: bigint;
+  /**
+   * The most Phase 0 can set aside for each account month of the run, from this one. This month's figure is remainingMonth
+   * exactly. A later month's is remainingMonth on its first day with nothing more spent before then: the most its rollover
+   * reserves. The figures add up to totalMinor, except when a Sunday-to-Saturday week spans a month boundary inside the run;
+   * then each month's figure is still that month's own maximum, and the sum is more than the total.
+   */
+  byMonth: { month: string; minor: bigint }[];
+  /** What today can still add against the daily limit: dayRisk exactly. */
+  todayMinor: bigint;
+  /** "About": D x the account days from the start day (today at the earliest) to the end day, both included. */
+  aboutMinor: bigint;
+};
+
+/**
+ * The cost card's figures for one ad set's run (6.2), from the same day caps, Sunday week room and month walk as remainingMonth
+ * and dayRisk, so the card never shows less than reserveAds sets aside (6.1 rule 16). Pure apart from the default `now`.
+ * Until Phase 0 accepts P0-10 the walk starts today whatever `startsAt` says, exactly like remainingMonth (D32).
+ */
+export function runWorstCase(i: RunWorstCaseInput): RunWorstCase {
+  if (!(i.endsAt instanceof Date) || Number.isNaN(i.endsAt.getTime())) throw new RangeError("A run needs a valid end date.");
+  const now = i.now ?? new Date();
+  const tz = resolveTimeZone(i.tz);
+  const d = max0(i.dailyMinor);
+  const peakToday = maxB(max0(i.peakTodayMinor ?? d), d);
+  const weekPeak = maxB(max0(i.weekPeakMinor ?? peakToday), peakToday);
+  const c: CommitmentMath = { dailyBudgetMinor: d, lifetimeBudgetMinor: null, peakToday, weekPeak, endsAt: i.endsAt };
+  const byDay = i.spentByDay ?? new Map<string, bigint>();
+  const today = dayKey(now, tz);
+  const spend: CommitmentSpend = { byDay, lifetime: 0n, today: max0(byDay.get(today) ?? 0n) };
+  if (hasEnded(c, now)) return { totalMinor: 0n, byMonth: [], todayMinor: 0n, aboutMinor: 0n };
+
+  const endDay = dayKey(i.endsAt, tz);
+  if (compareDays(endDay, addDays(today, RUN_MAX_DAYS)) > 0) throw new RangeError(`A run can last at most ${RUN_MAX_DAYS} days.`);
+  const totalMinor = compareDays(endDay, today) < 0 ? 0n : sumMinor(walkDays(c, today, endDay, spend).map((w) => w.take));
+
+  const thisMonth = today.slice(0, 7);
+  const byMonth = [{ month: thisMonth, minor: remainingMonth(c, now, tz, spend) }];
+  for (let month = nextMonthKey(thisMonth); month <= endDay.slice(0, 7); month = nextMonthKey(month)) {
+    const first = `${month}-01`;
+    // At rollover the day's peak is D again; the week's peak carries over only while today's week is still running.
+    const atRollover: CommitmentMath = { ...c, peakToday: d, weekPeak: weekStartOfDay(first) === weekStartOfDay(today) ? weekPeak : d };
+    byMonth.push({ month, minor: remainingMonth(atRollover, startOfLocalDay(first, tz), tz, { byDay, lifetime: 0n, today: 0n }) });
+  }
+
+  const startDay = i.startsAt instanceof Date && !Number.isNaN(i.startsAt.getTime()) ? dayKey(i.startsAt, tz) : today;
+  let days = 0n;
+  for (let day = compareDays(startDay, today) > 0 ? startDay : today; compareDays(day, endDay) <= 0; day = addDays(day, 1)) days++;
+
+  return { totalMinor, byMonth, todayMinor: dayRisk(c, spend, now), aboutMinor: d * days };
 }

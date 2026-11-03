@@ -1,6 +1,7 @@
 import type { Prisma } from "@/generated/prisma/client";
 import { getRateCard, type RateCardData } from "@/lib/admin/ratecard";
 import { AUTOMATION_HOLD_TTL_MS, bulkGateStep, holdForBulk, releaseBulkHold } from "@/lib/broadcasts/cost";
+import { receivableWhere, sendKindForCategory } from "@/lib/contacts/opt-out";
 import { prisma } from "@/lib/db";
 import type { JobHandler } from "@/lib/queue";
 import { enqueue } from "@/lib/queue";
@@ -26,53 +27,88 @@ const CHUNK = 50;
 export const MAX_AUDIENCE = 5000;
 /** Contacts looked at per run, whether or not they match, so one run cannot walk an enormous workspace forever. */
 export const MAX_SCAN = 200_000;
-const RULE_CAP = 2000;
+/** Rules read per page. Every enabled rule of the wanted trigger type is read, a page at a time; there is no overall cap. */
+const RULE_PAGE = 500;
+/** Chats one "customer has not replied" rule looks at per scan (oldest first), so one busy workspace cannot hold up the minute. */
+export const MAX_CHATS_PER_RULE = 2000;
 
 type Parsed = { rule: StoredRule; trigger: Trigger };
+type ScanChat = { id: string; contactId: string; lastInboundAt: Date | null; lastMessageAt: Date };
 
+/**
+ * The enabled v2 rules of one trigger type. The type is filtered in SQL (a JSON path on trigger.type) and the rules are read in
+ * id order a page at a time, so rules of other types never use up a page and none is skipped as the platform grows.
+ */
 async function loadTimedRules(type: Trigger["type"]): Promise<Parsed[]> {
-  const rules = (await prisma.automationRule.findMany({ where: { enabled: true, version: 2 }, take: RULE_CAP })) as StoredRule[];
   const out: Parsed[] = [];
-  for (const rule of rules) {
-    const parsed = parseDefinition({ trigger: rule.trigger, filters: rule.filters, actions: rule.actions });
-    if (parsed.ok && parsed.value.trigger.type === type) out.push({ rule, trigger: parsed.value.trigger });
+  let cursor: string | undefined;
+  for (;;) {
+    const page = ((await prisma.automationRule.findMany({
+      where: { enabled: true, version: 2, trigger: { path: ["type"], equals: type } },
+      orderBy: { id: "asc" },
+      take: RULE_PAGE,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    })) ?? []) as StoredRule[];
+    for (const rule of page) {
+      const parsed = parseDefinition({ trigger: rule.trigger, filters: rule.filters, actions: rule.actions });
+      if (parsed.ok && parsed.value.trigger.type === type) out.push({ rule, trigger: parsed.value.trigger });
+    }
+    if (page.length < RULE_PAGE) return out;
+    cursor = page[page.length - 1].id;
   }
-  return out;
 }
 
-/** Runs "customer has not replied" rules for chats whose last message is ours and old enough. Returns how many chats were checked. */
+/**
+ * Runs "customer has not replied" rules for chats whose last message is ours and old enough. Only chats where we wrote last are
+ * read (lastInboundAt before lastMessageAt, or no customer message at all), page by page, up to MAX_CHATS_PER_RULE per rule.
+ * Returns how many chats were checked.
+ */
 export async function scanNoResponse(now = new Date()): Promise<number> {
   let checked = 0;
   for (const { rule, trigger } of await loadTimedRules("no_customer_response")) {
     if (trigger.type !== "no_customer_response") continue;
     const { tenantId } = rule;
     const cutoff = new Date(now.getTime() - trigger.minutes * 60_000);
-    const chats = await prisma.conversation.findMany({
-      where: {
-        tenantId,
-        status: { in: ["open", "pending"] },
-        lastMessageAt: { lte: cutoff, gte: new Date(cutoff.getTime() - NO_RESPONSE_SLACK_MS) },
-        ...(rule.phoneNumberId ? { phoneNumberId: rule.phoneNumberId } : {}),
-      },
-      orderBy: { lastMessageAt: "asc" },
-      take: CHAT_BATCH,
-      select: { id: true, contactId: true, lastInboundAt: true, lastMessageAt: true },
-    });
-    for (const chat of chats) {
-      if (chat.lastInboundAt && chat.lastInboundAt.getTime() >= chat.lastMessageAt.getTime()) continue;
-      checked += 1;
-      await fireRulesSafely(
-        {
-          type: "no_customer_response",
+    // Keyset paging on (lastMessageAt, id) as read, not a row cursor: a follow-up sent to a chat moves its lastMessageAt, which
+    // would make a cursor on that row skip the rest of the scan.
+    let after: { at: Date; id: string } | null = null;
+    for (let seen = 0; seen < MAX_CHATS_PER_RULE; ) {
+      const chats: ScanChat[] = await prisma.conversation.findMany({
+        where: {
           tenantId,
-          contactId: chat.contactId,
-          conversationId: chat.id,
-          at: now,
-          ruleId: rule.id,
-          dedupeSince: chat.lastInboundAt ?? new Date(now.getTime() - NO_REPLY_EVER_WINDOW_MS),
+          status: { in: ["open", "pending"] },
+          lastMessageAt: { lte: cutoff, gte: new Date(cutoff.getTime() - NO_RESPONSE_SLACK_MS) },
+          ...(rule.phoneNumberId ? { phoneNumberId: rule.phoneNumberId } : {}),
+          AND: [
+            { OR: [{ lastInboundAt: null }, { lastInboundAt: { lt: prisma.conversation.fields.lastMessageAt } }] },
+            ...(after ? [{ OR: [{ lastMessageAt: { gt: after.at } }, { lastMessageAt: after.at, id: { gt: after.id } }] }] : []),
+          ],
         },
-        [rule],
-      );
+        orderBy: [{ lastMessageAt: "asc" }, { id: "asc" }],
+        take: CHAT_BATCH,
+        select: { id: true, contactId: true, lastInboundAt: true, lastMessageAt: true },
+      });
+      for (const chat of chats) {
+        // Kept as a second guard: a customer message may arrive between the read and this check.
+        if (chat.lastInboundAt && chat.lastInboundAt.getTime() >= chat.lastMessageAt.getTime()) continue;
+        checked += 1;
+        await fireRulesSafely(
+          {
+            type: "no_customer_response",
+            tenantId,
+            contactId: chat.contactId,
+            conversationId: chat.id,
+            at: now,
+            ruleId: rule.id,
+            dedupeSince: chat.lastInboundAt ?? new Date(now.getTime() - NO_REPLY_EVER_WINDOW_MS),
+          },
+          [rule],
+        );
+      }
+      seen += chats.length;
+      if (chats.length < CHAT_BATCH) break;
+      const last: ScanChat = chats[chats.length - 1];
+      after = { at: last.lastMessageAt, id: last.id };
     }
   }
   return checked;
@@ -140,7 +176,7 @@ export async function scheduledRunEstimate(tenantId: string, def: RuleDefinition
   const categories = templateIds.flatMap((id) => (categoryOf.has(id) ? [categoryOf.get(id)!] : []));
   if (categories.length === 0) return 0n;
   const contacts = await prisma.contact.findMany({
-    where: { AND: [{ tenantId, optedOutAt: null }, await audienceWhere(tenantId, def, now)] },
+    where: { AND: [{ tenantId, ...(await scheduledOptOutWhere(tenantId, def)) }, await audienceWhere(tenantId, def, now)] },
     select: { phone: true, bsuid: true },
     take: MAX_SCAN,
   });
@@ -291,6 +327,22 @@ const isChunk = (p: unknown): p is ChunkPayload => {
 const tagVariants = (tag: string) => [...new Set([tag, tag.toLowerCase(), tag.toUpperCase(), tag.charAt(0).toUpperCase() + tag.slice(1).toLowerCase()])];
 
 /**
+ * The opt-out part of a scheduled run's audience (lib/contacts/opt-out.ts). A rule that sends a marketing template leaves opted-out
+ * contacts out, as a marketing broadcast does. Any other rule walks them too: a utility template, like an appointment reminder,
+ * still reaches them, and tags or assignments are not messages. A category that cannot be read counts as marketing.
+ */
+export async function scheduledOptOutWhere(tenantId: string, def: RuleDefinition): Promise<Prisma.ContactWhereInput> {
+  const ids = [...new Set(def.actions.flatMap((a) => (a.type === "send_template" ? [a.templateId] : [])))];
+  if (ids.length === 0) return receivableWhere("utility");
+  try {
+    const rows = await prisma.template.findMany({ where: { tenantId, id: { in: ids } }, select: { category: true } });
+    return receivableWhere(rows.some((r) => sendKindForCategory(r.category) === "marketing") ? "marketing" : "utility");
+  } catch {
+    return receivableWhere("marketing");
+  }
+}
+
+/**
  * SQL that narrows the contacts a scheduled rule walks, from the conditions every contact must meet (top-level "all of"):
  * tags and segments. The rule's full conditions are still checked per contact, so this only avoids loading people who cannot match.
  */
@@ -335,7 +387,7 @@ async function runChunk(payload: ChunkPayload): Promise<void> {
   if (!parsed.ok) return void (await finishRun(payload));
 
   const contacts = await prisma.contact.findMany({
-    where: { AND: [{ tenantId, optedOutAt: null }, await audienceWhere(tenantId, parsed.value)] },
+    where: { AND: [{ tenantId, ...(await scheduledOptOutWhere(tenantId, parsed.value)) }, await audienceWhere(tenantId, parsed.value)] },
     orderBy: { id: "asc" },
     take: CHUNK,
     ...(payload.cursor ? { cursor: { id: payload.cursor }, skip: 1 } : {}),

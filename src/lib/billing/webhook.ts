@@ -6,6 +6,7 @@ import { issueInvoiceOnce } from "./invoice";
 import { sendPaymentReceived } from "./notify";
 import { verifyWebhookSignature, type RzSubscription } from "./razorpay";
 import { isStaleEvent, markApplied } from "./ordering";
+import { invoiceUpgradeCharge, planFromEntity, recordPlanSwitch, takeOverIfNext } from "./plan-change";
 import { patchFromEntity } from "./sync";
 
 export const WEBHOOK_MAX_BYTES = 1_000_000;
@@ -52,25 +53,52 @@ async function applySubscriptionEvent(event: string, payload: Payload): Promise<
   const entity = payload.payload?.subscription?.entity;
   if (!entity?.id) return "missing subscription";
   const notes = entity.notes && !Array.isArray(entity.notes) ? entity.notes : {};
-  const sub = await prisma.subscription.findUnique({ where: { razorpaySubscriptionId: entity.id }, include: { plan: true } });
-  if (!sub) return "unknown subscription";
-  if (typeof notes.tenantId !== "string" || notes.tenantId !== sub.tenantId) return "tenant mismatch";
-
-  const status = entity.status || FALLBACK_STATUS[event] || "";
   const now = new Date();
-  const patch = patchFromEntity({ ...entity, status }, sub, now);
-  // A late or retried older event must not undo a newer state. It is still recorded and its payment still invoiced (that is idempotent).
   const createdAt = typeof payload.created_at === "number" && Number.isFinite(payload.created_at) ? payload.created_at : null;
-  const stale = patch ? await isStaleEvent(sub.tenantId, createdAt) : false;
-  if (patch && !stale) {
-    await prisma.subscription.update({ where: { id: sub.id }, data: patch });
-    await markApplied(sub.tenantId, createdAt);
-    if (patch.status === "past_due" && patch.pastDueSince) await noticeFailure(sub.tenantId, patch.pastDueSince);
+  let sub = await prisma.subscription.findUnique({ where: { razorpaySubscriptionId: entity.id }, include: { plan: true } });
+  let patch: ReturnType<typeof patchFromEntity> = null;
+  let stale = false;
+  const payment = payload.payload?.payment?.entity;
+  const paid = !!payment && typeof payment.id === "string" && typeof payment.amount === "number" && payment.status === "captured";
+  if (!sub) {
+    // Not the row's subscription: it may be the new plan that starts when the current one ends (plan-change.ts).
+    const taken = await takeOverIfNext({ ...entity, status: entity.status || FALLBACK_STATUS[event] || "" }, notes, createdAt, now);
+    if (typeof taken === "string") return taken;
+    sub = taken.sub;
+  } else {
+    if (typeof notes.tenantId !== "string" || notes.tenantId !== sub.tenantId) return "tenant mismatch";
+
+    const status = entity.status || FALLBACK_STATUS[event] || "";
+    patch = patchFromEntity({ ...entity, status }, sub, now);
+    // A late or retried older event must not undo a newer state. It is still recorded and its payment still invoiced (that is idempotent).
+    // The plan Razorpay reports moves with the status: an upgrade applied at once, or a downgrade at renewal (subscription.updated,
+    // subscription.charged), never back to an older plan from an older event.
+    const newPlan = patch ? await planFromEntity(sub, entity) : null;
+    stale = patch ? await isStaleEvent(sub.tenantId, createdAt) : false;
+    if (patch && !stale) {
+      await prisma.subscription.update({ where: { id: sub.id }, data: { ...patch, ...(newPlan ? { planId: newPlan.id } : {}) } });
+      await markApplied(sub.tenantId, createdAt);
+      if (newPlan) {
+        const fulfilled = await recordPlanSwitch({ tenantId: sub.tenantId, fromCode: sub.plan?.code ?? null, to: newPlan, source: event });
+        // The charge that came with it is invoiced under the plan it paid for.
+        sub = { ...sub, planId: newPlan.id, plan: { ...sub.plan, id: newPlan.id, code: newPlan.code, name: newPlan.name } };
+        // An upgrade this event completes, without its charge in the payload: the charge is found at Razorpay and invoiced
+        // (now, or by the plan-change sweep once Razorpay has captured it).
+        if (fulfilled?.kind === "upgrade" && !paid && sub.razorpaySubscriptionId) {
+          await invoiceUpgradeCharge(sub.tenantId, {
+            subscriptionId: sub.razorpaySubscriptionId,
+            plan: { name: newPlan.name, currency: sub.plan.currency },
+            period: { start: patch.currentPeriodStart ?? sub.currentPeriodStart, end: patch.currentPeriodEnd ?? sub.currentPeriodEnd },
+            since: new Date(fulfilled.requestedAt),
+          });
+        }
+      }
+      if (patch.status === "past_due" && patch.pastDueSince) await noticeFailure(sub.tenantId, patch.pastDueSince);
+    }
   }
 
-  const payment = payload.payload?.payment?.entity;
-  const paid = payment && typeof payment.id === "string" && typeof payment.amount === "number" && payment.status === "captured";
-  if (paid && (event === "subscription.charged" || event === "subscription.activated")) {
+  // subscription.updated carries the charge of an upgrade applied at once (the prorated difference).
+  if (paid && payment && (event === "subscription.charged" || event === "subscription.activated" || event === "subscription.updated")) {
     const { invoice, created } = await issueInvoiceOnce({
       tenantId: sub.tenantId,
       razorpayPaymentId: payment.id as string,

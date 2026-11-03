@@ -239,14 +239,15 @@ export async function memberFacts(userId: string): Promise<MemberFacts> {
 
 const ROLE_RANK: Record<Actor["role"], number> = { agent: 1, admin: 2, owner: 3 };
 
-type NoticeRow = { id: string; kind: string; severity: string; source: string; subjectType: string | null; subjectId: string | null; audienceUserId: string | null; audienceMinRole: Actor["role"]; updatedAt: Date };
+type NoticeRow = { id: string; kind: string; severity: string; source: string; subjectType: string | null; subjectId: string | null; dedupeKey: string | null; audienceUserId: string | null; audienceMinRole: Actor["role"]; updatedAt: Date };
 
 async function visibleNotices(actor: Actor, now: Date, extra: Record<string, unknown> = {}): Promise<NoticeRow[]> {
   const rows = (await prisma.notice.findMany({
     where: { tenantId: actor.tenantId, resolvedAt: null, expiresAt: { gt: now }, OR: [{ audienceUserId: null }, { audienceUserId: actor.userId }], ...extra },
     orderBy: { updatedAt: "desc" },
     take: 200,
-    select: { id: true, kind: true, severity: true, source: true, subjectType: true, subjectId: true, audienceUserId: true, audienceMinRole: true, updatedAt: true },
+    // dedupeKey: supersededSpendRow knows Phase 0's "ads-review:<ad>:rejected" row by it, as listNotices does.
+    select: { id: true, kind: true, severity: true, source: true, subjectType: true, subjectId: true, dedupeKey: true, audienceUserId: true, audienceMinRole: true, updatedAt: true },
   })) as NoticeRow[];
   const allowed = rows.filter((n) => ROLE_RANK[actor.role] >= (ROLE_RANK[n.audienceMinRole] ?? 1));
   if (allowed.length === 0) return [];

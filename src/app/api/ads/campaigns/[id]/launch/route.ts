@@ -1,6 +1,6 @@
 import { assertSameOrigin } from "@/lib/auth/csrf";
 import { getActor } from "@/lib/auth";
-import { launchCampaign } from "@/lib/ads/service";
+import { AdsMediaNotReadyError, launchCampaign } from "@/lib/ads/service";
 import { readTextLimited } from "@/lib/http/body";
 import { errorResponse, HttpError, requireRole } from "@/lib/tenancy";
 
@@ -25,6 +25,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const body = await readOptionalBody(request);
     return Response.json({ campaign: await launchCampaign(actor, (await params).id, { acknowledgeSpecialCategoryTerms: body.acknowledgeSpecialCategoryTerms === true }) });
   } catch (e) {
+    // 409 { error, code: "media_not_ready", mediaIds }: the media is still on its way to Meta, so the caller can wait and try again.
+    if (e instanceof AdsMediaNotReadyError) return Response.json(e.toJSON(), { status: e.status });
     return errorResponse(e);
   }
 }

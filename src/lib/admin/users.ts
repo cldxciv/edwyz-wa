@@ -3,12 +3,16 @@ import { audit } from "@/lib/auth/audit";
 import { prisma } from "@/lib/db";
 import { siteUrl } from "@/lib/config";
 import { revokeKeysBestEffort } from "@/lib/integrations/apikeys";
-import { queueEmail } from "@/lib/email";
+import { emailConfigured } from "@/lib/email/availability";
+import { sendVerificationEmail } from "@/lib/email/flows";
 import { HttpError } from "@/lib/tenancy";
 import { requireConfirmation, requireReason, str } from "./http";
 
 export const USER_PAGE_SIZE = 25;
 const HOUR_MS = 3_600_000;
+
+/** The admin's answer when email is off: there is no way to deliver the link, so confirm the address by hand instead. */
+export const ADMIN_VERIFY_UNAVAILABLE = "Email is not set up on this server, so no link can be sent. Use \"Mark email as verified\" once you have confirmed the address another way.";
 
 export async function listUsers(opts: { q: string; page: number }) {
   const where = opts.q ? { OR: [{ email: { contains: opts.q, mode: "insensitive" as const } }, { name: { contains: opts.q, mode: "insensitive" as const } }] } : {};
@@ -70,12 +74,10 @@ export async function applyUserAction(adminUserId: string, userId: string, body:
     }
     case "resend_verification": {
       if (user.emailVerifiedAt) throw new HttpError(409, "This email is already verified.");
-      const token = await issueToken(userId, "verify", 24 * HOUR_MS);
-      await queueEmail({
-        to: user.email,
-        subject: "Verify your email for Edwyz WA",
-        text: `Hello ${user.name},\n\nConfirm your email address by opening this link within 24 hours:\n${siteUrl()}/verify-email?token=${token}\n`,
-      });
+      // Without SMTP the mail would be dropped while the admin is told it went out; "Mark email as verified" is the way then.
+      if (!emailConfigured()) throw new HttpError(503, ADMIN_VERIFY_UNAVAILABLE);
+      // The same flow as the user's own "send a new link": earlier links stop working and the link is sealed in the job queue.
+      await sendVerificationEmail(user);
       await log(adminUserId, userId, action, { reason });
       return { ok: true };
     }

@@ -16,6 +16,8 @@ type Props = {
   canDismiss: boolean;
   busy: boolean;
   onDismiss: (dismissed: boolean) => void;
+  /** Eddy can chat right now (status "ready"). While it is off or paused, "Do this with Eddy" is not offered. */
+  eddyReady?: boolean;
 };
 
 function Check({ done, index }: { done: boolean; index: number }) {
@@ -47,7 +49,7 @@ function DoneRow({ step, index }: Pick<Props, "step" | "index">) {
           {step.detail && <p className="text-xs text-muted">{step.detail}</p>}
         </div>
       </div>
-      <Link href={step.href} className="text-xs font-semibold text-accent underline underline-offset-2" aria-label={`Review: ${step.title}`}>
+      <Link href={step.reviewHref ?? step.href} className="text-xs font-semibold text-accent underline underline-offset-2" aria-label={`Review: ${step.title}`}>
         Review
       </Link>
     </li>
@@ -57,7 +59,8 @@ function DoneRow({ step, index }: Pick<Props, "step" | "index">) {
 /**
  * "Do this with Eddy" (docs/EDDY-SPEC.md 6.1): opens Eddy through the wa:eddy-open event with the member's own request for
  * this step. The text is the catalogue's, never anything a customer or Meta wrote, so it is safe to send as the member's
- * message (7.2 item 9). Eddy itself decides what it can do in its current state (off states show the setup guide).
+ * message (7.2 item 9). The button only shows while Eddy can chat: when Eddy is off, paused or out of allowance the query
+ * would only wait in a composer that cannot send, so the step's own page buttons are the way.
  */
 export function doWithEddy(step: Pick<SetupStep, "id">, target?: Parameters<typeof openEddy>[1]): boolean {
   return openEddy({ query: guideAskQuery("en", step.id) }, target);
@@ -65,7 +68,7 @@ export function doWithEddy(step: Pick<SetupStep, "id">, target?: Parameters<type
 
 export const DO_WITH_EDDY = t("en", "btn.do_with_eddy");
 
-function Actions({ step, blocker, canDismiss, busy, onDismiss }: Omit<Props, "index">) {
+function Actions({ step, blocker, canDismiss, busy, onDismiss, eddyReady = false }: Omit<Props, "index">) {
   const primaryHref = blocker ? blocker.href : step.href;
   const primaryLabel = blocker ? blocker.cta : step.cta;
   return (
@@ -78,9 +81,11 @@ function Actions({ step, blocker, canDismiss, busy, onDismiss }: Omit<Props, "in
           {step.alt.cta}
         </Link>
       )}
-      <Button variant="secondary" size="sm" className="pointer-coarse:min-h-11" onClick={() => doWithEddy(step)} aria-label={`${DO_WITH_EDDY}: ${step.title}`} data-do-with-eddy={step.id}>
-        {DO_WITH_EDDY}
-      </Button>
+      {eddyReady && (
+        <Button variant="secondary" size="sm" className="pointer-coarse:min-h-11" onClick={() => doWithEddy(step)} aria-label={`${DO_WITH_EDDY}: ${step.title}`} data-do-with-eddy={step.id}>
+          {DO_WITH_EDDY}
+        </Button>
+      )}
       {canDismiss && (
         <Button variant="ghost" size="sm" disabled={busy} onClick={() => onDismiss(!step.dismissed)} aria-label={`${step.dismissed ? "Bring back" : "Dismiss for now"}: ${step.title}`}>
           {step.dismissed ? "Bring back" : "Dismiss for now"}

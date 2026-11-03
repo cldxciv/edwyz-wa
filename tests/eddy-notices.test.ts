@@ -18,7 +18,7 @@ const bridge = vi.hoisted(() => ({
   isDemoWorkspace: vi.fn(async (tenantId: string) => tenantId === "t_demo"),
   aiHeadroom: vi.fn(async (_tenantId: string, _o?: unknown) => ({ usedToday: 0, limitToday: null as number | null, usedMonth: 0, limitMonth: 500 as number | null, leftToday: null as number | null, leftMonth: 500 as number | null, todayResetsOn: "2026-10-30", monthResetsOn: "2026-11-01", timezone: "Asia/Kolkata" })),
 }));
-const tokenHealth = vi.hoisted(() => ({ getWhatsAppTokenHealth: vi.fn(async (_t: string, _n?: Date) => ({ state: "ok" as string, expiresAt: null as string | null, daysLeft: null as number | null })) }));
+const tokenHealth = vi.hoisted(() => ({ EXPIRING_DAYS: 14, REJECTED_FLAG_PREFIX: "wa-auth-rejected:", getWhatsAppTokenHealth: vi.fn(async (_t: string, _n?: Date) => ({ state: "ok" as string, expiresAt: null as string | null, daysLeft: null as number | null })) }));
 const setup = vi.hoisted(() => ({ getSetup: vi.fn(async (_t: string, _n?: Date) => ({ steps: [] as { id: string; href: string }[], summary: { nextStepId: null as string | null } })) }));
 const platform = vi.hoisted(() => ({ readPlatformFreeze: vi.fn(async () => ({ freeze: "none" as string, reason: null as string | null, byUserId: null as string | null, at: null as Date | null, version: 1 })) }));
 const broadcastsProcess = vi.hoisted(() => ({ pauseBroadcastsForNumber: vi.fn(async () => 0) }));
@@ -60,6 +60,7 @@ import { hasKey, t } from "@/lib/eddy/i18n";
 import { eraseContactFromEddy, runEddyErasureSweep } from "@/lib/eddy/erasure-sweep";
 import { eddyForgetUser, eddyForgetUserEverywhere } from "@/lib/eddy/forget-user";
 import { runEddyRetention } from "@/lib/eddy/retention";
+import { needsYouCount, recentNoticeFacts } from "@/lib/eddy/settings";
 import { NOTICE_KINDS, NOTICE_TTL_MS, PAYLOAD_KEYS, SELF, V2_KINDS, cleanActions, cleanPayload, dedupe, textKeyFor } from "@/lib/notices/kinds";
 import { publishNotice, resolveNotices } from "@/lib/notices/publish";
 import { claimToasts, isNoticeUpdate, listNotices, orderForStrip, updateNotice } from "@/lib/notices/service";
@@ -72,7 +73,7 @@ import { producer as tokenProducer } from "@/lib/notices/producers/token";
 import { aiLevel, producer as aiProducer } from "@/lib/notices/producers/ai-limit";
 import { producer as spendingProducer } from "@/lib/notices/producers/spending";
 import { activityForViewer, producer as activityProducer, settingsPathFor, teamActivity } from "@/lib/notices/producers/activity";
-import { producer as setupProducer } from "@/lib/notices/producers/setup";
+import { producer as setupProducer, setupResting } from "@/lib/notices/producers/setup";
 import { GET as getNotices, POST as postNotices } from "@/app/api/notices/route";
 import { PATCH as patchNoticeRoute } from "@/app/api/notices/[id]/route";
 import { LanguagePicker, optionLabel, LANG_OPTIONS } from "@/components/eddy/LanguagePicker";
@@ -250,10 +251,12 @@ describe("kinds: payload and buttons", () => {
       failed_sends: [{ code: "131047" }, { code: "131026" }, { code: "131049" }, { code: "500" }],
       approvals_waiting: [{ count: 1 }, { count: 3 }],
       ai_limit_80: [{ period: "month" }, { period: "day" }],
-      ai_limit_100: [{ period: "month" }, { period: "day" }],
+      ai_limit_100: [{ period: "month" }, { period: "day" }, { period: "hour" }],
       spending_stopped: [{ scope: "platform" }, { level: "assistants" }, { byUserId: "u_1" }, {}],
       automation_digest: [{ ai: 3 }, { ai: 0 }],
       setup_next_step: ["connect", "template", "contacts", "broadcast", "invite", "routing", "automation", "facebook", "plan"].map((stepId) => ({ stepId })),
+      ad_approved: [{ adId: "a_1", campaignId: "c_1", state: "approved" }],
+      ad_rejected: [{ state: "rejected", codes: "TEXT_OVERLAY" }, { state: "partly_rejected", codes: "BRAND_USAGE" }],
     };
     for (const kind of [...NOTICE_KINDS, "action_done", "action_failed", "action_unresolved"]) {
       for (const p of payloads[kind] ?? [{}]) {
@@ -264,6 +267,41 @@ describe("kinds: payload and buttons", () => {
     }
     expect(textKeyFor("breaker_tripped", {}, "spend")).toBe("notices.spend_fallback");
     for (const lang of EDDY_LANGS) expect(Object.keys(noticesCatalogue[lang]).sort()).toEqual(Object.keys(noticesCatalogue.en).sort());
+  });
+
+  it("ad_approved and ad_rejected (IG-PAGE-ADS-SPEC 3.9, PRM-08): ids and codes only, text in all three languages, admins only", async () => {
+    expect(NOTICE_KINDS).toEqual(expect.arrayContaining(["ad_approved", "ad_rejected"]));
+    // Ranked next to their template twins: a rejection with the action-needed kinds, an approval with the others.
+    expect(NOTICE_KINDS.indexOf("ad_rejected")).toBe(NOTICE_KINDS.indexOf("template_rejected") + 1);
+    expect(NOTICE_KINDS.indexOf("ad_approved")).toBe(NOTICE_KINDS.indexOf("template_approved") + 1);
+    expect(dedupe.adReview("a_1", "rejected")).toBe("ad-review:a_1:rejected");
+    expect(cleanPayload({ adId: "a_1", campaignId: "c_1", state: "rejected", codes: "TEXT_OVERLAY,BRAND_USAGE", reason: "Your image has too much text", message: "Diwali sale" })).toEqual({ adId: "a_1", campaignId: "c_1", state: "rejected", codes: "TEXT_OVERLAY,BRAND_USAGE" });
+    expect(cleanPayload({ codes: "TEXT OVERLAY too much text" })).toEqual({});
+    for (const key of ["notices.ad_approved", "notices.ad_rejected", "notices.ad_rejected_partly"]) {
+      for (const lang of EDDY_LANGS) expect(tn(lang, key as never).length, `${lang} ${key}`).toBeGreaterThan(20);
+      expect(tn("hi", key as never)).toMatch(/\p{Script=Devanagari}/u);
+    }
+    expect(tn("en", "notices.ad_rejected")).toBe("Meta didn't approve one of your ads. See why and fix it, or ask Meta to review it again.");
+
+    seedMembers();
+    const actions = [{ kind: "open_eddy", ref: { kind: "notice", noticeId: SELF }, labelKey: "btn.fix_with_eddy" }, { kind: "navigate", path: "/app/ads/c_1", labelKey: "btn.review" }] as const;
+    const publish = () =>
+      publishNotice(
+        { tenantId: T, kind: "ad_rejected", severity: "action_needed", dedupeKey: dedupe.adReview("a_1", "rejected"), audience: { minRole: "admin" }, subjectType: "ad", subjectId: "a_1", payload: { adId: "a_1", campaignId: "c_1", state: "rejected", codes: "TEXT_OVERLAY" }, actions: [...actions] },
+        { now: clock.now },
+      );
+    expect((await publish()).outcome).toBe("created");
+    expect((await publish()).outcome).toBe("unchanged");
+    expect(notices().filter((n) => n.kind === "ad_rejected")).toHaveLength(1);
+    // Phase 0's own "Meta did not approve an ad" row for the same ad gives way to it in the strip.
+    await publishNotice({ tenantId: T, kind: "breaker_tripped", severity: "heads_up", dedupeKey: "ads-review:a_1:rejected", source: "spend", audience: { minRole: "owner" }, subjectType: "campaign", subjectId: "c_1", payload: { title: "Meta did not approve an ad" } }, { now: clock.now });
+    const owner = await listNotices(OWNER, { now: clock.now });
+    expect(owner.notices.map((n) => [n.kind, n.textKey])).toEqual([["ad_rejected", "notices.ad_rejected"]]);
+    expect(owner.notices[0].actions).toEqual([{ ...actions[0], ref: { kind: "notice", noticeId: owner.notices[0].id } }, actions[1]]);
+    expect((await listNotices(AGENT, { now: clock.now })).notices).toEqual([]);
+    // The launcher dot and Eddy's context note hide it too, so the dot never counts one more than "Needs you" shows.
+    expect(await needsYouCount(OWNER, clock.now)).toBe(1);
+    expect((await recentNoticeFacts(OWNER, new Date(clock.now.getTime() - 60_000), clock.now)).map((f) => f.kind)).toEqual(["ad_rejected"]);
   });
 
   it("the AI notice shares Phase 0's dedupe key (src/lib/spend/exec/ai.ts aiNoticeKey)", () => {
@@ -644,6 +682,121 @@ describe("the notice scan", () => {
     await runNoticeScan({ now: clock.now, maxTenants: 2, producers, isDemo: async () => false });
     await runNoticeScan({ now: clock.now, maxTenants: 2, producers, isDemo: async () => false });
     expect(seen).toEqual(["t_1", "t_2", "t_3", "t_1", "t_2", "t_3"]);
+  });
+
+  it("due work only: a producer runs where its pre-check finds work or one of its kinds is open; an idle workspace is not read", async () => {
+    fake.db.seed("tenant", ...["t_1", "t_2", "t_3"].map((id) => ({ id, deletedAt: null })));
+    fake.db.seed("notice", { tenantId: "t_3", kind: "template_approved", severity: "heads_up", dedupeKey: "template:tpl_9:approved", expiresAt: ago(-DAY) });
+    const ran: string[] = [];
+    const rec = (name: string, kinds: NoticeProducer["kinds"], due: NoticeProducer["due"]): NoticeProducer => ({ name, kinds, due, run: async (ctx) => (ran.push(`${name}:${ctx.tenantId}`), {}) });
+    const a = rec("a", ["template_approved"], async (ids) => ids.filter((id) => id === "t_1"));
+    const isDemo = vi.fn(async (_tenantId: string) => false);
+    expect((await runNoticeScan({ now: clock.now, producers: [a], isDemo })).tenants).toBe(2);
+    expect(ran).toEqual(["a:t_1", "a:t_3"]);
+    expect(isDemo.mock.calls.map((c) => c[0])).toEqual(["t_1", "t_3"]);
+    // A pre-check that is complete is not widened by the open notices.
+    ran.length = 0;
+    await runNoticeScan({ now: clock.now, producers: [{ ...a, dueIsComplete: true }], isDemo });
+    expect(ran).toEqual(["a:t_1"]);
+    // A pre-check that fails runs its producer everywhere, as before there were pre-checks.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    ran.length = 0;
+    await runNoticeScan({ now: clock.now, producers: [a, rec("b", ["failed_sends"], async () => Promise.reject(new Error("down")))], isDemo });
+    expect(ran.sort()).toEqual(["a:t_1", "a:t_3", "b:t_1", "b:t_2", "b:t_3"]);
+    spy.mockRestore();
+  });
+
+  it("each producer's pre-check finds the workspaces with something to publish, for the whole batch at once", async () => {
+    const ids = ["t_a", "t_b", "t_c"];
+    const dueOf = async (p: NoticeProducer) => [...(await p.due!(ids, clock.now))].sort();
+    const later = (ms: number) => new Date(clock.now.getTime() + ms);
+    expect(PRODUCERS.every((p) => typeof p.due === "function")).toBe(true);
+
+    // Templates: changed after the cursor (a tie on time is broken by id), or in the last 24 hours before the first run.
+    fake.db.seed("noticeScanState", { tenantId: "t_a", scanner: "templates", cursor: { at: ago(1000).toISOString(), id: "tpl_2" } }, { tenantId: "t_b", scanner: "templates", cursor: { at: ago(1000).toISOString(), id: "tpl_3" } });
+    fake.db.seed("template", { id: "tpl_2", tenantId: "t_a", updatedAt: ago(1000) }, { id: "tpl_3", tenantId: "t_b", updatedAt: ago(500) }, { id: "tpl_4", tenantId: "t_c", updatedAt: ago(2 * DAY) });
+    expect(await dueOf(templatesProducer)).toEqual(["t_b"]);
+    fake.db.seed("template", { id: "tpl_5", tenantId: "t_a", updatedAt: ago(1000) }, { id: "tpl_6", tenantId: "t_c", updatedAt: ago(DAY / 2) });
+    expect(await dueOf(templatesProducer)).toEqual(["t_a", "t_b", "t_c"]);
+
+    fake.db.seed("spendBreaker", { id: "br_1", tenantId: "t_a", kind: "wa_quality_red", scopeType: "phone", scopeId: "ph_1", state: "tripped" }, { id: "br_2", tenantId: "t_b", kind: "wa_quality_red", scopeType: "phone", scopeId: "ph_2", state: "cleared" });
+    expect(await dueOf(qualityProducer)).toEqual(["t_a"]);
+
+    fake.db.seed("message", { id: "f1", tenantId: "t_b", direction: "outbound", status: "failed", createdAt: ago(DAY) }, { id: "f2", tenantId: "t_c", direction: "outbound", status: "failed", createdAt: ago(3 * DAY) }, { id: "f3", tenantId: "t_a", direction: "inbound", status: "failed", createdAt: ago(1000) });
+    expect(await dueOf(failuresProducer)).toEqual(["t_b"]);
+
+    fake.db.seed("spendApproval", { id: "ap_1", tenantId: "t_a", status: "pending", direction: "raise", expiresAt: later(DAY) });
+    fake.db.seed("optimizerProposal", { id: "op_1", tenantId: "t_c", status: "proposed" });
+    fake.db.seed("approvalRequest", { id: "ar_1", tenantId: "t_b", status: "changes_requested", decidedAt: ago(8 * DAY) });
+    expect(await dueOf(approvalsProducer)).toEqual(["t_a", "t_c"]);
+
+    fake.db.seed("platformSetting", { key: "wa-auth-rejected:t_b", value: { reason: "token_rejected" } });
+    fake.db.seed("accessToken", { id: "at_1", tenantId: "t_c", expiresAt: later(3 * DAY) }, { id: "at_2", tenantId: "t_a", expiresAt: later(60 * DAY) });
+    expect(await dueOf(tokenProducer)).toEqual(["t_b", "t_c"]);
+
+    fake.db.seed("spendCounter", { tenantId: "t_a", pot: "ai", periodKind: "month", spentMinor: 5n, reservedMinor: 0n, updatedAt: ago(DAY) }, { tenantId: "t_b", pot: "messaging", periodKind: "month", spentMinor: 5n, reservedMinor: 0n, updatedAt: ago(DAY) }, { tenantId: "t_c", pot: "ai", periodKind: "month", spentMinor: 0n, reservedMinor: 0n, updatedAt: ago(DAY) });
+    expect(await dueOf(aiProducer)).toEqual(["t_a"]);
+
+    fake.db.seed("spendControl", { tenantId: "t_b", freeze: "all", timezone: "Asia/Kolkata", approverUserIds: [] }, { tenantId: "t_a", freeze: "none", timezone: "Asia/Kolkata", approverUserIds: [] });
+    expect(await dueOf(spendingProducer)).toEqual(["t_b"]);
+    platform.readPlatformFreeze.mockResolvedValueOnce({ freeze: "all", reason: null, byUserId: "pa_1", at: null, version: 2 });
+    expect(await dueOf(spendingProducer)).toEqual(ids);
+
+    fake.db.seed("message", { id: "a1", tenantId: "t_c", origin: "ai_reply", conversationId: "cv_1", createdAt: ago(1000) });
+    fake.db.seed("ruleExecution", { id: "e1", tenantId: "t_a", ruleId: "r_1", createdAt: ago(2 * DAY) });
+    expect(await dueOf(activityProducer)).toEqual(["t_c"]);
+
+    // Setup: every workspace but one whose checklist is settled (the same step for a day) and was checked in the last 6 hours.
+    const HOUR = 60 * 60_000;
+    fake.db.seed(
+      "noticeScanState",
+      { tenantId: "t_a", scanner: "setup", cursor: { step: "connect", since: ago(3 * DAY).toISOString(), at: ago(60_000).toISOString() } },
+      { tenantId: "t_b", scanner: "setup", cursor: { step: null, since: ago(3 * DAY).toISOString(), at: ago(7 * HOUR).toISOString() } },
+      { tenantId: "t_c", scanner: "setup", cursor: { step: "template", since: ago(HOUR).toISOString(), at: ago(60_000).toISOString() } },
+    );
+    expect(await dueOf(setupProducer)).toEqual(["t_b", "t_c"]);
+    expect(setupProducer.dueIsComplete).toBe(true);
+  });
+
+  it("setup checks a changing checklist on every visit, and a settled one (the same step for a day, or complete) every 6 hours", async () => {
+    const HOUR = 60 * 60_000;
+    const step = { steps: [{ id: "template", href: "/app/templates/new" }], summary: { nextStepId: "template" } };
+    const at = clock.now.toISOString();
+    const twoDays = ago(2 * DAY).toISOString();
+    setup.getSetup.mockResolvedValueOnce(step);
+    expect((await setupProducer.run(ctxFor(T))).cursor).toEqual({ step: "template", since: at, at });
+    // The same step within its first day: nothing new to write.
+    setup.getSetup.mockResolvedValueOnce(step);
+    expect((await setupProducer.run(ctxFor(T, { step: "template", since: ago(HOUR).toISOString(), at: ago(HOUR).toISOString() }))).cursor).toBeUndefined();
+    // Settled: each check moves the next re-check on.
+    setup.getSetup.mockResolvedValueOnce(step);
+    expect((await setupProducer.run(ctxFor(T, { step: "template", since: twoDays, at: ago(7 * HOUR).toISOString() }))).cursor).toEqual({ step: "template", since: twoDays, at });
+    // Complete: a new state, from now.
+    setup.getSetup.mockResolvedValueOnce({ steps: [], summary: { nextStepId: null } });
+    expect((await setupProducer.run(ctxFor(T, { step: "template", since: twoDays, at }))).cursor).toEqual({ step: null, since: at, at });
+    expect(setupResting({ step: null, since: twoDays, at: ago(HOUR).toISOString() }, clock.now)).toBe(true);
+    expect(setupResting({ step: null, since: ago(HOUR).toISOString(), at: ago(HOUR).toISOString() }, clock.now)).toBe(false);
+    expect(setupResting(null, clock.now)).toBe(false);
+    // With no cursor yet (a workspace's first check), the notice already standing for its step dates that step.
+    setup.getSetup.mockResolvedValueOnce(step);
+    await setupProducer.run(ctxFor(T));
+    noticeBy("setup:template")!.createdAt = ago(3 * DAY);
+    setup.getSetup.mockResolvedValueOnce(step);
+    expect((await setupProducer.run(ctxFor(T))).cursor).toEqual({ step: "template", since: ago(3 * DAY).toISOString(), at });
+  });
+
+  it("scans a few workspaces at a time and starts no new ones when out of time; the next run carries on after the last one scanned", async () => {
+    fake.db.seed("tenant", ...["t_1", "t_2", "t_3", "t_4", "t_5"].map((id) => ({ id, deletedAt: null })));
+    const seen: string[] = [];
+    let wall = 0;
+    const time = vi.spyOn(Date, "now").mockImplementation(() => wall);
+    const producers: NoticeProducer[] = [{ name: "rec", kinds: [], run: async (ctx) => (seen.push(ctx.tenantId), (wall += 1_000), {}) }];
+    // two side by side against a 1.5 s budget: the first pair takes 2 s, so the run stops there
+    const opts = { now: clock.now, producers, concurrency: 2, budgetMs: 1_500, isDemo: async () => false };
+    expect(await runNoticeScan(opts)).toMatchObject({ tenants: 2 });
+    expect(await runNoticeScan(opts)).toMatchObject({ tenants: 2 });
+    expect(seen).toEqual(["t_1", "t_2", "t_3", "t_4"]);
+    time.mockRestore();
   });
 
   it("a full scan of a workspace stores no customer text anywhere in the notice store, and every button carries ids only", async () => {

@@ -62,6 +62,22 @@ export function autoLayout(flow: FlowDefinition, origin: Point = { x: 40, y: 40 
   return { ...flow, nodes: flow.nodes.map((n) => ({ ...n, position: pos.get(n.id) as Point }) as FlowNode) };
 }
 
+/** Space kept clear around a step when looking for a free place. */
+const CLEAR = 16;
+
+/**
+ * Where a new step of the given height can go: `want` when that place is free, otherwise straight below the steps in the
+ * way. Without this a new step could land on top of another one and hide its text until Tidy up.
+ */
+export function freeSpot(flow: FlowDefinition, want: Point, height: number): Point {
+  const boxes = flow.nodes.map((n) => ({ x: n.position.x, y: n.position.y, h: nodeHeight(n) }));
+  const blocker = (p: Point) => boxes.find((b) => p.x < b.x + NODE_W + CLEAR && b.x < p.x + NODE_W + CLEAR && p.y < b.y + b.h + CLEAR && b.y < p.y + height + CLEAR);
+  let p = want;
+  // Each move goes below one more step and never back up, so this ends after at most one move per step.
+  for (let b = blocker(p); b; b = blocker(p)) p = { x: p.x, y: b.y + b.h + ROW_GAP };
+  return p;
+}
+
 export function bounds(flow: FlowDefinition): { x: number; y: number; w: number; h: number } | null {
   if (!flow.nodes.length) return null;
   const x = Math.min(...flow.nodes.map((n) => n.position.x));

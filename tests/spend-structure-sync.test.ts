@@ -22,7 +22,7 @@ vi.mock("@/lib/meta-connect", () => ({ getAssetAccess: async (_t: string, assetI
 
 import { ceil175, ceil210 } from "@/lib/spend/commitments";
 import { setTripwireAuditSink } from "@/lib/spend/tripwire";
-import { ADSET_FIELDS, CAMPAIGN_FIELDS, monthEndHorizon, runStructureSync, sharedDaily, syncStructure } from "@/lib/spend/sync/structure";
+import { ADSET_FIELDS, AD_FIELDS, CAMPAIGN_FIELDS, monthEndHorizon, runStructureSync, sharedDaily, syncStructure } from "@/lib/spend/sync/structure";
 import type { SpendNotice } from "@/lib/spend/types";
 
 // Wednesday 28 Oct 2026, 12:00 in Asia/Kolkata.
@@ -118,18 +118,21 @@ afterEach(() => {
 });
 
 describe("structure sync (4.6.1)", () => {
-  it("makes two reads per account with the 4.6.1 filters and field lists", async () => {
+  it("makes two reads per account with the 4.6.1 filters and field lists, plus one read of Meta's ad review", async () => {
     seed();
     metaObjects();
     const r = await syncStructure(T, "acc1", io());
-    expect(r.reads).toBe(2);
-    const [c, s] = meta.calls;
+    expect(r.reads).toBe(3);
+    const [c, s, a] = meta.calls;
     expect(c).toMatchObject({ method: "GET", path: "act_111/campaigns" });
     expect(JSON.parse(String(c.params.filtering))).toEqual([{ field: "id", operator: "IN", value: ["m_c1"] }]);
     expect(c.params.fields).toBe(CAMPAIGN_FIELDS);
     expect(s).toMatchObject({ method: "GET", path: "act_111/adsets" });
     expect(JSON.parse(String(s.params.filtering))).toEqual([{ field: "campaign.id", operator: "IN", value: ["m_c1"] }]);
     expect(s.params.fields).toBe(ADSET_FIELDS);
+    expect(a).toMatchObject({ method: "GET", path: "act_111/ads" });
+    expect(JSON.parse(String(a.params.filtering))).toEqual([{ field: "campaign.id", operator: "IN", value: ["m_c1"] }]);
+    expect(a.params.fields).toBe(AD_FIELDS);
     expect(r.changes).toEqual([]);
   });
 
@@ -317,5 +320,69 @@ describe("structure sync (4.6.1)", () => {
     rows("metaAsset")[0].sandbox = true;
     expect((await syncStructure(T, "acc1", io())).reason).toBe("sandbox");
     expect(meta.calls).toHaveLength(0);
+  });
+});
+
+describe("Meta's ad review (stored on the Ad row, notice on rejection)", () => {
+  /** Answers the ads read with the given ads, in Meta's shape; every other request goes to the fake Meta. */
+  function reviewAnswer(ads: Record<string, unknown>[] | "error") {
+    h.fetchImpl = async (input, init) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (/\/act_111\/ads\?/.test(url)) {
+        if (ads === "error") return new Response(JSON.stringify({ error: { message: "(#100) Unknown field", code: 100 } }), { status: 400, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ data: ads }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return meta.fetch(input, init);
+    };
+  }
+  const ad = () => rows("ad").find((a) => a.id === "ad1")!;
+  const seedAd = (creative: Record<string, unknown> = { pageId: "p1", message: "Hello" }) =>
+    h.db.seed("ad", [{ id: "ad1", tenantId: T, adSetId: "c1s", metaAdId: "m_a1", name: "Ad A", status: "active", creative }]);
+
+  it("stores a rejection with Meta's reason, keeps the creative, and raises one in-app notice", async () => {
+    seed();
+    metaObjects();
+    seedAd();
+    reviewAnswer([{ id: "m_a1", campaign_id: "m_c1", effective_status: "DISAPPROVED", ad_review_feedback: { global: { "Personal attributes": "Ads must not imply personal attributes" } } }]);
+    await syncStructure(T, "acc1", io());
+    expect(ad().creative).toMatchObject({ pageId: "p1", message: "Hello", metaReview: { state: "rejected", metaStatus: "DISAPPROVED", reasons: ["Ads must not imply personal attributes"] } });
+    const review = notices.filter((n) => n.dedupeKey === "ads-review:ad1:rejected");
+    expect(review).toHaveLength(1);
+    expect(review[0]).toMatchObject({ title: "Meta did not approve an ad", link: "/app/ads/c1", subjectId: "c1", severity: "heads_up" });
+    expect(review[0].body).toBe("Meta did not approve Ad A in Diwali: Ads must not imply personal attributes. Change the ad and create it again, or ask Meta for another review in Ads Manager.");
+    // The same answer again: nothing new is written or announced.
+    const before = JSON.stringify(ad().creative);
+    notices = [];
+    await syncStructure(T, "acc1", io());
+    expect(JSON.stringify(ad().creative)).toBe(before);
+    expect(notices.filter((n) => n.dedupeKey.startsWith("ads-review:"))).toHaveLength(0);
+  });
+
+  it("an ad in review or approved is stored without a notice; an ad Edwyz did not make is ignored", async () => {
+    seed();
+    metaObjects();
+    seedAd();
+    reviewAnswer([{ id: "m_a1", effective_status: "PENDING_REVIEW" }, { id: "m_other", effective_status: "DISAPPROVED" }]);
+    await syncStructure(T, "acc1", io());
+    expect(ad().creative).toMatchObject({ metaReview: { state: "in_review", reasons: [] } });
+    reviewAnswer([{ id: "m_a1", effective_status: "ACTIVE" }]);
+    await syncStructure(T, "acc1", io());
+    expect(ad().creative).toMatchObject({ metaReview: { state: "approved" } });
+    expect(notices.filter((n) => n.dedupeKey.startsWith("ads-review:"))).toHaveLength(0);
+    expect(rows("ad")).toHaveLength(1);
+  });
+
+  it("a failed review read never stops the book's sync", async () => {
+    seed();
+    metaObjects({ budget: 1_500 });
+    seedAd();
+    reviewAnswer("error");
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const r = await syncStructure(T, "acc1", io());
+    errors.mockRestore();
+    expect(r.status).toBe("synced");
+    expect(r.reads).toBe(2);
+    expect(open()[0]).toMatchObject({ dailyBudgetMinor: INR(1_500) });
+    expect(ad().creative).not.toHaveProperty("metaReview");
   });
 });

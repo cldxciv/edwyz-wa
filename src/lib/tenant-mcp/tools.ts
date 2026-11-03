@@ -3,6 +3,7 @@ import { assertTenantCanWrite } from "@/lib/billing";
 import { assertApiSendFits } from "@/lib/broadcasts/cost";
 import { createBroadcast } from "@/lib/broadcasts/service";
 import { normalizeBsuid } from "@/lib/contacts/identity";
+import { mayReceive, OPTED_OUT_OF_MARKETING, sendKindForCategory } from "@/lib/contacts/opt-out";
 import { normalizePhone } from "@/lib/contacts/phone";
 import { updateContact } from "@/lib/contacts/service";
 import { prisma } from "@/lib/db";
@@ -131,7 +132,8 @@ async function sendTextReply(ctx: ToolContext, args: Record<string, unknown>) {
   const conversationId = str(args.conversationId);
   const { conversation, windowOpen } = await getConversation(tenantId, conversationId, { limit: 1 });
   if (!windowOpen) throw new HttpError(409, "The 24-hour customer service window is closed. Use send_template_message instead.");
-  if (conversation.contact.optedOutAt) throw new HttpError(422, "This contact has opted out of messages.");
+  // A reply in the open window: an opt-out stops marketing only (lib/contacts/opt-out.ts).
+  if (!mayReceive(conversation.contact, "service")) throw new HttpError(422, OPTED_OUT_OF_MARKETING);
   const normalised = { conversationId, text };
   if (!flag(args.confirm)) return draftFor(ctx, "send_text_reply", normalised, { conversationId, to: conversation.contact.phone ?? conversation.contact.bsuid, text });
   const claim = await authoriseSend(ctx, "send_text_reply", normalised, args.confirmToken, conversation.contact.id);
@@ -151,12 +153,12 @@ async function sendTextReply(ctx: ToolContext, args: Record<string, unknown>) {
 async function sendTemplate(ctx: ToolContext, args: Record<string, unknown>) {
   const { tenantId } = ctx.actor;
   const contact = await ownedContact(tenantId, str(args.contactId));
-  if (contact.optedOutAt) throw new HttpError(422, "This contact has opted out of messages.");
   const name = str(args.templateName);
   const language = str(args.language);
   // A template Meta flagged may still be sent here (spend spec 6.3: only marketing broadcasts and assistants stop using it).
   const template = await prisma.template.findFirst({ where: { tenantId, name, language, status: { in: ["approved", "flagged"] } }, select: { id: true, category: true } });
   if (!template) throw new HttpError(404, "No approved template with that name and language.");
+  if (!mayReceive(contact, sendKindForCategory(template.category))) throw new HttpError(422, OPTED_OUT_OF_MARKETING);
   if (template.category.toLowerCase() === "marketing" && !contact.optIn) throw new HttpError(422, "This contact has not opted in to marketing messages.");
   const components = Array.isArray(args.components) ? args.components : undefined;
   if (components && JSON.stringify(components).length > 8000) throw new HttpError(400, "components is too large.");

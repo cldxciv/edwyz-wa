@@ -33,18 +33,37 @@ async function seedBriefWithCopy(u: TestUser, brandId: string, copy: { headline:
 test.describe("Creative Studio: brand kits", () => {
   test("empty states point to the brand kit first", async ({ page, context }) => {
     const errors = watchErrors(page);
-    await signupUser(context, "cre");
+    const u = await signupUser(context, "cre");
     await page.goto("/app/creative");
     await expect(page.getByRole("heading", { level: 1, name: "Creative Studio" })).toBeVisible();
     await expect(page.getByText("No briefs yet")).toBeVisible();
-    await expect(page.getByText(/You need a brand kit first/)).toBeVisible();
+    await expect(page.getByText(/First create a brand kit/)).toBeVisible();
+    await expect(page.getByRole("main").getByRole("link", { name: "Create brand kit" })).toHaveAttribute("href", "/app/creative/brands");
     await page.goto("/app/creative/new");
     await expect(page.getByText("Create a brand kit first")).toBeVisible();
     await page.getByRole("link", { name: "Create brand kit" }).click();
     await expect(page).toHaveURL(/creative\/brands/);
     await expect(page.getByText("No brand kits yet")).toBeVisible();
     expect(await axeSerious(page), "axe").toEqual([]);
+
+    // Once a brand kit exists the empty list stops asking for one and starts a brief instead.
+    const d = await db();
+    await d.query(`insert into "Brand" (id,"tenantId",name,"updatedAt") values ($1,$2,'Sunrise Realty',now())`, [`brand_${stamp()}`, u.tenantId]);
+    await page.goto("/app/creative");
+    await expect(page.getByText("No briefs yet")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Start your first brief" })).toBeVisible();
+    await expect(page.getByText(/First create a brand kit/)).toHaveCount(0);
     expect(errors, errors.join("\n")).toEqual([]);
+  });
+
+  test("a brief that does not exist says so and links back", async ({ page, context }) => {
+    await signupUser(context, "cre");
+    await page.goto("/app/creative/briefs/does-not-exist-e2e");
+    await expect(page.getByRole("heading", { level: 1, name: "Brief not found" })).toBeVisible();
+    await expect(page.getByText("This brief does not exist")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Try again" })).toHaveCount(0);
+    await page.getByRole("link", { name: "Back to Creative Studio" }).click();
+    await expect(page).toHaveURL(/\/app\/creative$/);
   });
 
   test("creating a real estate brand kit suggests Housing and asks to confirm; validation is plain", async ({ page, context }) => {

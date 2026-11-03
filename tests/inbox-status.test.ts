@@ -3,6 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const db = vi.hoisted(() => ({
   conversation: { findFirst: vi.fn(), findMany: vi.fn(), updateMany: vi.fn() },
   membership: { findFirst: vi.fn() },
+  // What routing's applyAssignment reads and writes for bulk assign.
+  team: { findFirst: vi.fn() },
+  teamMember: { findMany: vi.fn() },
+  agentAvailability: { upsert: vi.fn() },
+  platformSetting: { findUnique: vi.fn() },
+  contact: { updateMany: vi.fn() },
 }));
 const audit = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/db", () => ({ prisma: db }));
@@ -182,20 +188,52 @@ describe("bulkUpdate", () => {
       { id: "c4", reason: "not_found" },
     ]);
   });
-  it("assigns only to workspace members and stamps assignedAt", async () => {
+  it("assigns only to workspace members whose account is not disabled, each chat over the assignee it read", async () => {
     db.membership.findFirst.mockResolvedValueOnce(null);
     await expect(bulkUpdate(admin, { ids: ["c1"], action: "assign", userId: "zz" })).rejects.toMatchObject({ status: 400 });
-    db.membership.findFirst.mockResolvedValueOnce({ id: "m" });
+    db.membership.findFirst.mockResolvedValueOnce({ user: { disabledAt: new Date() } });
+    await expect(bulkUpdate(admin, { ids: ["c1"], action: "assign", userId: "u3" })).rejects.toMatchObject({ status: 400, message: "That person's account is disabled." });
+    expect(db.conversation.updateMany).not.toHaveBeenCalled();
+    db.membership.findFirst.mockResolvedValueOnce({ user: { disabledAt: null } });
     db.conversation.findMany.mockResolvedValue([rows[0]]);
-    await bulkUpdate(admin, { ids: ["c1"], action: "assign", userId: "u2" });
+    expect(await bulkUpdate(admin, { ids: ["c1"], action: "assign", userId: "u2" })).toEqual({ updated: 1, skipped: [] });
     expect(db.membership.findFirst).toHaveBeenLastCalledWith(expect.objectContaining({ where: { tenantId: "t1", userId: "u2" } }));
-    expect(db.conversation.updateMany).toHaveBeenCalledWith({ where: { tenantId: "t1", id: { in: ["c1"] } }, data: { assignedToId: "u2", assignedAt: expect.any(Date) } });
+    expect(db.membership.findFirst).toHaveBeenCalledTimes(3);
+    expect(db.conversation.updateMany).toHaveBeenCalledWith({ where: { id: "c1", tenantId: "t1", assignedToId: null }, data: { assignedToId: "u2", assignedAt: expect.any(Date) } });
+  });
+
+  it("makes the same write as assigning one chat: round-robin, contact owner and a routing.assign row per chat", async () => {
+    db.membership.findFirst.mockResolvedValue({ user: { disabledAt: null } });
+    db.conversation.findMany.mockResolvedValue([{ ...rows[0], contactId: "k1" }]);
+    db.platformSetting.findUnique.mockResolvedValue({ value: { setOwnerOnAssign: true } });
+    db.conversation.findFirst.mockResolvedValue({ contactId: "k1" });
+    await bulkUpdate(admin, { ids: ["c1"], action: "assign", userId: "u2" });
+    expect(db.agentAvailability.upsert).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId_userId: { tenantId: "t1", userId: "u2" } }, update: { lastAssignedAt: expect.any(Date) } }));
+    expect(db.contact.updateMany).toHaveBeenCalledWith({ where: { id: "k1", tenantId: "t1", ownerUserId: null }, data: { ownerUserId: "u2" } });
+    expect(audit).toHaveBeenCalledWith({ tenantId: "t1", userId: "u1", action: "routing.assign", target: "c1", meta: { assignedToId: "u2", previousId: null } });
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: "inbox.bulk.assign", meta: { requested: 1, updated: 1 } }));
+  });
+
+  it("keeps each chat inside its team and skips a chat that changed meanwhile, assigning the rest", async () => {
+    db.membership.findFirst.mockResolvedValue({ user: { disabledAt: null } });
+    db.conversation.findMany.mockResolvedValue([
+      { id: "sales", status: "open", assignedToId: null, teamId: "team_sales", tags: [] },
+      { id: "free", status: "open", assignedToId: null, teamId: null, tags: [] },
+      { id: "raced", status: "open", assignedToId: null, teamId: null, tags: [] },
+    ]);
+    db.team.findFirst.mockResolvedValue({ id: "team_sales" });
+    db.teamMember.findMany.mockResolvedValue([{ userId: "u7" }]);
+    db.conversation.updateMany.mockImplementation(async ({ where }: { where: { id: string } }) => ({ count: where.id === "raced" ? 0 : 1 }));
+    const r = await bulkUpdate(admin, { ids: ["sales", "free", "raced"], action: "assign", userId: "u2" });
+    expect(r).toEqual({ updated: 1, skipped: [{ id: "sales", reason: "not_in_team" }, { id: "raced", reason: "changed" }] });
+    expect(db.conversation.updateMany).toHaveBeenCalledTimes(2);
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: "inbox.bulk.assign", meta: { requested: 3, updated: 1 } }));
   });
   it("lets an agent assign chats only to themselves, like the single assign route", async () => {
     db.conversation.findMany.mockResolvedValue([rows[0]]);
     await expect(bulkUpdate(agent, { ids: ["c1"], action: "assign", userId: "u1" })).rejects.toMatchObject({ status: 403 });
     expect(db.conversation.updateMany).not.toHaveBeenCalled();
-    db.membership.findFirst.mockResolvedValueOnce({ id: "m" });
+    db.membership.findFirst.mockResolvedValueOnce({ user: { disabledAt: null } });
     expect((await bulkUpdate(agent, { ids: ["c1"], action: "assign", userId: "u2" })).updated).toBe(1);
   });
   it("applies tag changes per conversation", async () => {

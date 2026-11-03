@@ -81,6 +81,9 @@ test.describe.serial("builder: add every kind of step, fix the checks, publish",
     await page.getByRole("button", { name: "Add a step" }).click();
     for (const g of ["Messages", "Collect and decide", "Contact and team", "Flow control"]) await expect(palette(page).getByRole("heading", { name: g })).toBeVisible();
     await expect(palette(page).getByRole("button")).toHaveCount(17);
+    // the columns follow the list's own width, not the window's: next to the side panel each one stays wide enough to read
+    const widths = await palette(page).locator("h3").evaluateAll((els) => els.map((e) => (e.parentElement as HTMLElement).getBoundingClientRect().width));
+    for (const w of widths) expect(w, "palette column width").toBeGreaterThanOrEqual(180);
     const text = await palette(page).innerText();
     expect(text).not.toMatch(/send_text|set_attribute|round_robin|webhook\b/);
   });
@@ -200,7 +203,8 @@ test.describe.serial("builder: add every kind of step, fix the checks, publish",
     await expect(page.getByText("Draft saved.")).toBeVisible();
     await expect(page.getByText("Changes not published yet")).toBeVisible();
     await page.getByRole("button", { name: "Publish changes" }).click();
-    await expect(page.getByText("Published. New matching conversations will use this version.")).toBeVisible();
+    // the toast from the first publish may still be showing, so this one is the last
+    await expect(page.getByText("Published. New matching conversations will use this version.").last()).toBeVisible();
     await expect(page.getByText("Changes not published yet")).toHaveCount(0);
   });
 
@@ -296,8 +300,16 @@ test.describe.serial("builder: canvas editing, undo and redo, keyboard, tidy and
 
   test("Tidy up leaves no overlapping steps; Fit to screen brings every step into view", async () => {
     const { page } = ctx;
-    // pile up several steps (they start overlapped)
+    const before = await nodes(page).evaluateAll((els) => els.map((e) => e.getAttribute("data-node-id")));
     for (const l of ["Add a tag", "Wait", "Send a message"]) await addStep(page, l);
+    // each new step lands in a free place, so it never hides another step's text, even before Tidy up
+    const placed = await nodes(page).evaluateAll((els) => els.map((e) => ({ id: e.getAttribute("data-node-id"), ...e.getBoundingClientRect().toJSON() }) as { id: string | null; left: number; top: number; right: number; bottom: number }));
+    for (const a of placed.filter((n) => !before.includes(n.id)))
+      for (const b of placed) {
+        if (b.id === a.id) continue;
+        const overlap = a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1;
+        expect(overlap, `new step ${a.id} lands on step ${b.id}`).toBe(false);
+      }
     await page.getByRole("button", { name: "Tidy up" }).click();
     await page.getByRole("button", { name: "Fit to screen" }).click();
     const boxes = await nodes(page).evaluateAll((els) => els.map((e) => e.getBoundingClientRect()).map((r) => ({ l: r.left, t: r.top, r: r.right, b: r.bottom })));
@@ -317,6 +329,24 @@ test.describe.serial("builder: canvas editing, undo and redo, keyboard, tidy and
     }
     await page.getByRole("button", { name: "Zoom in" }).click();
     await page.getByRole("button", { name: "Zoom out" }).click();
+  });
+
+  test("a plain mouse wheel over the canvas scrolls the page; Ctrl and the wheel zooms", async () => {
+    const { page } = ctx;
+    const canvas = page.locator("#cb-canvas");
+    const stepWidth = async () => (await nodes(page).first().boundingBox())!.width;
+    await canvas.hover();
+    const width = await stepWidth();
+    const y = await page.evaluate(() => window.scrollY);
+    await page.mouse.wheel(0, y > 0 ? -400 : 400);
+    await expect.poll(() => page.evaluate(() => window.scrollY)).not.toBe(y);
+    expect(await stepWidth()).toBeCloseTo(width, 0);
+    await canvas.hover();
+    await page.keyboard.down("Control");
+    await page.mouse.wheel(0, -400);
+    await page.keyboard.up("Control");
+    await expect.poll(stepWidth).toBeGreaterThan(width + 1);
+    await page.getByRole("button", { name: "Fit to screen" }).click();
   });
 
   test("connect two steps by dragging from the round dot, select the line, remove it", async () => {

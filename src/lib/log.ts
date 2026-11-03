@@ -1,4 +1,6 @@
-import { randomBytes } from "node:crypto";
+// No Node-only imports: errorResponse in @/lib/tenancy logs through this module, and tenancy's HttpError is also bundled into
+// client components (through src/lib/reports/range.ts and others), so this file must load in a browser too. It only writes there
+// when called on the server.
 import { describeError, sanitizeMessage } from "@/lib/safe-error";
 
 export type Level = "debug" | "info" | "warn" | "error";
@@ -69,16 +71,20 @@ const defaultSink: Sink = (level, line) => {
   (level === "warn" || level === "error" ? process.stderr : process.stdout).write(`${line}\n`);
 };
 let sink: Sink = defaultSink;
-let reporter: ErrorReporter | null = null;
+
+// The reporter is kept on globalThis, not in a module variable: Next.js can load this module more than once (src/instrumentation.ts
+// and the route bundles), and a tracker registered in instrumentation's register() must see the errors logged by every copy.
+const REPORTER = Symbol.for("edwyz.log.errorReporter");
+const holder = globalThis as typeof globalThis & { [REPORTER]?: ErrorReporter | null };
 
 /** Tests and alternative transports replace the output. Pass null to restore stdout/stderr. */
 export function setLogSink(next: Sink | null) {
   sink = next ?? defaultSink;
 }
 
-/** Hook for an external error tracker. Receives scrubbed data only. No vendor is bundled. */
+/** Hook for an external error tracker, registered in src/instrumentation.ts. Receives scrubbed data only. No vendor is bundled. */
 export function setErrorReporter(next: ErrorReporter | null) {
-  reporter = next;
+  holder[REPORTER] = next;
 }
 
 function threshold(): number {
@@ -87,6 +93,7 @@ function threshold(): number {
 }
 
 function notify(fields: Fields, redacted: Fields) {
+  const reporter = holder[REPORTER];
   if (!reporter || !("err" in fields)) return;
   const { err, ...context } = redacted;
   const requestId = typeof context.reqId === "string" ? context.reqId : undefined;
@@ -127,7 +134,8 @@ export const log = createLogger();
 
 export const REQUEST_ID_HEADER = "x-request-id";
 
-export const newRequestId = () => randomBytes(8).toString("hex");
+/** 64 random bits as 16 hex characters. Web Crypto, so it works in the proxy, in route handlers and in tests. */
+export const newRequestId = () => Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, "0")).join("");
 
 /** Reuses an inbound id (set by nginx or the proxy) when it is well formed, otherwise mints one. */
 export function getRequestId(source: Request | Headers): string {

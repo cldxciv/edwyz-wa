@@ -35,7 +35,7 @@ function MediaFailed({ onRetry }: { onRetry: () => void }) {
     <div role="status" className="flex flex-wrap items-center gap-2 rounded-lg bg-black/5 px-3 py-2 text-xs">
       <span>Could not load this file.</span>
       <button type="button" onClick={onRetry} className="inline-flex items-center gap-1 font-semibold underline">
-        <Icon name="retry" className="h-3 w-3" /> Try again
+        <Icon name="retry" className="h-3 w-3" />{" "}Try again
       </button>
     </div>
   );
@@ -215,7 +215,7 @@ export function NoteBubble({ note, author, first, last, onUndo, members = [] }: 
       <div className={cn("border border-dashed border-amber-400 bg-amber-50 px-3.5 py-2 text-sm text-amber-950", first && last ? "rounded-2xl" : "rounded-xl", note.pending && "opacity-80")}>
         {first && (
           <p className="mb-0.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-800">
-            <Icon name="lock" className="h-3 w-3" /> Internal note, only your team sees this
+            <Icon name="lock" className="h-3 w-3" />{" "}Internal note, only your team sees this
           </p>
         )}
         <p className="whitespace-pre-wrap break-words">
@@ -229,7 +229,7 @@ export function NoteBubble({ note, author, first, last, onUndo, members = [] }: 
             <span className="flex items-center gap-2">
               <span>Saving...</span>
               <button type="button" onClick={() => onUndo(note)} className="inline-flex items-center gap-1 font-semibold underline">
-                <Icon name="undo" className="h-3 w-3" /> Undo
+                <Icon name="undo" className="h-3 w-3" />{" "}Undo
               </button>
             </span>
           )}

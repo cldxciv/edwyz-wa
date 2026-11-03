@@ -1,9 +1,11 @@
+import { audit } from "@/lib/auth/audit";
 import { prisma } from "@/lib/db";
 import { pauseAdsForBlockedTenants } from "@/lib/tenant-lifecycle";
 import type { WorkerModule } from "@/worker/registry";
 import { issueInvoiceOnce } from "./invoice";
 import { sendPaymentReceived } from "./notify";
 import { markApplied } from "./ordering";
+import { reconcilePlanChanges } from "./plan-change";
 import { fetchSubscription, listSubscriptionInvoices, razorpayConfigured } from "./razorpay";
 import { patchFromEntity } from "./sync";
 import { runUsageAlerts } from "./usage-alerts";
@@ -34,6 +36,29 @@ export async function reconcileSubscriptions(now = new Date()): Promise<number> 
     } catch {
       console.warn("[billing] reconcile failed for one subscription");
     }
+  }
+  return changed;
+}
+
+/**
+ * Ends plans assigned by hand in the admin console once their paid-until date has passed. Razorpay plans end through Razorpay
+ * (webhook, or reconcileSubscriptions above); a hand-assigned plan has nothing that would end it, so it is marked expired here.
+ * Access already ends on the date itself (computeBillingStatus); this keeps the row, the billing page and the admin lists in step.
+ * Idempotent: an expired row is never selected again.
+ */
+export async function expireManualPlans(now = new Date()): Promise<number> {
+  const ended = await prisma.subscription.findMany({
+    where: { razorpaySubscriptionId: null, status: "active", currentPeriodEnd: { lte: now } },
+    select: { id: true, tenantId: true, currentPeriodEnd: true },
+    take: 200,
+  });
+  let changed = 0;
+  for (const sub of ended) {
+    // The status in the where clause keeps a plan the admin re-assigned in the meantime (a new period, still active) untouched.
+    const { count } = await prisma.subscription.updateMany({ where: { id: sub.id, status: "active", razorpaySubscriptionId: null, currentPeriodEnd: { lte: now } }, data: { status: "expired" } });
+    if (count === 0) continue;
+    changed++;
+    await audit({ tenantId: sub.tenantId, action: "billing.manual_plan_expired", target: sub.id, meta: { endedAt: sub.currentPeriodEnd?.toISOString() ?? null } });
   }
   return changed;
 }
@@ -101,6 +126,8 @@ export const worker: WorkerModule = {
   queues: {},
   periodic: [
     { name: "billing-reconcile", everyMs: 15 * 60_000, run: () => reconcileSubscriptions() },
+    { name: "billing.manual-plan-expiry", everyMs: 15 * 60_000, run: () => expireManualPlans() },
+    { name: "billing.plan-changes", everyMs: 15 * 60_000, run: () => (razorpayConfigured() ? reconcilePlanChanges() : Promise.resolve(0)) },
     { name: "billing-invoice-backfill", everyMs: 30 * 60_000, run: () => backfillMissingInvoices() },
     { name: "billing.lock-pause-ads", everyMs: LOCK_SWEEP_MS, run: () => pauseAdsForBlockedTenants() },
     { name: "billing.usage-alerts", everyMs: USAGE_ALERT_MS, run: () => runUsageAlerts() },

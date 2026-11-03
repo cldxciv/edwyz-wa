@@ -12,8 +12,10 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const actor = await getActor(request);
     const tenantId = str(await readJson(request), "tenantId", "Workspace", 100);
-    const membership = await prisma.membership.findUnique({ where: { tenantId_userId: { tenantId, userId: actor.userId } } });
+    const membership = await prisma.membership.findUnique({ where: { tenantId_userId: { tenantId, userId: actor.userId } }, include: { tenant: { select: { deletedAt: true } } } });
     if (!membership) throw new HttpError(403, "You are not a member of that workspace.");
+    // Pinning the session to a deleted workspace would make every later request fail and sign the person out.
+    if (membership.tenant?.deletedAt) throw new HttpError(403, "That workspace has been deleted, so you cannot switch to it.");
 
     const refresh = readCookie(request, REFRESH_COOKIE);
     if (refresh) {

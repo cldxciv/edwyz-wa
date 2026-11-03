@@ -56,6 +56,13 @@ export type Summarizable = { status: string; createdAt: string; responseSeconds:
 
 export type LeadSummary = { waiting: number; replied: number; medianSeconds: number | null; fastPercent: number | null };
 
+type ConnectionAssets = { status: string; assets: { type: string; status: string }[] };
+
+/** Facebook Pages the workspace can receive leads from: active Page assets on connections that are not revoked. */
+export function connectedPageCount(connections: readonly ConnectionAssets[]): number {
+  return connections.filter((c) => c.status !== "revoked").reduce((n, c) => n + c.assets.filter((a) => a.type === "page" && a.status === "active").length, 0);
+}
+
 export function summarizeLeads(items: Summarizable[]): LeadSummary {
   const waiting = items.filter((l) => l.status === "new" && l.responseSeconds === null).length;
   const times = items.map((l) => l.responseSeconds).filter((n): n is number => n !== null).sort((a, b) => a - b);

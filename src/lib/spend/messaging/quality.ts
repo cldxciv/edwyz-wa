@@ -17,6 +17,10 @@
  * Once a day the poll also reads each WABA's billing currency (`GET <wabaId>?fields=currency`) for the Spending page note
  * ("Meta bills your WhatsApp account in USD...").
  *
+ * Messaging limit: the number read also asks for messaging_limit_tier, and once a day each WABA is read for
+ * whatsapp_business_manager_messaging_limit (the business portfolio's limit, which wins, as at onboarding). Both are stored with
+ * normalizeTier, so a missed webhook never leaves the broadcast throttle on a stale limit.
+ *
  * Account events (account_update): RESTRICTED_BIZ_INITIATED_MESSAGING opens `wa_restricted` (WABA) until the restriction's
  * expiration; DISABLE opens `waba_disabled` (all automated outbound held); SCHEDULE_FOR_DISABLE opens
  * `waba_disable_scheduled` (block_marketing) with an urgent notice; REINSTATE clears both; ACCOUNT_VIOLATION only notifies.
@@ -29,6 +33,7 @@ import { tenantIdsWithSendableToken } from "@/lib/admin/service";
 import { pauseBroadcastsForNumber } from "@/lib/broadcasts/process";
 import { prisma } from "@/lib/db";
 import { graphFetch } from "@/lib/graph";
+import { normalizeTier } from "@/lib/messaging-limit";
 import { describeError } from "@/lib/safe-error";
 import { clearBreaker, isOpen, listBreakers, openBreaker, type BreakerRow } from "../breakers/state";
 import { notifySpend } from "../notify";
@@ -166,9 +171,24 @@ export type GraphRead = (tenantId: string, path: string, fields: string) => Prom
 
 const graphRead: GraphRead = (tenantId, path, fields) => graphFetch<Record<string, unknown>>({ tenantId, path, query: { fields } });
 
-export type PollResult = { polled: number; failed: number; skipped: number; opened: number; cleared: number; currencies: number };
+export type PollResult = { polled: number; failed: number; skipped: number; opened: number; cleared: number; currencies: number; tiers: number };
 
-type PolledPhone = { id: string; tenantId: string; phoneNumberId: string; displayPhone: string; status: string; qualityRating: string | null; wabaRefId: string; waba: { wabaId: string } | null };
+type PolledPhone = {
+  id: string;
+  tenantId: string;
+  phoneNumberId: string;
+  displayPhone: string;
+  status: string;
+  qualityRating: string | null;
+  messagingLimitTier?: string | null;
+  wabaRefId: string;
+  waba: { wabaId: string } | null;
+};
+
+/** The fields of the 30-minute number read. */
+export const NUMBER_FIELDS = "quality_rating,status,messaging_limit_tier";
+export const PORTFOLIO_LIMIT_FIELD = "whatsapp_business_manager_messaging_limit";
+export const WABA_TIER_KEY = (tenantId: string) => `spend:waba-tier:${tenantId}`;
 
 const PAGE = 500;
 
@@ -176,13 +196,14 @@ const PAGE = 500;
 export async function pollQuality(opts: { now?: Date; read?: GraphRead } = {}): Promise<PollResult> {
   const now = opts.now ?? new Date();
   const read = opts.read ?? graphRead;
-  const result: PollResult = { polled: 0, failed: 0, skipped: 0, opened: 0, cleared: 0, currencies: 0 };
+  const result: PollResult = { polled: 0, failed: 0, skipped: 0, opened: 0, cleared: 0, currencies: 0, tiers: 0 };
   const wabas = new Map<string, { tenantId: string; wabaId: string }>();
+  const numberTiers: NumberTier[] = [];
   let after: string | undefined;
   for (let page = 0; page < 40; page++) {
     const phones = (await prisma.phoneNumber.findMany({
       where: { status: { in: [...POLLED_STATUSES] }, ...(after ? { id: { gt: after } } : {}) },
-      select: { id: true, tenantId: true, phoneNumberId: true, displayPhone: true, status: true, qualityRating: true, wabaRefId: true, waba: { select: { wabaId: true } } },
+      select: { id: true, tenantId: true, phoneNumberId: true, displayPhone: true, status: true, qualityRating: true, messagingLimitTier: true, wabaRefId: true, waba: { select: { wabaId: true } } },
       orderBy: { id: "asc" },
       take: PAGE,
     })) as PolledPhone[];
@@ -196,7 +217,7 @@ export async function pollQuality(opts: { now?: Date; read?: GraphRead } = {}): 
       if (phone.waba?.wabaId) wabas.set(phone.wabaRefId, { tenantId: phone.tenantId, wabaId: phone.waba.wabaId });
       let reading: Record<string, unknown>;
       try {
-        reading = await read(phone.tenantId, phone.phoneNumberId, "quality_rating,status");
+        reading = await read(phone.tenantId, phone.phoneNumberId, NUMBER_FIELDS);
       } catch (error) {
         // A failed read keeps the last known state (6.3).
         result.failed++;
@@ -204,6 +225,8 @@ export async function pollQuality(opts: { now?: Date; read?: GraphRead } = {}): 
         continue;
       }
       result.polled++;
+      const tier = normalizeTier(reading.messaging_limit_tier);
+      if (tier) numberTiers.push({ phone, tier });
       try {
         const rating = normalizeQualityRating(reading.quality_rating);
         const status = storedNumberStatus(reading.status);
@@ -224,8 +247,98 @@ export async function pollQuality(opts: { now?: Date; read?: GraphRead } = {}): 
     if (phones.length < PAGE) break;
     after = phones[phones.length - 1].id;
   }
-  result.currencies = await pollWabaCurrencies([...wabas.entries()].map(([id, w]) => ({ id, ...w })), { now, read });
+  const wabaList = [...wabas.entries()].map(([id, w]) => ({ id, ...w }));
+  result.currencies = await pollWabaCurrencies(wabaList, { now, read });
+  const portfolio = await pollPortfolioTiers(wabaList, { now, read });
+  result.tiers = portfolio.updated + (await applyNumberTiers(numberTiers, portfolio.known));
   return result;
+}
+
+// ===== Messaging limit =====
+
+type NumberTier = { phone: PolledPhone; tier: string };
+export type WabaTiers = { wabas: Record<string, { tier: string | null; at: string }> };
+
+/** The stored portfolio limits of a workspace's WABAs (read once a day). */
+export async function readWabaTiers(tenantId: string): Promise<WabaTiers> {
+  try {
+    const row = await prisma.platformSetting.findUnique({ where: { key: WABA_TIER_KEY(tenantId) } });
+    const v = row?.value as WabaTiers | null | undefined;
+    return v && typeof v === "object" && v.wabas && typeof v.wabas === "object" ? v : { wabas: {} };
+  } catch {
+    return { wabas: {} };
+  }
+}
+
+/** Stores a portfolio limit on every number of the portfolio (the WABAs sharing its business, or just this WABA). Returns how many changed. */
+async function storePortfolioTier(waba: { id: string; tenantId: string }, tier: string): Promise<number> {
+  const row = await prisma.waba.findFirst({ where: { id: waba.id, tenantId: waba.tenantId }, select: { businessId: true } });
+  const wabaIds = row?.businessId ? (await prisma.waba.findMany({ where: { tenantId: waba.tenantId, businessId: row.businessId }, select: { id: true } })).map((w) => w.id) : [waba.id];
+  const { count } = await prisma.phoneNumber.updateMany({
+    where: { tenantId: waba.tenantId, wabaRefId: { in: wabaIds.length ? wabaIds : [waba.id] }, OR: [{ messagingLimitTier: null }, { messagingLimitTier: { not: tier } }] },
+    data: { messagingLimitTier: tier },
+  });
+  return count;
+}
+
+/**
+ * Reads each WABA's portfolio messaging limit once a day and stores it on the portfolio's numbers. Returns the portfolio limit
+ * known for each WABA (fresh, or from the last daily read; null when Meta did not report one) and how many numbers changed.
+ * Never throws.
+ */
+export async function pollPortfolioTiers(
+  wabas: { id: string; tenantId: string; wabaId: string }[],
+  opts: { now?: Date; read?: GraphRead } = {},
+): Promise<{ known: Map<string, string | null>; updated: number }> {
+  const now = opts.now ?? new Date();
+  const read = opts.read ?? graphRead;
+  const known = new Map<string, string | null>();
+  let updated = 0;
+  const byTenant = new Map<string, typeof wabas>();
+  for (const w of wabas) byTenant.set(w.tenantId, [...(byTenant.get(w.tenantId) ?? []), w]);
+  for (const [tenantId, list] of byTenant) {
+    try {
+      const stored = await readWabaTiers(tenantId);
+      let changed = false;
+      for (const w of list) {
+        const last = stored.wabas[w.id];
+        known.set(w.id, last?.tier ?? null);
+        if (last && now.getTime() - Date.parse(last.at) < CURRENCY_POLL_MS) continue;
+        try {
+          const res = await read(tenantId, w.wabaId, PORTFOLIO_LIMIT_FIELD);
+          const tier = normalizeTier(res[PORTFOLIO_LIMIT_FIELD]);
+          stored.wabas[w.id] = { tier, at: now.toISOString() };
+          changed = true;
+          known.set(w.id, tier);
+          if (tier) updated += await storePortfolioTier({ id: w.id, tenantId }, tier);
+        } catch (error) {
+          console.warn(`[spend] could not read a WhatsApp account's messaging limit: ${describeError(error)}`);
+        }
+      }
+      if (changed) {
+        const value = stored as unknown as object;
+        await prisma.platformSetting.upsert({ where: { key: WABA_TIER_KEY(tenantId) }, create: { key: WABA_TIER_KEY(tenantId), value }, update: { value } });
+      }
+    } catch (error) {
+      console.error(`[spend] could not store WhatsApp messaging limits: ${describeError(error)}`);
+    }
+  }
+  return { known, updated };
+}
+
+/** Stores each number's own tier where its portfolio's limit is not known (the portfolio value wins when it is). Returns how many changed. */
+async function applyNumberTiers(readings: NumberTier[], portfolio: Map<string, string | null>): Promise<number> {
+  let changed = 0;
+  for (const { phone, tier } of readings) {
+    if (portfolio.get(phone.wabaRefId) || tier === phone.messagingLimitTier) continue;
+    try {
+      const { count } = await prisma.phoneNumber.updateMany({ where: { id: phone.id, tenantId: phone.tenantId }, data: { messagingLimitTier: tier } });
+      changed += count;
+    } catch (error) {
+      console.error(`[spend] could not store a number's messaging limit: ${describeError(error)}`);
+    }
+  }
+  return changed;
 }
 
 export type WabaCurrencies = { wabas: Record<string, { currency: string | null; at: string }> };

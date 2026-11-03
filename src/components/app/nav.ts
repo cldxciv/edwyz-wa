@@ -53,6 +53,8 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/app/ads/insights", label: "Ad insights", minRole: "agent", section: "insights", icon: "trend", keywords: ["ads", "performance", "spend"] },
   { href: "/app/ads/optimizer", label: "Optimiser", minRole: "admin", section: "insights", icon: "sliders", keywords: ["optimizer", "suggestions", "budget"] },
   { href: "/app/conversions", label: "Conversions", minRole: "admin", section: "insights", icon: "trend", keywords: ["meta", "dataset", "leads", "sales", "events", "tracking"] },
+  // Every workspace the person belongs to, one per project or client, with Switch and New project (src/components/projects).
+  { href: "/app/projects", label: "All projects", minRole: "agent", section: "insights", icon: "grid", keywords: ["projects", "workspaces", "clients", "switch", "new project", "overview", "businesses"] },
   { href: "/app/settings/team", label: "Team", minRole: "admin", group: "settings", section: "settings", icon: "team", keywords: ["members", "invite", "users", "roles"] },
   { href: "/app/settings/teams", label: "Teams", minRole: "admin", group: "settings", section: "settings", icon: "users", keywords: ["groups", "sales", "support", "departments"] },
   { href: "/app/settings/routing", label: "Chat routing", minRole: "admin", group: "settings", section: "settings", icon: "route", keywords: ["assign", "round robin", "availability"] },
@@ -81,8 +83,9 @@ export function groupNav(role: Role): NavGroup[] {
   return SECTIONS.map((s) => ({ ...s, items: visible.filter((i) => i.section === s.id) })).filter((g) => g.items.length > 0);
 }
 
+/** A link is active on its page and the pages under it. Home is the exception: every page sits under /app, so it only matches itself. */
 export function isActive(pathname: string, href: string): boolean {
-  return pathname === href || pathname.startsWith(`${href}/`);
+  return pathname === href || (href !== HOME_ITEM.href && pathname.startsWith(`${href}/`));
 }
 
 /** The single best matching link (longest href) so nested pages such as /app/ads/insights do not also light up /app/ads. */
@@ -116,4 +119,10 @@ export function mobileTabs(role: Role): NavItem[] {
     if (found) tabs.push(found);
   }
   return tabs;
+}
+
+/** True on a menu page with no tab of its own (Home, Leads, Settings...): it lives under More, so More shows where you are. */
+export function moreIsCurrent(pathname: string, role: Role): boolean {
+  if (activeHref(pathname, mobileTabs(role)) !== null) return false;
+  return pathname === HOME_ITEM.href || activeHref(pathname, navFor(role)) !== null;
 }

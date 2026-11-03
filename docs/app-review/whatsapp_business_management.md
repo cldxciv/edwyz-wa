@@ -1,7 +1,7 @@
 # whatsapp_business_management
 
-Phase: A (submitted, in review)
-Feature built: **BUILT**
+Phase: A (draft, not submitted: draft 1799953447868194, see `status.md`)
+Feature built: **BUILT**. In the draft: description, screencast and API test calls done (2026-10-30); "I agree" not yet ticked.
 
 VERIFY: permission names and the Instagram family (Facebook Login vs Instagram Login) in the App Dashboard permissions list at submission time.
 

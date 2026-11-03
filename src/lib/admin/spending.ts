@@ -750,6 +750,27 @@ export type TenantSpendingView = {
 
 const LIVE_ERROR = "Live figures could not be read right now. The list on the Spending page shows the last saved figures.";
 
+/**
+ * The live figures come from the owner's own spending summary, written to the owner ("Your workspace is new", "until you set a
+ * limit"). On the admin's workspace page "you" is the admin, so the known owner phrases are said about the workspace and its owner.
+ */
+const ADMIN_VOICE: [RegExp, string][] = [
+  [/\bYour workspace is new\b/g, "This workspace is new"],
+  [/after your first two payments, or ask support\./g, "after its first two payments, or when you mark it verified."],
+  [/after your first two payments/g, "after its first two payments"],
+  [/\buntil you set\b/g, "until the owner sets"],
+  [/\bUntil you do\b/g, "Until the owner does"],
+  [/^Choose which ad account Edwyz can spend from\./g, "The owner chooses which ad account Edwyz can spend from."],
+  [/You can set your ads limits now; they apply as soon as you connect one\./g, "The owner can set ads limits now; they apply as soon as an ad account is connected."],
+  [/\bYour plan\b/g, "The plan"],
+  [/\byour plan\b/g, "the plan"],
+  [/\bYour team\b/g, "The team"],
+];
+
+export function adminVoice(text: string): string {
+  return ADMIN_VOICE.reduce((t, [re, to]) => t.replace(re, to), text);
+}
+
 /** Live figures for one workspace, as its owner's Spending limits page computes them (summary.ts), plus the admin extras. */
 export async function getTenantSpending(adminUserId: string, tenantId: string, opts: AdminSpendOptions = {}): Promise<TenantSpendingView | null> {
   const db = opts.db ?? prisma;
@@ -792,7 +813,7 @@ export async function getTenantSpending(adminUserId: string, tenantId: string, o
           ceilingUnknown: v.limits.ceiling.unknown,
           binding: v.limits.binding,
           planCapMonthly: v.limits.planCapMonthly,
-          notes: v.notes,
+          notes: v.notes.map(adminVoice),
         };
       })
     : null;
@@ -807,7 +828,7 @@ export async function getTenantSpending(adminUserId: string, tenantId: string, o
     pots,
     liveError: summary ? null : LIVE_ERROR,
     freeze: summary?.freeze ?? null,
-    probation: summary?.probation ?? null,
+    probation: summary?.probation ? { ...summary.probation, why: adminVoice(summary.probation.why) } : null,
     probationSetting: control.probation,
     verifiedAt: control.verifiedAt?.toISOString() ?? null,
     timezones: summary?.timezones ?? null,

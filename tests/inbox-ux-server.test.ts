@@ -31,6 +31,8 @@ const guard = vi.hoisted(() => ({ assertCanActOnConversation: vi.fn() }));
 vi.mock("@/lib/inbox/status", async (orig) => ({ ...(await orig<typeof import("@/lib/inbox/status")>()), ...guard }));
 const media = vi.hoisted(() => ({ mediaExists: vi.fn(), mediaPublicUrl: vi.fn(), saveUpload: vi.fn() }));
 vi.mock("@/lib/content/media", async (orig) => ({ ...(await orig<typeof import("@/lib/content/media")>()), ...media }));
+const upload = vi.hoisted(() => ({ uploadAttachmentToMeta: vi.fn() }));
+vi.mock("@/lib/inbox/upload", () => upload);
 
 import { POST as attach } from "@/app/api/inbox/conversations/[id]/attachments/route";
 import { GET as contextRoute } from "@/app/api/inbox/conversations/[id]/context/route";
@@ -319,8 +321,16 @@ describe("messages route additions", () => {
       expect((await res.json()).message.body).toBe("Hi Asha, order A-12 is ready.");
     });
 
-    it("refuses opted-out contacts, unapproved templates and marketing without opt-in", async () => {
+    it("sends an order update (utility) to a contact who opted out: an opt-out stops marketing only", async () => {
+      db.conversation.findFirst.mockResolvedValue(convo({ optIn: false, optedOutAt: new Date() }));
+      const res = await messagesRoute(post("/x", { type: "template", templateId: "tp1", variables: ["Asha", "A-12"] }), ctx);
+      expect(res.status).toBe(201);
+      expect(inbox.sendTemplateMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses marketing to opted-out contacts, unapproved templates and marketing without opt-in", async () => {
       db.conversation.findFirst.mockResolvedValue(convo({ optedOutAt: new Date() }));
+      db.template.findFirst.mockResolvedValue(template({ category: "MARKETING" }));
       expect((await messagesRoute(post("/x", { type: "template", templateId: "tp1", variables: ["a", "b"] }), ctx)).status).toBe(422);
       db.conversation.findFirst.mockResolvedValue(convo());
       db.template.findFirst.mockResolvedValue(template({ status: "pending" }));
@@ -338,6 +348,19 @@ describe("messages route additions", () => {
       expect((await messagesRoute(post("/x", { type: "template", templateId: "nope", variables: [] }), ctx)).status).toBe(404);
       db.template.findFirst.mockResolvedValue(template({ components: [{ type: "HEADER", format: "IMAGE" }, { type: "BODY", text: "x" }] }));
       expect((await messagesRoute(post("/x", { type: "template", templateId: "tp1", variables: [] }), ctx)).status).toBe(422);
+    });
+
+    it("refuses a template of another WhatsApp Business Account than the chat's number before anything is queued", async () => {
+      db.conversation.findFirst.mockResolvedValue({ ...convo(), phoneNumber: { wabaRefId: "waba_a" } });
+      db.template.findFirst.mockResolvedValue(template({ wabaRefId: "waba_b" }));
+      const res = await messagesRoute(post("/x", { type: "template", templateId: "tp1", variables: ["Asha", "A-12"] }), ctx);
+      expect(res.status).toBe(422);
+      expect((await res.json()).error).toMatch(/different WhatsApp business account/);
+      expect(inbox.sendTemplateMessage).not.toHaveBeenCalled();
+      expect(db.conversation.findFirst.mock.calls[0][0].select.phoneNumber).toEqual({ select: { wabaRefId: true } });
+      db.template.findFirst.mockResolvedValue(template({ wabaRefId: "waba_a" }));
+      expect((await messagesRoute(post("/x", { type: "template", templateId: "tp1", variables: ["Asha", "A-12"] }), ctx)).status).toBe(201);
+      expect(inbox.sendTemplateMessage).toHaveBeenCalledTimes(1);
     });
 
     it("does not leak across tenants when the conversation is not theirs", async () => {
@@ -360,21 +383,23 @@ describe("chats assigned to a teammate", () => {
 });
 
 describe("attachments route", () => {
-  const upload = () => new Request(`${ORIGIN}/x`, { method: "POST", headers: { origin: ORIGIN, "content-type": "image/png", "content-length": "5" }, body: "bytes" });
+  const photo = () => new Request(`${ORIGIN}/x`, { method: "POST", headers: { origin: ORIGIN, "content-type": "image/png", "content-length": "5" }, body: "bytes" });
 
-  it("saves for the caller's tenant after checking the conversation", async () => {
+  it("uploads a photo to WhatsApp for the caller's tenant after checking the conversation, never to the media library", async () => {
     db.conversation.findFirst.mockResolvedValue({ id: "c1" });
-    media.saveUpload.mockResolvedValue({ key: "k.png", kind: "image", bytes: 5 });
-    const res = await attach(upload(), ctx);
+    upload.uploadAttachmentToMeta.mockResolvedValue({ mediaId: "55", kind: "image", mime: "image/png", bytes: 5, filename: "file" });
+    const res = await attach(photo(), ctx);
     expect(res.status).toBe(201);
+    expect(await res.json()).toMatchObject({ mediaId: "55", kind: "image" });
     expect(db.conversation.findFirst.mock.calls[0][0].where).toEqual({ id: "c1", tenantId: "t1" });
-    expect(media.saveUpload).toHaveBeenCalledWith("t1", expect.any(Request));
+    expect(upload.uploadAttachmentToMeta).toHaveBeenCalledWith("t1", "c1", expect.any(Request));
+    expect(media.saveUpload).not.toHaveBeenCalled();
   });
 
   it("404s for foreign conversations and rejects cross-site posts", async () => {
     db.conversation.findFirst.mockResolvedValue(null);
-    expect((await attach(upload(), ctx)).status).toBe(404);
-    expect(media.saveUpload).not.toHaveBeenCalled();
+    expect((await attach(photo(), ctx)).status).toBe(404);
+    expect(upload.uploadAttachmentToMeta).not.toHaveBeenCalled();
     expect((await attach(new Request(`${ORIGIN}/x`, { method: "POST", headers: { origin: "https://evil.example" }, body: "b" }), ctx)).status).toBe(403);
   });
 });

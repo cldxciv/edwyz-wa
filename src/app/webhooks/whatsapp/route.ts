@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { enqueue } from "@/lib/queue";
 import { checkWebhookHandshake, verifyWebhookSignature } from "@/lib/meta";
 import { readTextLimited } from "@/lib/http/body";
+import { requestLogger } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,7 @@ export function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const { log } = requestLogger(request, { route: "webhooks.whatsapp" });
   let rawBody: string;
   try {
     rawBody = await readTextLimited(request, MAX_BODY_BYTES);
@@ -24,7 +26,7 @@ export async function POST(request: Request) {
 
   const valid = verifyWebhookSignature(rawBody, request.headers.get("x-hub-signature-256"), process.env.META_APP_SECRET);
   if (!valid) {
-    console.warn("[webhook] rejected a request with a missing or invalid signature");
+    log.warn("webhook.signature_rejected");
     return new Response("Invalid signature", { status: 401, headers: noStore });
   }
 
@@ -38,8 +40,9 @@ export async function POST(request: Request) {
   try {
     const event = await prisma.webhookEvent.create({ data: { payload: parsed as object, signatureValid: true } });
     await enqueue("webhook", { eventId: event.id });
-  } catch {
-    console.error("[webhook] database write failed, asking Meta to retry");
+  } catch (error) {
+    // Meta retries a 5xx, so nothing is lost; the line says why (kind and a scrubbed message, never the payload).
+    log.error("webhook.store_failed", { err: error });
     return new Response("Temporarily unavailable", { status: 500, headers: noStore });
   }
   return new Response("OK", { status: 200, headers: noStore });

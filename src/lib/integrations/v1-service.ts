@@ -5,6 +5,7 @@ import type { SpendActor } from "@/lib/spend/types";
 import { normalizeBsuid } from "@/lib/contacts/identity";
 import { emitAttributeChanges, emitAutomationEvent, emitTagChanges } from "@/lib/automation/v2/emit";
 import { recordChannelConsent, recordConsentWithdrawn } from "@/lib/contacts/consent";
+import { mayReceive, OPTED_OUT_OF_MARKETING, sendKindForCategory } from "@/lib/contacts/opt-out";
 import { normalizePhone } from "@/lib/contacts/phone";
 import { listContacts } from "@/lib/contacts/service";
 import { prisma } from "@/lib/db";
@@ -100,7 +101,8 @@ async function sendTextV1(actor: Actor, body: Record<string, unknown>, phoneNumb
         select: { id: true, referral: true, createdAt: true },
       })
     : null;
-  if (contact?.optedOutAt) throw new HttpError(422, "This contact has opted out of messages.");
+  // A text goes only into an open chat, as a reply: an opt-out stops marketing only (lib/contacts/opt-out.ts).
+  if (contact && !mayReceive(contact, "service")) throw new HttpError(422, OPTED_OUT_OF_MARKETING);
   if (!conversation) throw new HttpError(409, "The 24-hour customer service window is closed. Send an approved template message instead.");
   const origin = opts.origin ?? "api";
   // A free-form message cannot carry a hold: it is refused here, synchronously, when the WhatsApp limit cannot pay for it.
@@ -127,7 +129,7 @@ async function sendTemplateV1(actor: Actor, body: Record<string, unknown>, sende
   if (!template) throw new HttpError(404, "No approved template with this name and language.");
 
   const existing = await prisma.contact.findFirst({ where: locatorWhere(tenantId, who) });
-  if (existing?.optedOutAt) throw new HttpError(422, "This contact has opted out of messages.");
+  if (existing && !mayReceive(existing, sendKindForCategory(template.category))) throw new HttpError(422, OPTED_OUT_OF_MARKETING);
   if (template.category.toLowerCase() === "marketing" && !existing?.optIn) {
     throw new HttpError(422, "Marketing templates can only be sent to contacts with a recorded opt-in. Record the opt-in first.");
   }
@@ -217,7 +219,7 @@ export async function upsertContactV1(actor: Actor, body: Record<string, unknown
   }
 
   const existing = await prisma.contact.findFirst({ where: { tenantId, phone } });
-  if (existing?.optedOutAt && body.optIn === true) throw new HttpError(422, "This contact opted out. They must opt in again by messaging you.");
+  if (existing?.optedOutAt && body.optIn === true) throw new HttpError(422, "This contact opted out of marketing messages. Only they can opt in again, by sending START to your WhatsApp number.");
   // A contact who is already opted in keeps the source and time of the first consent: repeating optIn: true must not overwrite the proof.
   const alreadyIn = !!existing?.optIn;
   const newConsent = body.optIn === true && !alreadyIn;

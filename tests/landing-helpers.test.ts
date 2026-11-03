@@ -260,7 +260,9 @@ describe("metadata and structured data", () => {
     for (const p of ["", "/pricing", "/signup", "/docs", "/login", "/privacy", "/terms", "/data-deletion"]) {
       expect(urls).toContain(`https://wa.edwyz.com${p}`);
     }
-    expect(urls.some((u) => /\/(api|app|admin|oauth|webhooks|approve|reset-password|verify-email|accept-invite)/.test(u))).toBe(false);
+    // The docs subpages are public and indexable too (each has its own canonical).
+    for (const p of ["authentication", "endpoints", "webhooks", "rate-limits", "errors"]) expect(urls).toContain(`https://wa.edwyz.com/docs/${p}`);
+    expect(urls.some((u) => /^https:\/\/wa\.edwyz\.com\/(api|app|admin|oauth|webhooks|approve|s|reset-password|verify-email|accept-invite)(\/|$)/.test(u))).toBe(false);
     expect(sitemapEntries()).toHaveLength(SITEMAP_ENTRIES.length);
   });
 

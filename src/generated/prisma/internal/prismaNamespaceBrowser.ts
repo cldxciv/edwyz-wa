@@ -146,7 +146,16 @@ export const ModelName = {
   ActionInvocation: 'ActionInvocation',
   Notice: 'Notice',
   NoticeReceipt: 'NoticeReceipt',
-  NoticeScanState: 'NoticeScanState'
+  NoticeScanState: 'NoticeScanState',
+  AdMedia: 'AdMedia',
+  AdAudience: 'AdAudience',
+  AdAudienceUpload: 'AdAudienceUpload',
+  AdTest: 'AdTest',
+  InsightBreakdown: 'InsightBreakdown',
+  StudioItem: 'StudioItem',
+  StudioJob: 'StudioJob',
+  CanvaConnection: 'CanvaConnection',
+  CanvaReturnState: 'CanvaReturnState'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -837,7 +846,13 @@ export const BrandScalarFieldEnum = {
   industry: 'industry',
   specialAdCategory: 'specialAdCategory',
   createdAt: 'createdAt',
-  updatedAt: 'updatedAt'
+  updatedAt: 'updatedAt',
+  logoMediaKey: 'logoMediaKey',
+  fontStyle: 'fontStyle',
+  defaultLanguage: 'defaultLanguage',
+  tagline: 'tagline',
+  contactLine: 'contactLine',
+  isDefault: 'isDefault'
 } as const
 
 export type BrandScalarFieldEnum = (typeof BrandScalarFieldEnum)[keyof typeof BrandScalarFieldEnum]
@@ -933,7 +948,19 @@ export const AdCampaignScalarFieldEnum = {
   assistantKey: 'assistantKey',
   lifetimeBudgetMinor: 'lifetimeBudgetMinor',
   targetCostPerResultMinor: 'targetCostPerResultMinor',
-  sandbox: 'sandbox'
+  sandbox: 'sandbox',
+  goal: 'goal',
+  surface: 'surface',
+  sourceKind: 'sourceKind',
+  sourceRef: 'sourceRef',
+  sourcePostTargetId: 'sourcePostTargetId',
+  placementMode: 'placementMode',
+  reviewState: 'reviewState',
+  reviewCheckedAt: 'reviewCheckedAt',
+  advantageState: 'advantageState',
+  discardedAt: 'discardedAt',
+  runDays: 'runDays',
+  startMode: 'startMode'
 } as const
 
 export type AdCampaignScalarFieldEnum = (typeof AdCampaignScalarFieldEnum)[keyof typeof AdCampaignScalarFieldEnum]
@@ -949,7 +976,16 @@ export const AdSetScalarFieldEnum = {
   targeting: 'targeting',
   dailyBudgetMinor: 'dailyBudgetMinor',
   createdAt: 'createdAt',
-  lifetimeBudgetMinor: 'lifetimeBudgetMinor'
+  lifetimeBudgetMinor: 'lifetimeBudgetMinor',
+  variantKey: 'variantKey',
+  audienceId: 'audienceId',
+  optimizationGoal: 'optimizationGoal',
+  destinationType: 'destinationType',
+  bidStrategy: 'bidStrategy',
+  bidAmountMinor: 'bidAmountMinor',
+  schedule: 'schedule',
+  effectiveStatus: 'effectiveStatus',
+  effectivePlacements: 'effectivePlacements'
 } as const
 
 export type AdSetScalarFieldEnum = (typeof AdSetScalarFieldEnum)[keyof typeof AdSetScalarFieldEnum]
@@ -964,7 +1000,14 @@ export const AdScalarFieldEnum = {
   name: 'name',
   status: 'status',
   creative: 'creative',
-  createdAt: 'createdAt'
+  createdAt: 'createdAt',
+  format: 'format',
+  mediaIds: 'mediaIds',
+  variantLabel: 'variantLabel',
+  sourcePostRef: 'sourcePostRef',
+  effectiveStatus: 'effectiveStatus',
+  reviewFeedback: 'reviewFeedback',
+  reviewCheckedAt: 'reviewCheckedAt'
 } as const
 
 export type AdScalarFieldEnum = (typeof AdScalarFieldEnum)[keyof typeof AdScalarFieldEnum]
@@ -983,7 +1026,15 @@ export const InsightSnapshotScalarFieldEnum = {
   frequency: 'frequency',
   qualityRanking: 'qualityRanking',
   raw: 'raw',
-  createdAt: 'createdAt'
+  createdAt: 'createdAt',
+  reach: 'reach',
+  linkClicks: 'linkClicks',
+  thruplays: 'thruplays',
+  videoP25: 'videoP25',
+  videoP50: 'videoP50',
+  videoP75: 'videoP75',
+  videoP100: 'videoP100',
+  messagingStarts: 'messagingStarts'
 } as const
 
 export type InsightSnapshotScalarFieldEnum = (typeof InsightSnapshotScalarFieldEnum)[keyof typeof InsightSnapshotScalarFieldEnum]
@@ -1015,7 +1066,17 @@ export const LeadFormScalarFieldEnum = {
   name: 'name',
   consentText: 'consentText',
   status: 'status',
-  createdAt: 'createdAt'
+  createdAt: 'createdAt',
+  origin: 'origin',
+  formType: 'formType',
+  locale: 'locale',
+  spec: 'spec',
+  metaStatus: 'metaStatus',
+  syncedAt: 'syncedAt',
+  copiedFromId: 'copiedFromId',
+  lastBackfillAt: 'lastBackfillAt',
+  testLeadUntil: 'testLeadUntil',
+  hiddenAt: 'hiddenAt'
 } as const
 
 export type LeadFormScalarFieldEnum = (typeof LeadFormScalarFieldEnum)[keyof typeof LeadFormScalarFieldEnum]
@@ -1035,7 +1096,13 @@ export const LeadScalarFieldEnum = {
   status: 'status',
   assignedToId: 'assignedToId',
   firstResponseAt: 'firstResponseAt',
-  createdAt: 'createdAt'
+  createdAt: 'createdAt',
+  source: 'source',
+  platform: 'platform',
+  adsetMetaId: 'adsetMetaId',
+  isOrganic: 'isOrganic',
+  isTest: 'isTest',
+  conversationId: 'conversationId'
 } as const
 
 export type LeadScalarFieldEnum = (typeof LeadScalarFieldEnum)[keyof typeof LeadScalarFieldEnum]
@@ -1871,6 +1938,218 @@ export const NoticeScanStateScalarFieldEnum = {
 } as const
 
 export type NoticeScanStateScalarFieldEnum = (typeof NoticeScanStateScalarFieldEnum)[keyof typeof NoticeScanStateScalarFieldEnum]
+
+
+export const AdMediaScalarFieldEnum = {
+  id: 'id',
+  tenantId: 'tenantId',
+  adAccountAssetId: 'adAccountAssetId',
+  source: 'source',
+  sourceKey: 'sourceKey',
+  kind: 'kind',
+  mime: 'mime',
+  bytes: 'bytes',
+  sha256: 'sha256',
+  width: 'width',
+  height: 'height',
+  durationMs: 'durationMs',
+  videoCodec: 'videoCodec',
+  rotation: 'rotation',
+  ratio: 'ratio',
+  fits: 'fits',
+  problems: 'problems',
+  metaImageHash: 'metaImageHash',
+  metaVideoId: 'metaVideoId',
+  metaThumbHash: 'metaThumbHash',
+  status: 'status',
+  error: 'error',
+  attempts: 'attempts',
+  nextCheckAt: 'nextCheckAt',
+  lastUsedAt: 'lastUsedAt',
+  adOnly: 'adOnly',
+  createdByUserId: 'createdByUserId',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type AdMediaScalarFieldEnum = (typeof AdMediaScalarFieldEnum)[keyof typeof AdMediaScalarFieldEnum]
+
+
+export const AdAudienceScalarFieldEnum = {
+  id: 'id',
+  tenantId: 'tenantId',
+  adAccountAssetId: 'adAccountAssetId',
+  kind: 'kind',
+  name: 'name',
+  metaAudienceId: 'metaAudienceId',
+  spec: 'spec',
+  status: 'status',
+  sizeLower: 'sizeLower',
+  sizeUpper: 'sizeUpper',
+  deliveryStatus: 'deliveryStatus',
+  consentBasis: 'consentBasis',
+  rowsUploaded: 'rowsUploaded',
+  lastSyncedAt: 'lastSyncedAt',
+  lastError: 'lastError',
+  createdByUserId: 'createdByUserId',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt',
+  deletedAt: 'deletedAt'
+} as const
+
+export type AdAudienceScalarFieldEnum = (typeof AdAudienceScalarFieldEnum)[keyof typeof AdAudienceScalarFieldEnum]
+
+
+export const AdAudienceUploadScalarFieldEnum = {
+  id: 'id',
+  tenantId: 'tenantId',
+  audienceId: 'audienceId',
+  sessionId: 'sessionId',
+  mode: 'mode',
+  totalRows: 'totalRows',
+  sentRows: 'sentRows',
+  batchSeq: 'batchSeq',
+  status: 'status',
+  requestedByUserId: 'requestedByUserId',
+  startedAt: 'startedAt',
+  finishedAt: 'finishedAt',
+  error: 'error',
+  createdAt: 'createdAt'
+} as const
+
+export type AdAudienceUploadScalarFieldEnum = (typeof AdAudienceUploadScalarFieldEnum)[keyof typeof AdAudienceUploadScalarFieldEnum]
+
+
+export const AdTestScalarFieldEnum = {
+  id: 'id',
+  tenantId: 'tenantId',
+  campaignId: 'campaignId',
+  kind: 'kind',
+  mode: 'mode',
+  metaStudyId: 'metaStudyId',
+  metric: 'metric',
+  minResults: 'minResults',
+  minDays: 'minDays',
+  status: 'status',
+  winnerAdSetId: 'winnerAdSetId',
+  verdict: 'verdict',
+  decidedAt: 'decidedAt',
+  decidedByUserId: 'decidedByUserId',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type AdTestScalarFieldEnum = (typeof AdTestScalarFieldEnum)[keyof typeof AdTestScalarFieldEnum]
+
+
+export const InsightBreakdownScalarFieldEnum = {
+  id: 'id',
+  tenantId: 'tenantId',
+  entityType: 'entityType',
+  entityMetaId: 'entityMetaId',
+  date: 'date',
+  dimension: 'dimension',
+  dimKey: 'dimKey',
+  spendMinor: 'spendMinor',
+  impressions: 'impressions',
+  reach: 'reach',
+  clicks: 'clicks',
+  results: 'results',
+  thruplays: 'thruplays',
+  raw: 'raw',
+  syncedAt: 'syncedAt'
+} as const
+
+export type InsightBreakdownScalarFieldEnum = (typeof InsightBreakdownScalarFieldEnum)[keyof typeof InsightBreakdownScalarFieldEnum]
+
+
+export const StudioItemScalarFieldEnum = {
+  id: 'id',
+  tenantId: 'tenantId',
+  mediaKey: 'mediaKey',
+  kind: 'kind',
+  source: 'source',
+  title: 'title',
+  templateId: 'templateId',
+  templateVersion: 'templateVersion',
+  size: 'size',
+  format: 'format',
+  width: 'width',
+  height: 'height',
+  bytes: 'bytes',
+  sha256: 'sha256',
+  inputs: 'inputs',
+  brandId: 'brandId',
+  canvaDesignId: 'canvaDesignId',
+  canvaPage: 'canvaPage',
+  canvaUserId: 'canvaUserId',
+  parentItemId: 'parentItemId',
+  createdByUserId: 'createdByUserId',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type StudioItemScalarFieldEnum = (typeof StudioItemScalarFieldEnum)[keyof typeof StudioItemScalarFieldEnum]
+
+
+export const StudioJobScalarFieldEnum = {
+  id: 'id',
+  tenantId: 'tenantId',
+  userId: 'userId',
+  kind: 'kind',
+  state: 'state',
+  input: 'input',
+  progress: 'progress',
+  resultItemIds: 'resultItemIds',
+  error: 'error',
+  attempts: 'attempts',
+  nextPollAt: 'nextPollAt',
+  finishedAt: 'finishedAt',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type StudioJobScalarFieldEnum = (typeof StudioJobScalarFieldEnum)[keyof typeof StudioJobScalarFieldEnum]
+
+
+export const CanvaConnectionScalarFieldEnum = {
+  id: 'id',
+  tenantId: 'tenantId',
+  userId: 'userId',
+  canvaUserId: 'canvaUserId',
+  canvaTeamId: 'canvaTeamId',
+  displayName: 'displayName',
+  scopes: 'scopes',
+  accessTokenEnc: 'accessTokenEnc',
+  refreshTokenEnc: 'refreshTokenEnc',
+  accessExpiresAt: 'accessExpiresAt',
+  refreshingUntil: 'refreshingUntil',
+  status: 'status',
+  lastError: 'lastError',
+  lastUsedAt: 'lastUsedAt',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type CanvaConnectionScalarFieldEnum = (typeof CanvaConnectionScalarFieldEnum)[keyof typeof CanvaConnectionScalarFieldEnum]
+
+
+export const CanvaReturnStateScalarFieldEnum = {
+  id: 'id',
+  tenantId: 'tenantId',
+  userId: 'userId',
+  connectionId: 'connectionId',
+  designId: 'designId',
+  purpose: 'purpose',
+  itemId: 'itemId',
+  exportSpec: 'exportSpec',
+  returnPath: 'returnPath',
+  createdAt: 'createdAt',
+  expiresAt: 'expiresAt',
+  usedAt: 'usedAt'
+} as const
+
+export type CanvaReturnStateScalarFieldEnum = (typeof CanvaReturnStateScalarFieldEnum)[keyof typeof CanvaReturnStateScalarFieldEnum]
 
 
 export const SortOrder = {

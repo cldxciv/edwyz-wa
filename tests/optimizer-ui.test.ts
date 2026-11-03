@@ -9,7 +9,9 @@ import {
   numbersFor,
   proposalStatusLabel,
   revertDeadline,
+  settingLabel,
   settingToText,
+  sharedCurrency,
   shiftNames,
   validateSettings,
 } from "@/components/optimizer/helpers";
@@ -103,6 +105,19 @@ describe("settings form", () => {
     expect(settingToText(spec, 50050, "INR")).toBe("500.5");
     expect(settingToText(spec, 500, "JPY")).toBe("500");
     expect(settingToText(SETTING_SPECS.find((s) => s.key === "cprMultiple")!, 2, "INR")).toBe("2");
+  });
+
+  it("always names the unit of a money field, even before a limit with a currency is set", () => {
+    const spend = SETTING_SPECS.find((s) => s.key === "minSpendMinor")!;
+    expect(settingLabel(spend, "INR")).toBe("Wait until an ad has spent (INR)");
+    expect(settingLabel(spend, null)).toBe("Wait until an ad has spent (in your ad account's currency)");
+    expect(settingLabel(SETTING_SPECS.find((s) => s.key === "maxShiftPct")!, null)).toBe("Most budget to move at once (percent)");
+    // Without a limit the currency comes from the ad accounts, but only when they agree on one.
+    expect(sharedCurrency([{ currency: "INR" }, { currency: "INR" }])).toBe("INR");
+    expect(sharedCurrency([{ currency: "INR" }, { currency: "USD" }])).toBeNull();
+    expect(sharedCurrency([{ currency: null }])).toBeNull();
+    expect(sharedCurrency([])).toBeNull();
+    expect(sharedCurrency(undefined)).toBeNull();
   });
 
   // The expiry field moved from expireDays (1-30 days) to expireHours (1-48 hours): docs/SPEND-CONTROLS-SPEC.md 7.3 makes a

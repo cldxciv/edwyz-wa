@@ -1,4 +1,4 @@
-import { MAX_BUTTONS } from "@/lib/templates/validate";
+import { MAX_BUTTONS, MAX_CODE_EXPIRY_MINUTES, MAX_PHONE_BUTTONS, MAX_URL_BUTTONS, buttonMixProblem, variableAtEdge } from "@/lib/templates/validate";
 
 export type ButtonDraft = { type: "QUICK_REPLY" | "URL" | "PHONE_NUMBER"; text: string; url: string; urlExample: string; phone: string };
 
@@ -31,6 +31,10 @@ export type TemplateDraft = {
   bodyExamples: string[];
   footer: string;
   buttons: ButtonDraft[];
+  /** Authentication only. Meta writes the message; these are the three things it lets you choose. */
+  securityNote: boolean;
+  codeExpiry: string;
+  copyCodeLabel: string;
 };
 
 export const emptyDraft = (): TemplateDraft => ({
@@ -45,20 +49,55 @@ export const emptyDraft = (): TemplateDraft => ({
   bodyExamples: [],
   footer: "",
   buttons: [],
+  securityNote: true,
+  codeExpiry: "10",
+  copyCodeLabel: "Copy code",
 });
 
+/** Meta's language codes: English and the main Indian languages first, then others. */
 export const LANGUAGES: [string, string][] = [
   ["en_US", "English (US)"],
   ["en_GB", "English (UK)"],
   ["en", "English"],
   ["hi", "Hindi"],
-  ["es", "Spanish"],
+  ["bn", "Bengali"],
+  ["gu", "Gujarati"],
+  ["kn", "Kannada"],
+  ["ml", "Malayalam"],
+  ["mr", "Marathi"],
+  ["pa", "Punjabi"],
+  ["ta", "Tamil"],
+  ["te", "Telugu"],
+  ["ur", "Urdu"],
+  ["ar", "Arabic"],
   ["fr", "French"],
   ["de", "German"],
-  ["pt_BR", "Portuguese (Brazil)"],
-  ["ar", "Arabic"],
   ["id", "Indonesian"],
+  ["pt_BR", "Portuguese (Brazil)"],
+  ["es", "Spanish"],
 ];
+
+/** "+91 98765 43210" or "+91-98765-43210" to "+919876543210", the form Meta stores for a call button. */
+export const normalizePhone = (value: string) => value.replace(/[\s().-]/g, "");
+
+/**
+ * Buttons in the order they are sent: Meta wants quick replies side by side, so they move together to where the first one
+ * is (before or after the website and call buttons). Each kind keeps its own order.
+ */
+export function groupedButtons<T extends { type: string }>(buttons: readonly T[]): T[] {
+  const quick = buttons.filter((b) => b.type === "QUICK_REPLY");
+  const other = buttons.filter((b) => b.type !== "QUICK_REPLY");
+  if (!quick.length || !other.length) return [...buttons];
+  return buttons[0].type === "QUICK_REPLY" ? [...quick, ...other] : [...other, ...quick];
+}
+
+/** Whether button `index` may switch to `type` without going over Meta's limit of website or call buttons. */
+export function buttonTypeAllowed(buttons: readonly ButtonDraft[], index: number, type: ButtonDraft["type"]): boolean {
+  const others = buttons.filter((b, i) => i !== index && b.type === type).length;
+  if (type === "URL") return others < MAX_URL_BUTTONS;
+  if (type === "PHONE_NUMBER") return others < MAX_PHONE_BUTTONS;
+  return true;
+}
 
 /** Variable numbers found in text, in order: "Hi {{1}}, {{2}}" gives [1, 2]. Never throws. */
 export function detectVariables(text: string): number[] {
@@ -80,7 +119,7 @@ export function fillExamples(text: string, examples: string[]): string {
   return text.replace(/\{\{(\d+)\}\}/g, (match, n: string) => examples[Number(n) - 1]?.trim() || match);
 }
 
-export type DraftErrors = Partial<Record<"name" | "language" | "header" | "headerExample" | "headerMedia" | "body" | "footer" | "buttons", string>> & {
+export type DraftErrors = Partial<Record<"name" | "language" | "header" | "headerExample" | "headerMedia" | "body" | "footer" | "buttons" | "codeExpiry" | "copyCodeLabel", string>> & {
   bodyExamples?: Record<number, string>;
   buttonErrors?: Record<number, string>;
 };
@@ -90,6 +129,17 @@ export function validateDraft(d: TemplateDraft): DraftErrors {
   if (!d.name) e.name = "Enter a name.";
   else if (!/^[a-z0-9_]+$/.test(d.name)) e.name = "Use only lowercase letters, numbers and underscores, like order_update.";
   else if (d.name.length > 512) e.name = "Make the name shorter (512 characters at most).";
+
+  if (d.category === "AUTHENTICATION") {
+    const expiry = d.codeExpiry.trim();
+    if (expiry && (!/^\d{1,3}$/.test(expiry) || Number(expiry) < 1 || Number(expiry) > MAX_CODE_EXPIRY_MINUTES)) {
+      e.codeExpiry = `Enter a whole number of minutes from 1 to ${MAX_CODE_EXPIRY_MINUTES}, or leave it empty.`;
+    }
+    const label = d.copyCodeLabel.trim();
+    if (!label) e.copyCodeLabel = "Give the button a label, like Copy code.";
+    else if (label.length > 25) e.copyCodeLabel = "Make the button label shorter (25 characters at most).";
+    return e;
+  }
 
   if (d.headerKind !== "TEXT" && !d.headerMedia) e.headerMedia = "Upload a sample file for the header, or remove the header.";
   if (d.headerKind === "TEXT" && d.header) {
@@ -106,6 +156,7 @@ export function validateDraft(d: TemplateDraft): DraftErrors {
     const missing: Record<number, string> = {};
     for (let i = 0; i < requiredExamples(d.body); i++) if (!d.bodyExamples[i]?.trim()) missing[i] = "Enter a sample value for this placeholder.";
     if (Object.keys(missing).length) e.bodyExamples = missing;
+    if (variableAtEdge(d.body)) e.body = "Meta does not accept a message that starts or ends with a placeholder. Add a word before or after it.";
   }
 
   if (d.footer) {
@@ -113,7 +164,10 @@ export function validateDraft(d: TemplateDraft): DraftErrors {
     else if (/\{\{/.test(d.footer)) e.footer = "A footer cannot have placeholders.";
   }
 
+  // Quick replies are grouped automatically when the template is built (groupedButtons), so only the type limits can fail here.
+  const mix = buttonMixProblem(groupedButtons(d.buttons).map((b) => b.type));
   if (d.buttons.length > MAX_BUTTONS) e.buttons = `A template can have at most ${MAX_BUTTONS} buttons. Remove one to continue.`;
+  else if (mix) e.buttons = `${mix} Remove one, or change what it does.`;
   const buttonErrors: Record<number, string> = {};
   d.buttons.forEach((b, i) => {
     if (!b.text.trim()) buttonErrors[i] = "Give this button a label.";
@@ -121,7 +175,7 @@ export function validateDraft(d: TemplateDraft): DraftErrors {
     else if (b.type === "URL" && !/^https:\/\//.test(b.url)) buttonErrors[i] = "The website address must start with https://";
     else if (b.type === "URL" && detectVariables(b.url).length > 1) buttonErrors[i] = "The website address can have only one placeholder.";
     else if (b.type === "URL" && detectVariables(b.url).length === 1 && !b.urlExample.trim()) buttonErrors[i] = "Enter a sample address for the placeholder.";
-    else if (b.type === "PHONE_NUMBER" && !/^\+\d{7,15}$/.test(b.phone)) buttonErrors[i] = "Enter the phone number with country code, like +919876543210.";
+    else if (b.type === "PHONE_NUMBER" && !/^\+\d{7,15}$/.test(normalizePhone(b.phone))) buttonErrors[i] = "Enter the phone number with + and the country code, like +91 98765 43210.";
   });
   if (Object.keys(buttonErrors).length) e.buttonErrors = buttonErrors;
   return e;
@@ -131,6 +185,14 @@ export const hasErrors = (e: DraftErrors) => Object.keys(e).length > 0;
 
 /** Draft to the Meta component shape the API validates. */
 export function buildComponents(d: TemplateDraft): Record<string, unknown>[] {
+  if (d.category === "AUTHENTICATION") {
+    const expiry = d.codeExpiry.trim();
+    return [
+      { type: "BODY", add_security_recommendation: d.securityNote },
+      ...(expiry ? [{ type: "FOOTER", code_expiration_minutes: Number(expiry) }] : []),
+      { type: "BUTTONS", buttons: [{ type: "OTP", otp_type: "COPY_CODE", text: d.copyCodeLabel.trim() }] },
+    ];
+  }
   const components: Record<string, unknown>[] = [];
   if (d.headerKind !== "TEXT" && d.headerMedia) {
     components.push({ type: "HEADER", format: d.headerKind, example: { header_handle: [d.headerMedia.handle] } });
@@ -147,9 +209,9 @@ export function buildComponents(d: TemplateDraft): Record<string, unknown>[] {
   if (d.buttons.length) {
     components.push({
       type: "BUTTONS",
-      buttons: d.buttons.map((b) => {
+      buttons: groupedButtons(d.buttons).map((b) => {
         if (b.type === "QUICK_REPLY") return { type: b.type, text: b.text };
-        if (b.type === "PHONE_NUMBER") return { type: b.type, text: b.text, phone_number: b.phone };
+        if (b.type === "PHONE_NUMBER") return { type: b.type, text: b.text, phone_number: normalizePhone(b.phone) };
         const out: Record<string, unknown> = { type: b.type, text: b.text, url: b.url };
         if (detectVariables(b.url).length) out.example = [b.urlExample.trim()];
         return out;
@@ -158,6 +220,53 @@ export function buildComponents(d: TemplateDraft): Record<string, unknown>[] {
   }
   return components;
 }
+
+type Row = Record<string, unknown>;
+const rowOf = (v: unknown): Row => (v && typeof v === "object" && !Array.isArray(v) ? (v as Row) : {});
+const textIn = (v: unknown) => (typeof v === "string" ? v : "");
+const firstText = (v: unknown) => (Array.isArray(v) ? textIn(v[0]) : "");
+
+/** A saved template back into the editor's draft: the reverse of buildComponents, for editing a draft or a rejected template. */
+export function draftFromTemplate(t: { name: string; language: string; category: string; components: unknown; headerMedia?: unknown }): TemplateDraft {
+  const d = emptyDraft();
+  d.name = t.name;
+  d.language = t.language;
+  d.category = t.category in CATEGORY_INFO ? (t.category as TemplateDraft["category"]) : "UTILITY";
+  const components = (Array.isArray(t.components) ? t.components : []).map(rowOf);
+  if (d.category === "AUTHENTICATION" && !components.some((c) => c.type === "FOOTER")) d.codeExpiry = "";
+  for (const c of components) {
+    const example = rowOf(c.example);
+    if (c.type === "HEADER") {
+      const format = textIn(c.format).toUpperCase();
+      if (format === "TEXT") {
+        d.header = textIn(c.text);
+        d.headerExample = firstText(example.header_text);
+      } else if (format === "IMAGE" || format === "VIDEO" || format === "DOCUMENT") {
+        const saved = rowOf(t.headerMedia);
+        d.headerKind = format;
+        d.headerMedia = { type: format, handle: firstText(example.header_handle), ...(textIn(saved.mime) ? { mime: textIn(saved.mime) } : {}), ...(textIn(saved.filename) ? { filename: textIn(saved.filename) } : {}) };
+      }
+    } else if (c.type === "BODY") {
+      d.body = textIn(c.text);
+      d.bodyExamples = (Array.isArray(example.body_text) && Array.isArray(example.body_text[0]) ? (example.body_text[0] as unknown[]) : []).map(textIn);
+      if (typeof c.add_security_recommendation === "boolean") d.securityNote = c.add_security_recommendation;
+    } else if (c.type === "FOOTER") {
+      d.footer = textIn(c.text);
+      if (typeof c.code_expiration_minutes === "number") d.codeExpiry = String(c.code_expiration_minutes);
+    } else if (c.type === "BUTTONS") {
+      for (const b of (Array.isArray(c.buttons) ? c.buttons : []).map(rowOf)) {
+        if (b.type === "OTP") d.copyCodeLabel = textIn(b.text) || d.copyCodeLabel;
+        else if (b.type === "QUICK_REPLY" || b.type === "URL" || b.type === "PHONE_NUMBER") {
+          d.buttons.push({ type: b.type, text: textIn(b.text), url: textIn(b.url), urlExample: firstText(b.example), phone: textIn(b.phone_number) });
+        }
+      }
+    }
+  }
+  return d;
+}
+
+/** Statuses a template can be edited in on its page (the server's EDITABLE_STATUSES); others are copied first. */
+export const EDITABLE: readonly string[] = ["draft", "rejected"];
 
 export type StatusView = { label: string; tone: "neutral" | "good" | "warn" | "bad"; detail: string | null };
 

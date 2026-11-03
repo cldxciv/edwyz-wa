@@ -2,7 +2,7 @@ import { audit } from "@/lib/auth/audit";
 import { assertSameOrigin } from "@/lib/auth/csrf";
 import { getActor } from "@/lib/auth";
 import { readTextLimited } from "@/lib/http/body";
-import { importContacts } from "@/lib/contacts/import";
+import { importContacts, parseExistingContacts } from "@/lib/contacts/import";
 import { HttpError, errorResponse, requireRole } from "@/lib/tenancy";
 
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -21,13 +21,15 @@ async function readCsv(request: Request): Promise<string> {
   throw new HttpError(415, "Send multipart/form-data with a file field or a text/csv body.");
 }
 
+/** ?existing=skip leaves people already in the contacts untouched (counted as skipped); without it they are updated from the file. */
 export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const actor = await getActor(request);
     requireRole(actor, "admin");
-    const report = await importContacts(actor.tenantId, await readCsv(request), { recordedByUserId: actor.userId });
-    await audit({ tenantId: actor.tenantId, userId: actor.userId, action: "contact.imported", meta: { created: report.created, updated: report.updated, skipped: report.skipped, errors: report.errors.length } });
+    const existing = parseExistingContacts(new URL(request.url).searchParams.get("existing"));
+    const report = await importContacts(actor.tenantId, await readCsv(request), { recordedByUserId: actor.userId, existing });
+    await audit({ tenantId: actor.tenantId, userId: actor.userId, action: "contact.imported", meta: { created: report.created, updated: report.updated, skipped: report.skipped, errors: report.errors.length, existing } });
     return Response.json({ report });
   } catch (e) {
     return errorResponse(e);

@@ -21,10 +21,10 @@
     {
       "id": "opt_in",
       "title": "Marketing opt-in and opt-out",
-      "keywords": ["opt in", "opt-in", "optin", "consent", "permission", "opt out", "opt-out", "stop", "unsubscribe", "marketing permission"],
-      "body": "Before you send marketing templates to someone, they must have agreed to get WhatsApp messages from you, and Edwyz records when and how they agreed. Owners and admins can record an opt-in on the contact page with where it came from. If a customer sends STOP, or someone records an opt-out, marketing templates are not sent to them any more. A contact who opted out can only opt in again by messaging you.",
+      "keywords": ["opt in", "opt-in", "optin", "consent", "permission", "opt out", "opt-out", "stop", "unsubscribe", "stop words", "shopify consent", "marketing permission"],
+      "body": "Before you send marketing templates to someone, they must have agreed to get WhatsApp messages from you, and Edwyz records when and how they agreed. Owners and admins can record an opt-in on the contact page with where it came from. A Shopify marketing consent does not count: record the WhatsApp opt-in separately. A customer opts out when their whole message is a STOP word: stop, stop all, unsubscribe, opt out, cancel, end or quit, plus any words your owners or admins added in Inbox settings. A tap on a marketing template's Stop promotions button counts too. A message like \"cancel my order\" is not a STOP, and neither is a tap on a template button labelled Cancel, End or Quit. A short message like \"stop please\" does not opt them out either: the chat gets a note, the AI agent leaves it to your team, and you can ask Eddy to record the opt-out if they want no more marketing. After an opt-out they get no marketing messages: no marketing templates, broadcasts or follow-ups, and rules, chatbots and lead sequences skip marketing template steps. Order updates and replies to their own messages can still arrive. A contact who opted out can only opt in again by sending START to get offers again.",
       "source": "https://developers.facebook.com/docs/whatsapp/overview/getting-opt-in",
-      "lastReviewed": "2026-10-29"
+      "lastReviewed": "2026-10-31"
     },
     {
       "id": "quality_rating",

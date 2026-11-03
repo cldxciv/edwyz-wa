@@ -3,6 +3,7 @@ import { describeError } from "@/lib/safe-error";
 import { tenantMayRunBackground } from "@/lib/tenant-state";
 import type { WorkerModule } from "@/worker/registry";
 import { sendText } from "@/lib/inbox/service";
+import { mayReceive, optedOutSince } from "@/lib/contacts/opt-out";
 import { endSession, parseFlow, SESSION_TTL_MS, wakeSession, type SessionRow } from "./engine";
 import { parseSettings, TIMEOUT_MAX_MINUTES } from "./flow";
 
@@ -68,18 +69,41 @@ export async function expireStaleSessions(now: Date = new Date()): Promise<numbe
   return waiting.count + stuck.count;
 }
 
+/** Bots read per page when looking for custom inactivity limits. */
 const IDLE_BOTS = 100;
 const IDLE_BATCH = 50;
 
-/** Tells the customer the chat with the bot has ended. Skipped when the window is closed or the customer opted out: nothing is queued then. */
-async function sendTimeoutMessage(session: { tenantId: string; conversationId: string; contactId: string }, body: string, now: Date) {
+/**
+ * Tells the customer the chat with the bot has ended. Skipped when the window is closed: nothing is queued then. It is a reply in the
+ * window, which an opt-out does not stop, unless they opted out during this session (lib/contacts/opt-out.ts optedOutSince).
+ */
+async function sendTimeoutMessage(session: { tenantId: string; conversationId: string; contactId: string; startedAt?: Date }, body: string, now: Date) {
   if (!(await tenantMayRunBackground(session.tenantId, now.getTime()))) return;
   const contact = await prisma.contact.findFirst({ where: { id: session.contactId, tenantId: session.tenantId }, select: { optedOutAt: true } });
-  if (!contact || contact.optedOutAt) return;
+  if (!contact || !mayReceive(contact, "service") || optedOutSince(contact, session.startedAt)) return;
   try {
     await sendText({ tenantId: session.tenantId, conversationId: session.conversationId, body, origin: "chatbot" });
   } catch (error) {
     console.error("[chatbot] inactivity message not sent:", describeError(error));
+  }
+}
+
+type IdleBot = { id: string; tenantId: string; publishedFlow: unknown };
+
+/** Every published bot with its own inactivity limit, a page at a time in id order, so none is skipped however many there are. */
+async function* botsWithOwnTimeout(): AsyncGenerator<IdleBot> {
+  let cursor: string | undefined;
+  for (;;) {
+    const page = (await prisma.chatbot.findMany({
+      where: { status: "published", publishedFlow: { path: ["settings", "timeoutMinutes"], lt: TIMEOUT_MAX_MINUTES } },
+      select: { id: true, tenantId: true, publishedFlow: true },
+      orderBy: { id: "asc" },
+      take: IDLE_BOTS,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    })) as IdleBot[];
+    yield* page;
+    if (page.length < IDLE_BOTS) return;
+    cursor = page[page.length - 1].id;
   }
 }
 
@@ -88,13 +112,8 @@ async function sendTimeoutMessage(session: { tenantId: string; conversationId: s
  * expired, and the bot's reminder message, when it has one, is sent once. Each session is claimed first so two workers never send twice.
  */
 export async function expireIdleSessions(now: Date = new Date()): Promise<number> {
-  const bots = (await prisma.chatbot.findMany({
-    where: { status: "published", publishedFlow: { path: ["settings", "timeoutMinutes"], lt: TIMEOUT_MAX_MINUTES } },
-    select: { id: true, tenantId: true, publishedFlow: true },
-    take: IDLE_BOTS,
-  })) as { id: string; tenantId: string; publishedFlow: unknown }[];
   let ended = 0;
-  for (const bot of bots) {
+  for await (const bot of botsWithOwnTimeout()) {
     try {
       const settings = parseSettings((bot.publishedFlow as { settings?: unknown } | null)?.settings);
       const idle = (await prisma.chatbotSession.findMany({

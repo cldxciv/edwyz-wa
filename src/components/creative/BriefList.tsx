@@ -13,11 +13,19 @@ type Row = { id: string; goal: string; offer: string; status: string; brand: { n
 export function BriefList() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState("");
+  // Null until known (or when the brand kits could not be read): the empty state then says nothing about them.
+  const [hasBrand, setHasBrand] = useState<boolean | null>(null);
 
   const load = useCallback(async () => {
     setError("");
     try {
-      setRows((await apiFetch<{ items: Row[] }>("/api/creative/briefs")).items);
+      const items = (await apiFetch<{ items: Row[] }>("/api/creative/briefs")).items;
+      // A brief needs a brand kit, so the empty state says whether one is still missing.
+      if (items.length === 0) {
+        const brands = await apiFetch<{ items: unknown[] }>("/api/creative/brands").catch(() => null);
+        setHasBrand(brands ? brands.items.length > 0 : null);
+      }
+      setRows(items);
     } catch (e) {
       setError(friendlyMessage(e, "Check your connection and try again."));
       setRows((cur) => cur ?? []);
@@ -78,11 +86,19 @@ export function BriefList() {
           rowKey={(r) => r.id}
           loading={rows === null}
           empty={
-            <EmptyState
-              title="No briefs yet"
-              body="A brief is one thing you want to promote. Tell us about it and we suggest ideas, write the ads and check them. You need a brand kit first."
-              action={<LinkButton variant="primary" href="/app/creative/new">Start your first brief</LinkButton>}
-            />
+            hasBrand === false ? (
+              <EmptyState
+                title="No briefs yet"
+                body="A brief is one thing you want to promote. Tell us about it and we suggest ideas, write the ads and check them. First create a brand kit with your colours, tone and words to avoid."
+                action={<LinkButton variant="primary" href="/app/creative/brands">Create brand kit</LinkButton>}
+              />
+            ) : (
+              <EmptyState
+                title="No briefs yet"
+                body="A brief is one thing you want to promote. Tell us about it and we suggest ideas, write the ads and check them."
+                action={<LinkButton variant="primary" href="/app/creative/new">Start your first brief</LinkButton>}
+              />
+            )
           }
         />
       )}

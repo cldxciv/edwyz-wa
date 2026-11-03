@@ -99,6 +99,7 @@ Confirmations: ask only for destructive or irreversible actions (delete, send to
 - Everything works with the keyboard alone, in a logical order. Never remove focus outlines; the global ring meets 3:1 in both themes. Never use positive `tabindex`.
 - Contrast: text 4.5:1, large text and control borders 3:1. Use tokens and the contrast test guards them.
 - Do not rely on colour: pair it with text, icons or position. Required fields have an asterisk and `aria-required`; errors have text.
+- Forms check themselves (`noValidate`, no native `required`/`min`/`max` bubbles) and show each error under its own field. An example in a placeholder starts with "e.g." so an empty field never looks filled in.
 - Dialogs: use `Dialog` / `ConfirmDialog` (focus trapped, Escape closes, focus returns to the trigger). Do not build ad-hoc modals.
 - Live updates: toasts use polite live regions, errors assertive. Spinners use `role="status"`. Tell screen readers when a list finishes loading (`DataTable` does).
 - Tables use real `<table>` semantics with a caption and `scope`d headers; sort state is in `aria-sort`.

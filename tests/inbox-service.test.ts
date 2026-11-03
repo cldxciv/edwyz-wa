@@ -133,9 +133,22 @@ describe("sendTemplateMessage", () => {
     expect(enqueue).not.toHaveBeenCalled();
   });
 
-  it("refuses every template for a contact who opted out", async () => {
-    arrange({ optIn: true, optedOutAt: new Date() }, { category: "UTILITY" });
-    await expect(send()).rejects.toMatchObject({ status: 422, message: expect.stringMatching(/opted out/) });
+  it("refuses a marketing template for a contact who opted out, even one with an old opt-in", async () => {
+    arrange({ optIn: true, optedOutAt: new Date() }, { category: "MARKETING" });
+    await expect(send()).rejects.toMatchObject({ status: 422, message: expect.stringMatching(/opted out of marketing/) });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("an opt-out stops marketing only: utility and login-code templates still go (owner default 1)", async () => {
+    arrange({ optIn: false, optedOutAt: new Date() }, { category: "UTILITY" });
+    await expect(send()).resolves.toMatchObject({ type: "template" });
+    arrange({ optIn: false, optedOutAt: new Date() }, { category: "AUTHENTICATION" });
+    await expect(send()).resolves.toMatchObject({ type: "template" });
+  });
+
+  it("refuses a template it has no row for to a contact who opted out: an unknown template counts as marketing", async () => {
+    arrange({ optIn: true, optedOutAt: new Date() }, null);
+    await expect(send()).rejects.toMatchObject({ status: 422, message: expect.stringMatching(/opted out of marketing/) });
     expect(enqueue).not.toHaveBeenCalled();
   });
 

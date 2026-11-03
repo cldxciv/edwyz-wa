@@ -1,7 +1,7 @@
 import { audit } from "@/lib/auth/audit";
 import { assertSameOrigin } from "@/lib/auth/csrf";
 import { getActor } from "@/lib/auth";
-import { getBroadcast } from "@/lib/broadcasts/service";
+import { deleteDraftBroadcast, getBroadcast } from "@/lib/broadcasts/service";
 import { type BroadcastPatch, updateBroadcastPlan } from "@/lib/broadcasts/scheduling";
 import { parseIsoDate, parseRetryDays } from "@/lib/broadcasts/schedule";
 import { readJsonObject } from "@/lib/contacts/http";
@@ -30,6 +30,21 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     const broadcast = await updateBroadcastPlan(actor, id, patch);
     await audit({ tenantId: actor.tenantId, userId: actor.userId, action: "broadcast.rescheduled", target: id });
     return Response.json({ broadcast });
+  } catch (e) {
+    return errorResponse(e);
+  }
+}
+
+/** Deletes a draft that never started (the wizard's discarded drafts). A broadcast that started is canceled instead (409). */
+export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    assertSameOrigin(request);
+    const actor = await getActor(request);
+    requireRole(actor, "admin");
+    const id = (await params).id;
+    await deleteDraftBroadcast(actor, id);
+    await audit({ tenantId: actor.tenantId, userId: actor.userId, action: "broadcast.draft_deleted", target: id });
+    return Response.json({ ok: true });
   } catch (e) {
     return errorResponse(e);
   }

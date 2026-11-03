@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createLogger, getRequestId, log, redact, requestLogger, setErrorReporter, setLogSink } from "@/lib/log";
+import { createLogger, getRequestId, log, newRequestId, redact, requestLogger, setErrorReporter, setLogSink } from "@/lib/log";
 
 const lines: { level: string; entry: Record<string, unknown> }[] = [];
 
@@ -108,6 +110,21 @@ describe("error reporter hook", () => {
     expect(report.requestId).toBe("abcdef123456");
   });
 
+  it("is shared by every copy of the module, so a tracker registered in instrumentation sees errors from the route bundles", async () => {
+    const reporter = vi.fn();
+    setErrorReporter(reporter);
+    vi.resetModules();
+    const other = await import("@/lib/log");
+    expect(other.log).not.toBe(log);
+    other.setLogSink(() => undefined);
+    other.log.error("api.unexpected", { err: new Error("x"), reqId: "abcdef123456" });
+    expect(reporter).toHaveBeenCalledTimes(1);
+    expect(reporter.mock.calls[0][0].requestId).toBe("abcdef123456");
+    other.setErrorReporter(null);
+    log.error("after", { err: new Error("y") });
+    expect(reporter).toHaveBeenCalledTimes(1);
+  });
+
   it("is not called for warnings or for errors without err, and cannot break logging", () => {
     const reporter = vi.fn(() => {
       throw new Error("down");
@@ -127,6 +144,14 @@ describe("request id", () => {
     const minted = getRequestId(new Request("http://x", { headers: { "x-request-id": "bad id with spaces" } }));
     expect(minted).toMatch(/^[0-9a-f]{16}$/);
     expect(getRequestId(new Headers())).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it("mints 16 hex characters with Web Crypto, so the module also loads in client bundles (tenancy's HttpError is bundled there)", () => {
+    const ids = new Set(Array.from({ length: 50 }, () => newRequestId()));
+    expect(ids.size).toBe(50);
+    for (const id of ids) expect(id).toMatch(/^[0-9a-f]{16}$/);
+    const source = readFileSync(path.join(__dirname, "..", "src/lib/log.ts"), "utf8");
+    expect(source).not.toMatch(/from "node:|require\(/);
   });
 
   it("binds the id to a child logger", () => {

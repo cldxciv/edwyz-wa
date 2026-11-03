@@ -1,9 +1,11 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
 import { displayName } from "@/lib/contacts/identity";
+import { templateFillNeeds } from "@/lib/chatbots/template-build";
 import { HttpError } from "@/lib/tenancy";
 import { clockToMinutes, isValidTimezone, localDateTime, parseSchedule } from "../match";
 import { byPriority, emptyFilters, LIMITS, parseDefinition, type Action, type Filters, type RuleDefinition } from "./model";
+import { ruleTemplateProblem } from "./template-check";
 
 export const V2_KEYS = ["trigger", "filters", "actions", "priority", "stopAfterMatch"] as const;
 
@@ -122,6 +124,47 @@ export async function assertReferencesOwned(tenantId: string, def: RuleDefinitio
   if (missing) throw new HttpError(400, `A ${missing[2]} used by this rule no longer exists. Pick another one.`);
 }
 
+const HEADER_MEDIA_WORD = { image: "picture", video: "video", document: "file" } as const;
+
+/** What a Send template step must fill in for this template and leaves empty, as the end of a sentence, or null. */
+export function missingTemplateValue(components: unknown, action: Extract<Action, { type: "send_template" }>): string | null {
+  const needs = templateFillNeeds(components);
+  if (needs.headerMedia && !action.headerMediaUrl) return `has a ${HEADER_MEDIA_WORD[needs.headerMedia]} at the top. Add a https link to it in this step`;
+  if (needs.headerText && !action.headerVariable) return "has a value to fill in its heading. Add it in this step";
+  if (needs.buttonValue && !action.buttonVariable) return "has a value to fill in its button link. Add it in this step";
+  return null;
+}
+
+/**
+ * A rule can only send templates whose values it can fill in (a heading picture or value and a link button value come from the
+ * step; login codes, coupon codes, named values, carousels and special buttons cannot, see ruleTemplateProblem), and only from a
+ * number of the template's own WhatsApp Business account. Saving a rule that could never send is refused with the reason, the same
+ * one the template list shows, instead of failing on every run.
+ */
+async function assertTemplatesUsable(tenantId: string, def: RuleDefinition, phoneNumberId: string | null | undefined): Promise<void> {
+  const steps = def.actions.filter((a): a is Extract<Action, { type: "send_template" }> => a.type === "send_template");
+  const ids = [...new Set(steps.map((a) => a.templateId))];
+  if (ids.length === 0) return;
+  const templates = ((await prisma.template.findMany({ where: { tenantId, id: { in: ids } }, select: { id: true, name: true, components: true, wabaRefId: true } })) ?? []) as {
+    id: string;
+    name: string;
+    components: unknown;
+    wabaRefId: string | null;
+  }[];
+  for (const t of templates) {
+    const problem = ruleTemplateProblem(t.components);
+    if (problem) throw new HttpError(400, `The template "${t.name}" ${problem.long}. ${problem.instead}`);
+    for (const step of steps.filter((a) => a.templateId === t.id)) {
+      const missing = missingTemplateValue(t.components, step);
+      if (missing) throw new HttpError(400, `The template "${t.name}" ${missing}.`);
+    }
+  }
+  if (!phoneNumberId) return;
+  const phone = await prisma.phoneNumber.findFirst({ where: { id: phoneNumberId, tenantId }, select: { wabaRefId: true } });
+  const foreign = phone?.wabaRefId ? templates.find((t) => t.wabaRefId && t.wabaRefId !== phone.wabaRefId) : undefined;
+  if (foreign) throw new HttpError(400, `The template "${foreign.name}" belongs to a different WhatsApp Business account than this rule's number. Choose a template of that account, or another number.`);
+}
+
 async function nextPriority(tenantId: string): Promise<number> {
   const top = await prisma.automationRule.findFirst({ where: { tenantId, version: 2 }, orderBy: { priority: "desc" }, select: { priority: true } });
   return (top?.priority ?? 0) + 10;
@@ -135,6 +178,7 @@ export async function createRuleV2(tenantId: string, raw: unknown) {
   assertScheduleNotPast(def);
   await assertPhoneOwned(tenantId, input.phoneNumberId);
   await assertReferencesOwned(tenantId, def);
+  await assertTemplatesUsable(tenantId, def, input.phoneNumberId);
   if ((await prisma.automationRule.count({ where: { tenantId } })) >= LIMITS.rules) throw new HttpError(409, `You can have up to ${LIMITS.rules} rules.`);
   return prisma.automationRule.create({
     data: {
@@ -166,6 +210,11 @@ export async function updateRuleV2(tenantId: string, id: string, raw: unknown) {
     assertScheduleNotPast(input.definition);
     await assertReferencesOwned(tenantId, input.definition);
   }
+  // A new number, new steps, or both: the templates must still be sendable from the rule's number.
+  const phoneNumberId = input.phoneNumberId !== undefined ? input.phoneNumberId : current.phoneNumberId;
+  const stored = input.definition ? null : input.phoneNumberId !== undefined ? parseDefinition({ trigger: current.trigger, filters: current.filters, actions: current.actions }) : null;
+  const checked = input.definition ?? (stored?.ok ? stored.value : null);
+  if (checked) await assertTemplatesUsable(tenantId, checked, phoneNumberId);
   const { definition, ...plain } = input;
   const data: Prisma.AutomationRuleUpdateManyMutationInput = {
     ...plain,
@@ -192,13 +241,14 @@ export async function moveRule(tenantId: string, id: string, direction: "up" | "
 const CLASSIC_ORDER = { keyword: 10, welcome: 20, away: 30 } as const;
 
 /**
- * The v2 equivalent of a classic rule. Classic replies never paused for a teammate, so the converted rule keeps replying while a
- * person is handling the chat. Two things differ on purpose: v2 runs count toward the monthly rule allowance, and a classic away
- * rule without usable opening hours (which never replied) cannot be converted until the hours are set.
+ * The v2 equivalent of a classic rule. Classic replies stay quiet while a person is handling the chat (engine.ts busyReason), so
+ * the converted rule keeps "Reply even while a person is handling the chat" off and stays quiet then too. Two things differ on
+ * purpose, and the conversion dialog (AutomationView CONVERT_BODY) names them: v2 runs count toward the monthly rule allowance, and
+ * the rule goes after the rules already in the new format. A classic away rule without usable opening hours (which never replied)
+ * cannot be converted until the hours are set.
  */
 export function convertDefinition(rule: { type: "welcome" | "away" | "keyword"; keywords: string[]; matchMode: string; replyText: string; schedule: unknown; cooldownMinutes: number }): RuleDefinition {
   const filters = emptyFilters();
-  filters.options.allowWhenHumanActive = true;
   if (rule.type === "keyword") filters.root.items.push({ type: "keyword", mode: rule.matchMode === "exact" ? "exact" : "contains", keywords: rule.keywords });
   if (rule.type === "welcome") filters.root.items.push({ type: "quiet_for", minutes: Math.max(1, rule.cooldownMinutes) });
   if (rule.type === "away") {
@@ -293,20 +343,39 @@ export async function listExecutions(tenantId: string, q: ExecutionQuery) {
   };
 }
 
-/** Choices for the rule builder's dropdowns: only what this workspace has. */
+/**
+ * Choices for the rule builder's dropdowns: only what this workspace has. Each template says whether a rule can send it
+ * (sendable; when not, reason follows "it" and instead says what to do, the same check a save makes), what the step must fill in
+ * besides the text values (needs: a heading value, a heading picture, video or file, a link button value) and which WhatsApp
+ * Business account it belongs to, as does each number.
+ */
 export async function getBuilderOptions(tenantId: string) {
   const [templates, chatbots, sequences, teams, members, segments, materials, phoneNumbers] = await Promise.all([
-    prisma.template.findMany({ where: { tenantId, status: "approved" }, orderBy: { name: "asc" }, take: 200, select: { id: true, name: true, language: true, category: true, components: true } }),
+    prisma.template.findMany({ where: { tenantId, status: "approved" }, orderBy: { name: "asc" }, take: 200, select: { id: true, name: true, language: true, category: true, components: true, wabaRefId: true } }),
     prisma.chatbot.findMany({ where: { tenantId, status: "published" }, orderBy: { name: "asc" }, take: 100, select: { id: true, name: true } }),
     prisma.leadSequence.findMany({ where: { tenantId, enabled: true }, orderBy: { name: "asc" }, take: 100, select: { id: true, name: true } }),
     prisma.team.findMany({ where: { tenantId }, orderBy: { name: "asc" }, take: 100, select: { id: true, name: true } }),
     prisma.membership.findMany({ where: { tenantId, user: { disabledAt: null } }, orderBy: { createdAt: "asc" }, take: 200, select: { userId: true, user: { select: { name: true, email: true } } } }),
     prisma.segment.findMany({ where: { tenantId }, orderBy: { name: "asc" }, take: 100, select: { id: true, name: true } }),
     prisma.replyMaterial.findMany({ where: { tenantId }, orderBy: { name: "asc" }, take: 200, select: { id: true, name: true, kind: true } }),
-    prisma.phoneNumber.findMany({ where: { tenantId }, orderBy: { createdAt: "asc" }, take: 20, select: { id: true, displayPhone: true, verifiedName: true } }),
+    prisma.phoneNumber.findMany({ where: { tenantId }, orderBy: { createdAt: "asc" }, take: 20, select: { id: true, displayPhone: true, verifiedName: true, wabaRefId: true } }),
   ]);
   return {
-    templates: templates.map((t) => ({ id: t.id, name: t.name, language: t.language, category: t.category, variables: countBodyVariables(t.components) })),
+    templates: templates.map((t) => {
+      const problem = ruleTemplateProblem(t.components);
+      const needs = templateFillNeeds(t.components);
+      return {
+        id: t.id,
+        name: t.name,
+        language: t.language,
+        category: t.category,
+        variables: countBodyVariables(t.components),
+        wabaRefId: t.wabaRefId ?? null,
+        needs: { headerText: needs.headerText, headerMedia: needs.headerMedia, buttonValue: needs.buttonValue },
+        sendable: !problem,
+        ...(problem ? { reason: problem.short, instead: problem.instead } : {}),
+      };
+    }),
     chatbots,
     sequences,
     teams,

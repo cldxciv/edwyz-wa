@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { Badge, Button, Card, DataTable, EmptyState, ErrorState, FormField, Input, ProgressBar, Skeleton, StatusPill, apiFetch, buttonSizes, buttonVariants, cn, confirm, toast, type Column } from "@/components/ui";
+import { Alert, Badge, Button, Card, DataTable, EmptyState, ErrorState, FormField, Input, ProgressBar, Skeleton, StatusPill, apiFetch, buttonSizes, buttonVariants, cn, confirm, toast, type Column } from "@/components/ui";
 import { PageHeader } from "@/components/app/PageHeader";
 import { COMPANY } from "@/lib/config";
 import { canManage, useApi, useRole } from "@/components/contacts/hooks";
@@ -10,34 +10,46 @@ import { CloseWorkspace } from "./CloseWorkspace";
 import { PlanUsage } from "./PlanUsage";
 import {
   NO_PLANS_TEXT,
+  canCancelOnline,
   daysLeftText,
   formatDate,
   formatMoney,
   invoiceStatus,
+  isManualPlan,
+  isNewSubscriptionNeeded,
   paymentErrorMessage,
+  planChangeDoneText,
   planChoice,
   planFacts,
   priceParts,
+  priceText,
   renewalText,
+  scheduledChangeText,
   stateSummary,
   trialProgress,
   validateEmail,
   validateGstin,
   validatePincode,
+  type NewSubscriptionNeeded,
   type PlanLike,
+  type ScheduledChangeLike,
 } from "./helpers";
 
 type Plan = PlanLike & { id: string; name: string; description: string | null };
 type InvoiceRow = { id: string; number: string; status: string; totalPaise: number; currency: string; issuedAt: string; planName: string };
 type Overview = {
   status: { state: string; canWrite: boolean; daysLeftInTrial: number | null; trialEndsAt: string | null; currentPeriodEnd: string | null; planName: string | null; reason?: string };
-  subscription: { status: string; currentPeriodEnd: string | null; cancelAtPeriodEnd: boolean; plan: { name: string } } | null;
+  subscription: { status: string; currentPeriodEnd: string | null; cancelAtPeriodEnd: boolean; plan: { name: string; pricePaise?: number; intervalMonths?: number }; manual?: boolean } | null;
   invoices: InvoiceRow[];
   billingProfile: { legalName: string; gstin: string | null; addressLine: string; state: string; pincode: string | null; billingEmail: string } | null;
   plans: Plan[];
   trialDays: number;
   paymentsConfigured: boolean;
+  /** A plan change waiting to happen ("Changes to Growth on 30 Nov 2026"). */
+  scheduledChange?: ScheduledChangeLike;
 };
+
+type PlanChangeAnswer = { change: string; planName: string; at?: string; endsOn?: string | null; ended?: boolean };
 
 type CheckoutInit = { keyId: string; subscriptionId: string; name: string; description: string };
 type CheckoutResult = { razorpay_payment_id: string; razorpay_subscription_id: string; razorpay_signature: string };
@@ -79,6 +91,8 @@ export function BillingView() {
   const [busy, setBusy] = useState<string | null>(null);
   const statusRef = useRef<HTMLParagraphElement>(null);
   const [focusStatus, setFocusStatus] = useState(false);
+  // Razorpay could not change the plan for the way it is paid: what to do instead (end at the period's end, then start the new plan).
+  const [needsNew, setNeedsNew] = useState<NewSubscriptionNeeded | null>(null);
   const cancelled = data?.subscription?.cancelAtPeriodEnd ?? false;
 
   // The Cancel button disappears once the cancellation is saved; move focus to the plan status so it is not lost.
@@ -130,8 +144,8 @@ export function BillingView() {
         name: init.name,
         description: init.description,
         handler: (response: CheckoutResult) => {
-          apiFetch("/api/billing/verify", { method: "POST", body: response })
-            .then(() => toast.success("Payment received. Your plan is being activated."))
+          apiFetch<{ scheduled?: boolean; startsOn?: string }>("/api/billing/verify", { method: "POST", body: response })
+            .then((r) => toast.success(r?.scheduled && r.startsOn ? `All set. ${plan.name} starts on ${formatDate(r.startsOn)}.` : "Payment received. Your plan is being activated."))
             .catch(() => toast.error(paymentErrorMessage(null, "confirm")))
             .finally(() => {
               setBusy(null);
@@ -144,6 +158,62 @@ export function BillingView() {
       toast.error(paymentErrorMessage((e as Error).message));
       setBusy(null);
     }
+  }
+
+  /** Upgrade now or switch at the renewal (POST /api/billing/change-plan), after the owner confirms what will happen. */
+  async function changeTo(plan: Plan, action: "upgrade" | "downgrade") {
+    const current = sub?.plan.name ?? "your current plan";
+    const until = formatDate(sub?.currentPeriodEnd);
+    const ok = await confirm(
+      action === "upgrade"
+        ? {
+            title: `Upgrade to ${plan.name} now?`,
+            body: `Your plan changes right away. Razorpay charges your saved payment method only the difference for the rest of this period, then ${priceText(plan)} from your next renewal.`,
+            confirmLabel: `Upgrade to ${plan.name}`,
+            cancelLabel: `Stay on ${current}`,
+          }
+        : {
+            title: `Switch to ${plan.name}?`,
+            body: `You keep ${current} until ${until || "the end of this period"}. From then on you are on ${plan.name} at ${priceText(plan)}. Nothing is charged now.`,
+            confirmLabel: `Switch to ${plan.name}`,
+            cancelLabel: `Stay on ${current}`,
+          },
+    );
+    if (!ok) return;
+    setBusy(plan.id);
+    setNeedsNew(null);
+    try {
+      const result = await apiFetch<PlanChangeAnswer>("/api/billing/change-plan", { method: "POST", body: { planId: plan.id } });
+      toast.success(planChangeDoneText(result));
+      setFocusStatus(true);
+      reload();
+    } catch (e) {
+      const body = (e as { body?: unknown }).body;
+      if (isNewSubscriptionNeeded(body)) setNeedsNew(body);
+      else toast.error(`We could not change your plan. ${(e as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Drops the planned change: the plan renews as it is (or the new subscription will not start). */
+  async function keepPlan() {
+    setBusy("keep");
+    try {
+      const result = await apiFetch<PlanChangeAnswer>("/api/billing/change-plan", { method: "POST", body: { cancelScheduled: true } });
+      toast.success(planChangeDoneText(result));
+      reload();
+    } catch (e) {
+      toast.error(`We could not cancel the planned change. ${(e as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function choose(plan: Plan, action: string) {
+    if (action === "upgrade" || action === "downgrade") return void changeTo(plan, action);
+    if (action === "keep") return void keepPlan();
+    return void subscribe(plan);
   }
 
   async function cancel() {
@@ -161,7 +231,14 @@ export function BillingView() {
     setBusy("cancel");
     try {
       await apiFetch("/api/billing/cancel", { method: "POST", body: {} });
-      toast.success(until ? `Your subscription will end on ${until}.` : "Your subscription will end at the close of the current period.");
+      // Ended to move to another plan: the plan cards now offer to start that plan on the day this one ends.
+      const next = needsNew?.planName;
+      toast.success(
+        next
+          ? `Your plan ends on ${until || "the end of this period"}. Now press Start ${next} under Plans to set it up from that day.`
+          : until ? `Your subscription will end on ${until}.` : "Your subscription will end at the close of the current period.",
+      );
+      setNeedsNew(null);
       setFocusStatus(true);
       reload();
     } catch (e) {
@@ -173,7 +250,16 @@ export function BillingView() {
 
   const trial = overview.status.state === "trialing" ? trialProgress(overview.status.daysLeftInTrial, overview.trialDays) : null;
   const renewal = renewalText(sub);
-  const needsPlan = ["trialing", "locked", "past_due_grace"].includes(overview.status.state);
+  const scheduled = overview.scheduledChange ?? null;
+  // An approved new plan that is starting is the plan to continue with: no "Choose a plan" next to it.
+  const nextApproved = scheduled?.kind === "next_subscription" && scheduled.authorized;
+  const needsPlan = ["trialing", "locked", "past_due_grace"].includes(overview.status.state) && !nextApproved;
+  const showCancel = isOwner && canCancelOnline(sub);
+  // A plan our team assigned by hand has no online subscription behind it: point to support instead of a Cancel that always fails.
+  const manual = isManualPlan(sub);
+  const scheduledText = scheduledChangeText(scheduled);
+  // A downgrade is kept from the current plan's card; a new plan that has not started yet can be called off here.
+  const canDropNext = isOwner && scheduled?.kind === "next_subscription";
 
   return (
     <div className="space-y-8">
@@ -195,14 +281,51 @@ export function BillingView() {
             {renewal}
           </p>
         )}
-        {(needsPlan || (isOwner && sub?.status === "active" && !sub.cancelAtPeriodEnd)) && (
+        {scheduledText && (
+          <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <p className="text-sm font-medium" aria-live="polite">
+              {scheduledText}
+            </p>
+            {canDropNext && (
+              <Button size="sm" variant="secondary" loading={busy === "keep"} disabled={busy !== null && busy !== "keep"} onClick={() => void keepPlan()}>
+                Do not start {scheduled?.planName}
+              </Button>
+            )}
+          </div>
+        )}
+        {needsNew && (
+          <Alert
+            tone="warn"
+            className="mt-4"
+            title={`${needsNew.planName} cannot start partway through this plan`}
+            action={
+              isOwner && canCancelOnline(sub) ? (
+                <Button size="sm" variant="secondary" loading={busy === "cancel"} onClick={cancel}>
+                  End my plan on {formatDate(needsNew.endsOn) || "the period's end"}
+                </Button>
+              ) : undefined
+            }
+          >
+            {needsNew.error}
+          </Alert>
+        )}
+        {manual && (
+          <p className="mt-3 text-sm">
+            Your plan was set up by our team. To change, renew or cancel it, contact{" "}
+            <a href={`mailto:${COMPANY.email}?subject=${encodeURIComponent("Change my Edwyz WA plan")}`} className="font-medium text-accent-ink underline underline-offset-2">
+              {COMPANY.email}
+            </a>
+            .
+          </p>
+        )}
+        {(needsPlan || showCancel) && (
           <div className="mt-4 flex flex-wrap gap-2">
             {needsPlan && overview.plans.length > 0 && (
               <a href="#plans" className={linkButton("primary")}>
                 {overview.status.state === "trialing" ? "Choose a plan" : "Choose a plan to continue"}
               </a>
             )}
-            {isOwner && sub?.status === "active" && !sub.cancelAtPeriodEnd && (
+            {showCancel && (
               <Button variant="secondary" loading={busy === "cancel"} onClick={cancel}>
                 Cancel subscription
               </Button>
@@ -215,7 +338,9 @@ export function BillingView() {
         <h2 id="plans-heading" className="text-base font-semibold tracking-tight">
           Plans
         </h2>
-        <p className="mb-3 mt-0.5 text-sm text-muted">Prices include GST. You can cancel any time and keep access until the end of the period you paid for.</p>
+        <p className="mb-3 mt-0.5 text-sm text-muted">
+          Prices include GST. Every plan has every feature; plans differ in limits. An upgrade starts now and you pay only the difference; a cheaper plan, or a move between monthly and yearly billing, starts at your next renewal. You can cancel any time and keep access until the end of the period you paid for.
+        </p>
         {overview.plans.length === 0 ? (
           <EmptyState
             title={NO_PLANS_TEXT}
@@ -229,7 +354,7 @@ export function BillingView() {
         ) : (
           <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {overview.plans.map((plan) => {
-              const choice = planChoice(plan, sub, overview.paymentsConfigured);
+              const choice = planChoice(plan, sub, overview.paymentsConfigured, { isOwner, scheduled });
               const price = priceParts(plan);
               const reasonId = `plan-${plan.id}-reason`;
               return (
@@ -250,8 +375,15 @@ export function BillingView() {
                       </div>
                     ))}
                   </dl>
-                  <Button className="mt-4 w-full" variant={choice.current ? "secondary" : "primary"} disabled={choice.disabled || (busy !== null && busy !== plan.id)} loading={busy === plan.id} aria-describedby={choice.reason ? reasonId : undefined} onClick={() => subscribe(plan)}>
-                    {choice.current ? "Current plan" : `Subscribe to ${plan.name}`}
+                  <Button
+                    className="mt-4 w-full whitespace-normal"
+                    variant={choice.current || choice.action === "downgrade" ? "secondary" : "primary"}
+                    disabled={choice.disabled || (busy !== null && busy !== plan.id && !(choice.action === "keep" && busy === "keep"))}
+                    loading={busy === plan.id || (choice.action === "keep" && busy === "keep")}
+                    aria-describedby={choice.reason ? reasonId : undefined}
+                    onClick={() => choose(plan, choice.action)}
+                  >
+                    {choice.label}
                   </Button>
                   {choice.reason && (
                     <p id={reasonId} className="mt-2 text-xs text-muted">

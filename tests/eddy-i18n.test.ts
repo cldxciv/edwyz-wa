@@ -262,10 +262,10 @@ describe("the 6.12 key copy, word for word", () => {
 });
 
 describe("coverage of the v1 tools, cards, warnings and states (4.6, 6.4, 6.5, 6.11)", () => {
-  const LOOKUPS = ["get_workspace_status", "get_attention", "list_conversations", "get_conversation", "search_contacts", "get_contact", "list_templates", "get_template", "list_broadcasts", "get_broadcast", "estimate_broadcast", "list_segments", "get_report_summary", "list_leads", "get_lead", "list_team", "get_activity", "list_automations", "test_automation_rule", "list_notices", "list_approvals", "get_spending", "explain_error", "search_help", "preview_audience"];
+  const LOOKUPS = ["get_workspace_status", "get_attention", "list_conversations", "get_conversation", "search_contacts", "get_contact", "list_templates", "get_template", "list_broadcasts", "get_broadcast", "estimate_broadcast", "list_segments", "get_report_summary", "list_leads", "get_lead", "list_team", "get_activity", "list_automations", "get_chatbot", "test_automation_rule", "list_notices", "list_approvals", "get_spending", "explain_error", "search_help", "preview_audience"];
   const INTENTS = ["open_page", "draft_reply", "connect_whatsapp", "connect_facebook"];
-  const UNDOABLE = ["tag_contacts", "tag_conversations", "assign_conversation", "set_conversation_status", "update_contact", "set_contact_owner_stage", "create_contact", "move_conversation_to_team", "stop_bot_on_conversation", "create_quick_reply", "set_my_availability", "undo_last_action", "create_template_draft", "create_broadcast_draft", "create_segment", "pause_broadcast", "disable_automation"];
-  const CARDS = ["send_text_reply", "record_opt_out", "add_internal_note", "revoke_approval_link", "block_conversation", "submit_template", "delete_template", "delete_contact", "record_opt_in", "cancel_broadcast", "delete_segment", "enable_automation", "invite_teammate", "stop_spending", "decline_spend_request"];
+  const UNDOABLE = ["tag_contacts", "tag_conversations", "assign_conversation", "set_conversation_status", "update_contact", "set_contact_owner_stage", "create_contact", "move_conversation_to_team", "stop_bot_on_conversation", "create_quick_reply", "set_my_availability", "undo_last_action", "create_template_draft", "create_broadcast_draft", "create_segment", "pause_broadcast", "disable_automation", "create_chatbot", "update_chatbot"];
+  const CARDS = ["send_text_reply", "record_opt_out", "add_internal_note", "revoke_approval_link", "block_conversation", "submit_template", "delete_template", "delete_contact", "record_opt_in", "cancel_broadcast", "delete_segment", "enable_automation", "publish_chatbot", "invite_teammate", "stop_spending", "decline_spend_request"];
 
   it("every v1 tool has an activity label in all three languages", () => {
     for (const tool of [...LOOKUPS, ...INTENTS, ...UNDOABLE, ...CARDS]) expect(hasKey(`status.${tool}`), tool).toBe(true);
@@ -430,5 +430,29 @@ describe("t(), makeTranslator() and run-time keys", () => {
   it("a key the server sends that the catalogue does not know renders the fallback, never the raw key", () => {
     expect(translateKey("en", "card.nonexistent.title")).toBe("Done.");
     expect(translateKey("hi", "card.nonexistent.title", {}, "X")).toBe("X");
+  });
+});
+
+describe("the ad review notices (IG-PAGE-ADS-SPEC 3.9, PRM-08): ad_approved and ad_rejected in all three languages", () => {
+  const KEYS = ["notices.ad_approved", "notices.ad_rejected", "notices.ad_rejected_partly"];
+  const notices = catalogues.find((c) => c.name === "notices.ts")!.cat;
+
+  it("each key exists in English, Hindi and Hinglish, with no placeholder (names are never stored, so none is filled)", () => {
+    for (const key of KEYS) {
+      for (const lang of EDDY_LANGS) {
+        expect(notices[lang][key], `${lang} ${key}`).toBeTruthy();
+        expect(placeholders(notices[lang][key]), `${lang} ${key}`).toEqual([]);
+        expect(translateKey(lang, key)).toBe(notices[lang][key]);
+      }
+      expect(notices.hi[key]).toMatch(/\p{Script=Devanagari}/u);
+      expect(latinWordsOutsideAllowlist(notices.hi[key]), key).toEqual([]);
+      expect(notices.hinglish[key]).not.toMatch(/\p{Script=Devanagari}/u);
+    }
+  });
+
+  it("the copy is plain and says what to do next", () => {
+    expect(notices.en["notices.ad_approved"]).toBe("Meta approved your ad. It shows to people while the campaign runs.");
+    expect(notices.en["notices.ad_rejected"]).toBe("Meta didn't approve one of your ads. See why and fix it, or ask Meta to review it again.");
+    expect(notices.en["notices.ad_rejected_partly"]).toBe("Meta didn't approve one of your ads in some places. It still runs in the others. See why and fix it.");
   });
 });

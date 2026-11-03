@@ -1,8 +1,10 @@
+import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/db";
 import { graphFetchAs } from "@/lib/graph";
 import { openSecret, sealSecret } from "@/lib/crypto/secrets";
+import { createPromoteMeta, type InstagramIdentity, type PromoteMeta, type PromoteMetaDeps } from "@/lib/promote/meta";
 import type { Prisma } from "@/generated/prisma/client";
-import type { AssetType } from "./index";
+import type { AssetAccess, AssetType } from "./index";
 
 export const PAGE_SIZE = 100;
 export const MAX_ITEMS = 500;
@@ -39,7 +41,30 @@ export async function fetchAll<T>(token: string, path: string, fields: string, m
 
 type Found = { type: AssetType; externalId: string; name: string | null; token?: string; meta: Record<string, unknown> };
 type Part = { found: Found[]; types: AssetType[] };
-type PageRow = { id: string; name?: string; access_token?: string; tasks?: string[]; instagram_business_account?: { id: string; username?: string; name?: string } };
+type PageRow = {
+  id: string;
+  name?: string;
+  access_token?: string;
+  tasks?: string[];
+  picture?: { data?: { url?: string } };
+  instagram_business_account?: { id: string; username?: string; name?: string; profile_picture_url?: string };
+};
+
+/** C1 (docs/IG-PAGE-ADS-SPEC.md 4.2): Pages with their tasks and picture, and the linked Instagram account with its picture. */
+export const PAGE_FIELDS = "id,name,access_token,tasks,picture{url},instagram_business_account{id,username,name,profile_picture_url}";
+
+/** A picture address Meta returned: https only, capped; anything else is dropped. */
+export function pictureUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0 || value.length > 2000) return null;
+  try {
+    return new URL(value).protocol === "https:" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+const TASKS_MAX = 20;
+const taskList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((t): t is string => typeof t === "string" && /^[A-Z_]{1,40}$/.test(t)).slice(0, TASKS_MAX) : []);
 type AdAccountRow = {
   id: string;
   name?: string;
@@ -63,13 +88,32 @@ export function minorString(value: unknown): string | null {
 }
 type SimpleRow = { id: string; name?: string };
 
+/**
+ * C1: the Pages this login manages. `canAdvertise` is the ADVERTISE task (ads for the Page need it) and `canCreateContent`
+ * the CREATE_CONTENT task (posting and video uploads); the linked Instagram professional account comes with its picture.
+ */
 async function discoverPages(token: string): Promise<Part> {
-  const res = await fetchAll<PageRow>(token, "me/accounts", "id,name,access_token,tasks,instagram_business_account{id,username,name}");
+  const res = await fetchAll<PageRow>(token, "me/accounts", PAGE_FIELDS);
   const found: Found[] = [];
+  const checkedAt = { listing: new Date().toISOString() };
   for (const p of res.items) {
-    found.push({ type: "page", externalId: p.id, name: p.name ?? null, token: p.access_token, meta: { tasks: p.tasks ?? [] } });
+    const tasks = taskList(p.tasks);
+    found.push({
+      type: "page",
+      externalId: p.id,
+      name: p.name ?? null,
+      token: p.access_token,
+      meta: { tasks, pictureUrl: pictureUrl(p.picture?.data?.url), canAdvertise: tasks.includes("ADVERTISE"), canCreateContent: tasks.includes("CREATE_CONTENT"), checkedAt },
+    });
     const ig = p.instagram_business_account;
-    if (ig?.id) found.push({ type: "instagram", externalId: ig.id, name: ig.username ?? ig.name ?? null, token: p.access_token, meta: { pageId: p.id, username: ig.username ?? null } });
+    if (ig?.id)
+      found.push({
+        type: "instagram",
+        externalId: ig.id,
+        name: ig.username ?? ig.name ?? null,
+        token: p.access_token,
+        meta: { pageId: p.id, username: ig.username ?? null, displayName: ig.name ?? null, profilePictureUrl: pictureUrl(ig.profile_picture_url), pageBacked: false, checkedAt },
+      });
   }
   return { found, types: res.complete ? ["page", "instagram"] : [] };
 }
@@ -236,22 +280,438 @@ export function orderForSubscribe<T extends { id: string }>(pages: T[], previous
   });
 }
 
-async function previousSubscriptions(tenantId: string, ids: string[]): Promise<Map<string, LeadgenSubscription>> {
-  const out = new Map<string, LeadgenSubscription>();
+/**
+ * The stored meta of every asset this run found, by Meta id (Meta ids are unique across object types). One query: the leadgen
+ * subscription status of each Page and the readiness blocks of every asset are carried over from it.
+ */
+async function previousMetas(tenantId: string, ids: string[]): Promise<Map<string, Record<string, unknown>>> {
+  const out = new Map<string, Record<string, unknown>>();
   if (ids.length === 0) return out;
   try {
-    const rows = (await prisma.metaAsset.findMany({ where: { tenantId, type: "page", externalId: { in: ids } }, select: { externalId: true, meta: true } })) ?? [];
-    for (const r of rows) {
-      const sub = (r.meta as { leadgenSubscription?: LeadgenSubscription } | null)?.leadgenSubscription;
-      if (sub && typeof sub.status === "string") out.set(r.externalId, sub);
-    }
+    const rows = (await prisma.metaAsset.findMany({ where: { tenantId, externalId: { in: ids } }, select: { externalId: true, type: true, meta: true } })) ?? [];
+    for (const r of rows) if (r.meta && typeof r.meta === "object" && !Array.isArray(r.meta)) out.set(r.externalId, r.meta as Record<string, unknown>);
   } catch {
     return new Map();
   }
   return out;
 }
 
-export type DiscoverOptions = { subscribeBudgetMs?: number; subscribeCallTimeoutMs?: number };
+function subscriptionsOf(previous: Map<string, Record<string, unknown>>, pageIds: string[]): Map<string, LeadgenSubscription> {
+  const out = new Map<string, LeadgenSubscription>();
+  for (const id of pageIds) {
+    const sub = subOf(previous.get(id));
+    if (sub && typeof sub.status === "string") out.set(id, sub);
+  }
+  return out;
+}
+
+// =====================================================================================================================
+// Readiness blocks (docs/IG-PAGE-ADS-SPEC.md 3.2, 4.2 C1 to C6, 5.4 MetaAsset.meta)
+// =====================================================================================================================
+
+/**
+ * The 5.4 keys each extra read stores, by asset type and block. Each block has its own time in `meta.checkedAt[block]`, set
+ * only when that read succeeded; a block whose read failed or ran out of time keeps what the previous run stored.
+ */
+export const META_BLOCKS = {
+  page: { leadgen: ["leadgenTosAccepted", "whatsappNumber", "whatsappLinkState"], pageBacked: ["pageBackedIgId", "pageBackedCreatedAt"] },
+  instagram: { authorized: ["authorizedAdAccountIds"] },
+  ad_account: { health: ["accountStatus", "disableReason", "businessId", "customAudienceTos", "userTosAccepted", "fundingPresent"], minBudget: ["minDailyBudgetMinor"] },
+} as const satisfies Partial<Record<AssetType, Record<string, readonly string[]>>>;
+
+type BlockType = keyof typeof META_BLOCKS;
+const isBlockType = (t: AssetType): t is BlockType => t in META_BLOCKS;
+
+export const ENRICH_CONCURRENCY = 4;
+/** Pages read for C2 and C3, and ad accounts for C4 to C6, per run at most (the same caps as subscribing and datasets). */
+export const MAX_ENRICH_PAGES = MAX_LEADGEN_SUBSCRIBES;
+export const MAX_ENRICH_AD_ACCOUNTS = MAX_AD_ACCOUNTS_FOR_DATASETS;
+/**
+ * Meta key on a Page or ad account: when its readiness reads were last tried, whether or not they succeeded. The caps above
+ * rotate on it (orderForEnrich), so a Page whose reads keep failing moves to the back instead of starving the rest.
+ */
+export const READINESS_TRIED_KEY = "readinessTriedAt";
+/**
+ * Meta may not list an identity Edwyz just made (C8) in C3 for a while. For this long after `pageBackedCreatedAt`, an empty C3
+ * answer keeps the stored `pageBackedIgId` instead of clearing it.
+ */
+export const PAGE_BACKED_LISTING_GRACE_MS = 15 * 60_000;
+
+const checkedAtOf = (meta: Record<string, unknown> | undefined): Record<string, string> => {
+  const v = meta?.checkedAt;
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  return Object.fromEntries(Object.entries(v as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string"));
+};
+
+/**
+ * The previous run's blocks for this asset, so a failed or late read never wipes what is known. Only blocks that this run's
+ * listing does not produce are carried, each with its own checkedAt.
+ */
+export function carriedBlocks(type: AssetType, previous: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!previous || !isBlockType(type)) return {};
+  const out: Record<string, unknown> = {};
+  const times = checkedAtOf(previous);
+  const carriedTimes: Record<string, string> = {};
+  for (const [block, keys] of Object.entries(META_BLOCKS[type]) as [string, readonly string[]][]) {
+    if (!times[block]) continue;
+    for (const k of keys) if (k in previous) out[k] = previous[k];
+    carriedTimes[block] = times[block];
+  }
+  if (Object.keys(carriedTimes).length) out.checkedAt = carriedTimes;
+  if ((type === "page" || type === "ad_account") && typeof previous[READINESS_TRIED_KEY] === "string") out[READINESS_TRIED_KEY] = previous[READINESS_TRIED_KEY];
+  return out;
+}
+
+type EnrichType = "page" | "ad_account";
+
+/**
+ * How long ago an asset's readiness reads ran, as a time to sort on: when they were last tried, else the oldest time one of
+ * its blocks was read, and 0 (first) when one of them never was.
+ */
+export function readinessAge(type: EnrichType, meta: Record<string, unknown> | undefined): number {
+  const tried = typeof meta?.[READINESS_TRIED_KEY] === "string" ? Date.parse(meta[READINESS_TRIED_KEY] as string) : NaN;
+  if (Number.isFinite(tried)) return tried;
+  const times = checkedAtOf(meta);
+  let oldest = Number.POSITIVE_INFINITY;
+  for (const block of Object.keys(META_BLOCKS[type])) {
+    const t = Date.parse(times[block] ?? "");
+    oldest = Math.min(oldest, Number.isFinite(t) ? t : 0);
+  }
+  return oldest;
+}
+
+/**
+ * The order the readiness reads take, so the per-run caps rotate through every Page and ad account: `first` (the workspace's
+ * spending ad account) before all, then never read, then the longest ago. Ties keep Meta's listing order.
+ */
+export function orderForEnrich<T extends { externalId: string }>(type: EnrichType, items: T[], previous: Map<string, Record<string, unknown>>, first: string | null = null): T[] {
+  const age = new Map(items.map((i) => [i.externalId, readinessAge(type, previous.get(i.externalId))]));
+  return [...items].sort((a, b) => Number(b.externalId === first) - Number(a.externalId === first) || (age.get(a.externalId) ?? 0) - (age.get(b.externalId) ?? 0));
+}
+
+/** The Page-backed identity Edwyz made for this Page within PAGE_BACKED_LISTING_GRACE_MS, which C3 may not list yet; else null. */
+export function justCreatedIdentity(pageMeta: Record<string, unknown> | undefined, now = Date.now()): string | null {
+  const id = pageMeta?.pageBackedIgId;
+  const created = typeof pageMeta?.pageBackedCreatedAt === "string" ? Date.parse(pageMeta.pageBackedCreatedAt) : NaN;
+  if (typeof id !== "string" || !id || !Number.isFinite(created)) return null;
+  return now - created < PAGE_BACKED_LISTING_GRACE_MS && created - now < 60_000 ? id : null;
+}
+
+/** The listing's meta with the carried blocks under it; the listing's own keys and times win. */
+function mergeMeta(listing: Record<string, unknown>, carried: Record<string, unknown>): Record<string, unknown> {
+  const times = { ...checkedAtOf(carried), ...checkedAtOf(listing) };
+  const merged = { ...carried, ...listing };
+  if (Object.keys(times).length) merged.checkedAt = times;
+  else delete merged.checkedAt;
+  return merged;
+}
+
+const digitsOf = (v: unknown): string => (typeof v === "string" ? v.replace(/\D/g, "") : "");
+
+/** ok when the Page shows one of the workspace's WhatsApp numbers, missing when it shows none or another, unknown when either side can't be read (V-P12). */
+export function whatsappLinkState(page: { number: string | null; checked: boolean }, workspaceNumbers: string[] | null): "ok" | "missing" | "unknown" {
+  if (!page.checked || workspaceNumbers === null) return "unknown";
+  const mine = digitsOf(page.number);
+  if (!mine) return "missing";
+  // The same number, or the same national number with and without the country code (at least 10 digits in common).
+  const same = (d: string) => d === mine || (Math.min(d.length, mine.length) >= 10 && (d.endsWith(mine) || mine.endsWith(d)));
+  return workspaceNumbers.some((n) => same(digitsOf(n))) ? "ok" : "missing";
+}
+
+/** The minimum daily amount for ads billed on impressions (C5, V-P10), in the account's minor units, or null. */
+export function minDailyFrom(minimumsMinor: Record<string, number>): number | null {
+  const v = minimumsMinor.min_daily_budget_imp;
+  return typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : null;
+}
+
+/** Meta's terms maps hold 1 for an accepted term. */
+const accepted = (terms: Record<string, number>, key: string): boolean => terms[key] === 1;
+
+/**
+ * Writes one asset's block keys and their checkedAt times into its stored meta as a JSON merge, so nothing else in the meta
+ * (the lead-alert status a concurrent write keeps) is rewritten. Guarded like the subscription status: an active asset of
+ * this connection, under a connection that is not revoked.
+ */
+export async function mergeBlocks(tenantId: string, connectionId: string, asset: Pick<Found, "type" | "externalId">, values: Record<string, unknown>, times: Record<string, string>): Promise<void> {
+  const patch = JSON.stringify(values);
+  const stamps = JSON.stringify(times);
+  await prisma.$executeRaw`
+    UPDATE "MetaAsset" AS a
+    SET "meta" = (CASE WHEN jsonb_typeof(a."meta") = 'object' THEN a."meta" ELSE '{}'::jsonb END) || ${patch}::jsonb
+          || jsonb_build_object('checkedAt', (CASE WHEN jsonb_typeof(a."meta"->'checkedAt') = 'object' THEN a."meta"->'checkedAt' ELSE '{}'::jsonb END) || ${stamps}::jsonb),
+        "updatedAt" = now()
+    FROM "MetaConnection" AS c
+    WHERE c."id" = a."connectionId" AND c."status" <> 'revoked'
+      AND a."tenantId" = ${tenantId} AND a."connectionId" = ${connectionId}
+      AND a."type" = ${asset.type} AND a."externalId" = ${asset.externalId} AND a."status" = 'active'`;
+}
+
+/**
+ * Stores a Page-backed identity as an Instagram asset of its Page's connection straight away (after C8, or when an existing id
+ * is reused), so readiness finds it even when the next discovery's C3 does not reach that Page. One statement, guarded like
+ * mergeBlocks: the Page must be active under a connection that is not revoked. The identity runs on the Page's token, so the
+ * Page's sealed token is copied. A row that already exists keeps the rest of its meta (C6's answer). Returns whether a row was
+ * written.
+ */
+export async function storePageBackedIdentity(
+  tenantId: string,
+  page: { id: string; externalId: string; name: string | null },
+  instagramId: string,
+  username: string | null,
+): Promise<boolean> {
+  const now = new Date().toISOString();
+  const created = JSON.stringify({ pageId: page.externalId, username, profilePictureUrl: null, pageBacked: true, checkedAt: { listing: now } });
+  const patch = JSON.stringify({ pageId: page.externalId, pageBacked: true, ...(username ? { username } : {}) });
+  const stamps = JSON.stringify({ listing: now });
+  const id = `c${randomBytes(12).toString("hex")}`;
+  const name = username ?? page.name;
+  const count = await prisma.$executeRaw`
+    INSERT INTO "MetaAsset" ("id", "tenantId", "connectionId", "type", "externalId", "name", "tokenEnc", "status", "meta", "updatedAt")
+    SELECT ${id}, p."tenantId", p."connectionId", 'instagram', ${instagramId}, ${name}, p."tokenEnc", 'active', ${created}::jsonb, now()
+    FROM "MetaAsset" AS p JOIN "MetaConnection" AS c ON c."id" = p."connectionId"
+    WHERE p."id" = ${page.id} AND p."tenantId" = ${tenantId} AND p."type" = 'page' AND p."externalId" = ${page.externalId}
+      AND p."status" = 'active' AND c."status" <> 'revoked'
+    ON CONFLICT ("tenantId", "type", "externalId") DO UPDATE SET
+      "connectionId" = EXCLUDED."connectionId",
+      "tokenEnc" = COALESCE(EXCLUDED."tokenEnc", "MetaAsset"."tokenEnc"),
+      "name" = EXCLUDED."name",
+      "status" = 'active',
+      "meta" = (CASE WHEN jsonb_typeof("MetaAsset"."meta") = 'object' THEN "MetaAsset"."meta" ELSE '{}'::jsonb END) || ${patch}::jsonb
+            || jsonb_build_object('checkedAt', (CASE WHEN jsonb_typeof("MetaAsset"."meta"->'checkedAt') = 'object' THEN "MetaAsset"."meta"->'checkedAt' ELSE '{}'::jsonb END) || ${stamps}::jsonb),
+      "updatedAt" = now()`;
+  return count > 0;
+}
+
+type EnrichContext = {
+  tenantId: string;
+  connectionId: string;
+  userToken: string;
+  deadline: number;
+  callTimeoutMs: number;
+  metaDeps?: Partial<PromoteMetaDeps>;
+};
+
+/** A promote/meta client whose tokens come from this run's listing, so no stored token is opened. */
+function discoveryClient(ctx: EnrichContext, pages: Found[], adAccounts: Found[]): PromoteMeta {
+  const access = new Map<string, AssetAccess>();
+  for (const p of pages) if (p.token) access.set(`page:${p.externalId}`, { assetId: `page:${p.externalId}`, type: "page", externalId: p.externalId, name: p.name, token: p.token });
+  for (const a of adAccounts) access.set(`ad:${a.externalId}`, { assetId: `ad:${a.externalId}`, type: "ad_account", externalId: a.externalId, name: a.name, token: ctx.userToken });
+  return createPromoteMeta({
+    access: async (_tenantId, assetId) => {
+      const a = access.get(assetId);
+      if (!a) throw new Error("not in this discovery run");
+      return a;
+    },
+    readTimeoutMs: ctx.callTimeoutMs,
+    writeTimeoutMs: ctx.callTimeoutMs,
+    ...ctx.metaDeps,
+  });
+}
+
+/** The Meta id of the workspace's spending ad account (D3), whose readiness matters most; null when none is chosen or unreadable. */
+async function spendingAdAccountExternalId(tenantId: string): Promise<string | null> {
+  try {
+    const control = (await prisma.spendControl.findUnique({ where: { tenantId }, select: { spendingAdAccountAssetId: true } })) as { spendingAdAccountAssetId?: string | null } | null;
+    if (!control?.spendingAdAccountAssetId) return null;
+    const row = (await prisma.metaAsset.findFirst({ where: { id: control.spendingAdAccountAssetId, tenantId, type: "ad_account" }, select: { externalId: true } })) as { externalId?: unknown } | null;
+    return typeof row?.externalId === "string" ? row.externalId : null;
+  } catch {
+    return null;
+  }
+}
+
+async function workspaceWhatsAppNumbers(tenantId: string): Promise<string[] | null> {
+  try {
+    const rows = (await prisma.phoneNumber.findMany({ where: { tenantId, status: "connected" }, select: { displayPhone: true }, take: 20 })) as { displayPhone?: unknown }[] | null;
+    return Array.isArray(rows) ? rows.map((r) => digitsOf(r.displayPhone)).filter(Boolean) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reads C2 and C3 for each Page and C4 to C6 for each ad account through promote/meta.ts (which classifies every request and
+ * keeps the payment-method field list to itself), inside the same deadline as subscribing, at most ENRICH_CONCURRENCY at a
+ * time. Each block that succeeds is stored with its own checkedAt, guarded like the subscription status (active asset,
+ * connection not revoked); nothing is written once the deadline has passed. Page-backed Instagram identities (C3) become
+ * Instagram assets with `pageBacked: true`. Never throws.
+ *
+ * The caps rotate: the workspace's spending ad account goes first, then whatever was tried longest ago (READINESS_TRIED_KEY,
+ * written on every attempt), and ad accounts and Pages take turns, so many Pages can't use up the time the ad accounts need and
+ * Pages beyond the cap are read on later runs.
+ */
+async function enrichAssets(ctx: EnrichContext, found: Found[], previous: Map<string, Record<string, unknown>>): Promise<void> {
+  const allPages = found.filter((f) => f.type === "page" && f.token);
+  const allAccounts = found.filter((f) => f.type === "ad_account");
+  const instagram = found.filter((f) => f.type === "instagram");
+  const late = () => Date.now() > ctx.deadline;
+  if ((allPages.length === 0 && allAccounts.length === 0) || late()) return;
+  if (await disconnectedMeanwhile(ctx.tenantId, ctx.connectionId)) return;
+  const spending = allAccounts.length ? await spendingAdAccountExternalId(ctx.tenantId) : null;
+  const pages = orderForEnrich("page", allPages, previous).slice(0, MAX_ENRICH_PAGES);
+  const adAccounts = orderForEnrich("ad_account", allAccounts, previous, spending).slice(0, MAX_ENRICH_AD_ACCOUNTS);
+  const meta = discoveryClient(ctx, pages, adAccounts);
+  const at = () => new Date().toISOString();
+  const numbers = pages.length ? await workspaceWhatsAppNumbers(ctx.tenantId) : null;
+
+  /** What each asset's successful reads set, and the attempt time, written once per asset as a merge of just those keys. */
+  const patches = new Map<Found, { values: Record<string, unknown>; times: Record<string, string> }>();
+  const save = async (asset: Found) => {
+    const patch = patches.get(asset);
+    patches.delete(asset);
+    if (!patch || late()) return;
+    await mergeBlocks(ctx.tenantId, ctx.connectionId, asset, patch.values, patch.times).catch(() => undefined);
+  };
+  const stamp = (asset: Found, block: string, values: Record<string, unknown>) => {
+    const time = at();
+    Object.assign(asset.meta, values);
+    asset.meta.checkedAt = { ...checkedAtOf(asset.meta), [block]: time };
+    const patch = patches.get(asset) ?? { values: {}, times: {} };
+    Object.assign(patch.values, values);
+    patch.times[block] = time;
+    patches.set(asset, patch);
+  };
+  /** Records the attempt, whatever the reads answer, so the next run starts with what this one did not reach. */
+  const tried = (asset: Found) => {
+    const time = at();
+    asset.meta[READINESS_TRIED_KEY] = time;
+    const patch = patches.get(asset) ?? { values: {}, times: {} };
+    patch.values[READINESS_TRIED_KEY] = time;
+    patches.set(asset, patch);
+  };
+
+  const backed: { page: Found; identities: InstagramIdentity[] }[] = [];
+  /** Pages whose just-made identity C3 does not list yet: the stored id stays. */
+  const kept: { page: Found; id: string }[] = [];
+  /** act id -> the Instagram ids it may advertise as (C6), for the accounts whose read succeeded. */
+  const authorized = new Map<string, Set<string>>();
+
+  type Job = { kind: "page"; asset: Found } | { kind: "ad"; asset: Found };
+  const jobs: Job[] = [];
+  for (let i = 0; i < Math.max(pages.length, adAccounts.length); i++) {
+    if (i < adAccounts.length) jobs.push({ kind: "ad", asset: adAccounts[i] });
+    if (i < pages.length) jobs.push({ kind: "page", asset: pages[i] });
+  }
+  await runPool(jobs, ENRICH_CONCURRENCY, ctx.deadline, async (job) => {
+    const { asset } = job;
+    tried(asset);
+    if (job.kind === "page") {
+      const pageCtx = { tenantId: ctx.tenantId, pageAssetId: `page:${asset.externalId}` };
+      try {
+        const r = await meta.getPageReadiness(pageCtx);
+        const number = r.whatsappNumberChecked ? digitsOf(r.whatsappNumber) || null : null;
+        stamp(asset, "leadgen", {
+          leadgenTosAccepted: r.leadgenTermsAccepted,
+          whatsappNumber: number,
+          whatsappLinkState: whatsappLinkState({ number, checked: r.whatsappNumberChecked }, numbers),
+        });
+      } catch {
+        // Kept from the previous run (carriedBlocks).
+      }
+      if (late()) return;
+      try {
+        const identities = await meta.listPageBackedInstagram(pageCtx);
+        const fresh = identities.length === 0 ? justCreatedIdentity(previous.get(asset.externalId)) : null;
+        if (fresh) {
+          kept.push({ page: asset, id: fresh });
+        } else {
+          stamp(asset, "pageBacked", { pageBackedIgId: identities[0]?.id ?? null });
+          backed.push({ page: asset, identities });
+        }
+      } catch {
+        // Kept from the previous run.
+      }
+    } else {
+      const adCtx = { tenantId: ctx.tenantId, adAccountAssetId: `ad:${asset.externalId}` };
+      try {
+        const h = await meta.getAdAccountHealth(adCtx);
+        stamp(asset, "health", {
+          accountStatus: h.accountStatus ?? asset.meta.accountStatus ?? null,
+          disableReason: h.disableReason,
+          businessId: h.businessId,
+          customAudienceTos: accepted(h.tosAccepted, "custom_audience_tos"),
+          userTosAccepted: accepted(h.userTosAccepted, "custom_audience_tos"),
+          fundingPresent: h.fundingPresent,
+        });
+      } catch {
+        // Kept from the previous run.
+      }
+      if (late()) return;
+      try {
+        stamp(asset, "minBudget", { minDailyBudgetMinor: minDailyFrom((await meta.getMinimumBudgets(adCtx)).minimumsMinor) });
+      } catch {
+        // Kept from the previous run.
+      }
+      if (late()) return;
+      try {
+        const res = await meta.listAdAccountInstagram(adCtx);
+        authorized.set(asset.externalId, new Set(res.items.map((i) => i.id)));
+      } catch {
+        // This account's answer stays as previously stored on each Instagram asset.
+      }
+    }
+    await save(asset);
+  });
+  if (late()) return;
+  if ((backed.length || kept.length) && (await disconnectedMeanwhile(ctx.tenantId, ctx.connectionId))) return;
+  // What is stored on the identities (they are not in the listing, so not in `previous`): C6's answer is carried over.
+  const identityIds = [...backed.flatMap((b) => b.identities.map((i) => i.id)), ...kept.map((k) => k.id)];
+  const priorIdentities = identityIds.length ? await previousMetas(ctx.tenantId, identityIds) : new Map<string, Record<string, unknown>>();
+
+  // C3: the ads-only identities become Instagram assets; one the Page no longer lists is set inactive.
+  for (const { page, identities } of backed) {
+    for (const ig of identities) {
+      const prior = priorIdentities.get(ig.id);
+      const igMeta = mergeMeta(
+        { pageId: page.externalId, username: ig.username, profilePictureUrl: null, pageBacked: true, checkedAt: { listing: at() } },
+        carriedBlocks("instagram", prior),
+      );
+      const data = { connectionId: ctx.connectionId, name: ig.username ?? page.name, status: "active", meta: igMeta as object, ...(page.token ? { tokenEnc: sealSecret(ctx.tenantId, page.token) } : {}) };
+      try {
+        await prisma.metaAsset.upsert({
+          where: { tenantId_type_externalId: { tenantId: ctx.tenantId, type: "instagram", externalId: ig.id } },
+          create: { tenantId: ctx.tenantId, type: "instagram", externalId: ig.id, ...data },
+          update: data,
+        });
+      } catch {
+        continue; // The next discovery tries again.
+      }
+      instagram.push({ type: "instagram", externalId: ig.id, name: data.name, token: page.token, meta: igMeta });
+    }
+    const before = previous.get(page.externalId)?.pageBackedIgId;
+    if (typeof before === "string" && !identities.some((i) => i.id === before)) {
+      try {
+        await prisma.metaAsset.updateMany({ where: { tenantId: ctx.tenantId, connectionId: ctx.connectionId, type: "instagram", externalId: before, status: "active" }, data: { status: "inactive" } });
+      } catch {
+        // The next discovery tries again.
+      }
+    }
+  }
+
+  // A just-made identity C3 does not list yet keeps its asset (ensurePageBackedInstagram stored it) and still gets C6's answer.
+  for (const { page, id } of kept) {
+    const prior = priorIdentities.get(id);
+    if (prior) instagram.push({ type: "instagram", externalId: id, name: page.name, token: page.token, meta: { ...prior } });
+  }
+
+  // C6: which ad accounts may run ads as each Instagram account. Accounts whose read failed keep their previous answer.
+  if (authorized.size === 0) return;
+  for (const ig of instagram) {
+    const prior = Array.isArray(ig.meta.authorizedAdAccountIds) ? (ig.meta.authorizedAdAccountIds as unknown[]).filter((v): v is string => typeof v === "string") : [];
+    const ids = new Set(prior.filter((act) => !authorized.has(act)));
+    for (const [act, igs] of authorized) if (igs.has(ig.externalId)) ids.add(act);
+    stamp(ig, "authorized", { authorizedAdAccountIds: [...ids].sort() });
+    await save(ig);
+  }
+}
+
+export type DiscoverOptions = {
+  /** The whole discovery's time budget: listing, subscribing and the readiness reads (default SUBSCRIBE_BUDGET_MS). */
+  subscribeBudgetMs?: number;
+  subscribeCallTimeoutMs?: number;
+  /** Test seams for the promote/meta client the readiness reads use (store, throttle, sleep, clock). */
+  promoteMeta?: Partial<PromoteMetaDeps>;
+};
 
 /** The connection was disconnected (or removed) while this run was in flight. A run that cannot tell treats the connection as live. */
 async function disconnectedMeanwhile(tenantId: string, connectionId: string): Promise<boolean> {
@@ -383,9 +843,12 @@ export async function discoverAssets(tenantId: string, connectionId: string, tok
   const parts = [pages, ads, datasets, catalogs];
   const found = parts.flatMap((r) => r.found);
   const pageAssets = found.filter((f) => f.type === "page");
-  const previous = await previousSubscriptions(tenantId, pageAssets.map((p) => p.externalId));
+  const metas = await previousMetas(tenantId, found.map((f) => f.externalId));
+  const previous = subscriptionsOf(metas, pageAssets.map((p) => p.externalId));
   const now = new Date().toISOString();
   for (const page of pageAssets) page.meta.leadgenSubscription = previous.get(page.externalId) ?? { status: "pending", at: now };
+  // A block this listing does not read (C2 to C6) keeps what the previous run stored until its own read succeeds.
+  for (const a of found) a.meta = mergeMeta(a.meta, carriedBlocks(a.type, metas.get(a.externalId)));
 
   for (const a of found) {
     const data = {
@@ -401,16 +864,21 @@ export async function discoverAssets(tenantId: string, connectionId: string, tok
       update: data,
     });
   }
+  // Page-backed Instagram identities are not in the Pages listing; they stay as long as their Page is listed, until C3 says otherwise.
+  const pageBacked = pageAssets.map((p) => p.meta.pageBackedIgId).filter((id): id is string => typeof id === "string");
   for (const type of parts.flatMap((r) => r.types)) {
     const seen = found.filter((f) => f.type === type).map((f) => f.externalId);
     await prisma.metaAsset.updateMany({
-      where: { tenantId, connectionId, type, status: "active", externalId: { notIn: seen } },
+      where: { tenantId, connectionId, type, status: "active", externalId: { notIn: type === "instagram" ? [...seen, ...pageBacked] : seen } },
       data: { status: "inactive" },
     });
   }
   // The budget covers the whole discovery, not just this phase: what the listing calls used is not available to subscribing.
   const deadline = startedAt + (opts.subscribeBudgetMs ?? SUBSCRIBE_BUDGET_MS);
-  await subscribePages(tenantId, connectionId, pageAssets, previous, deadline, opts.subscribeCallTimeoutMs ?? SUBSCRIBE_CALL_TIMEOUT_MS).catch(() => undefined);
+  const callTimeoutMs = opts.subscribeCallTimeoutMs ?? SUBSCRIBE_CALL_TIMEOUT_MS;
+  // Lead alerts first; the readiness reads get what is left of the same budget, so the request still ends on time.
+  await subscribePages(tenantId, connectionId, pageAssets, previous, deadline, callTimeoutMs).catch(() => undefined);
+  await enrichAssets({ tenantId, connectionId, userToken: token, deadline, callTimeoutMs, metaDeps: opts.promoteMeta }, found, metas).catch(() => undefined);
   const counts: Record<string, number> = {};
   for (const f of found) counts[f.type] = (counts[f.type] ?? 0) + 1;
   return { businessId: businesses.rows[0]?.id ?? null, counts };

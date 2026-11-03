@@ -22,8 +22,8 @@ vi.mock("@/components/contacts/hooks", async (importOriginal) => ({
   },
 }));
 
-import { AiAgentView } from "@/components/ai-agent/AiAgentView";
-import { AI_OFF_TITLE, testChatProblem } from "@/components/ai-agent/helpers";
+import { AiAgentView, fileProblem } from "@/components/ai-agent/AiAgentView";
+import { AI_OFF_TITLE, agentProblems, languageOptions, sourceProblems, splitKeywords, testChatProblem } from "@/components/ai-agent/helpers";
 import { AI_OFF_MESSAGE } from "@/lib/ai-configured";
 
 const render = () => renderToStaticMarkup(createElement(AiAgentView));
@@ -79,5 +79,79 @@ describe("test chat failures", () => {
     expect(chat).not.toMatch(/catch[\s\S]*role: "ai"/);
     expect(chat).toContain("setProblem(testChatProblem(");
     expect(chat).toContain('role="alert"');
+  });
+});
+
+describe("AI agent forms work like the rest of the app", () => {
+  it("checks the fields on the page with the server's limits, so each problem shows under its own field", () => {
+    expect(agentProblems({ name: " ", instructions: "" })).toEqual({ name: "Give the agent a name.", instructions: expect.stringMatching(/^Tell the agent what to do/) });
+    const ok = { name: "Clinic", instructions: "Help", activation: "always", noHumanReplyMinutes: 0, maxRepliesPerConversation: 10, keywords: "refund, complaint" };
+    // the minutes only count when the agent waits for a teammate
+    expect(agentProblems(ok)).toEqual({});
+    expect(agentProblems({ ...ok, activation: "no_human_reply_minutes" }).minutes).toMatch(/1 to 1440/);
+    expect(agentProblems({ ...ok, activation: "no_human_reply_minutes", noHumanReplyMinutes: 30 })).toEqual({});
+    for (const max of [0, 51, 2.5, Number.NaN]) expect(agentProblems({ ...ok, maxRepliesPerConversation: max }).max, String(max)).toBe("Use a whole number from 1 to 50.");
+    expect(agentProblems({ ...ok, keywords: Array.from({ length: 21 }, (_, i) => `w${i}`).join(",") }).keywords).toBe("Use up to 20 handoff keywords. You have 21.");
+    expect(agentProblems({ ...ok, keywords: "x".repeat(41) }).keywords).toMatch(/40 characters/);
+    expect(splitKeywords(" refund, ,Complaint ,")).toEqual(["refund", "Complaint"]);
+  });
+
+  it("checks the Add knowledge form for the kind chosen", () => {
+    const empty = { content: "", url: "", q: "", a: "" };
+    expect(Object.keys(sourceProblems("text", empty))).toEqual(["content"]);
+    expect(sourceProblems("text", { ...empty, content: "We open at 9." })).toEqual({});
+    expect(sourceProblems("url", empty).url).toBe("Enter the address of the page.");
+    expect(sourceProblems("url", { ...empty, url: "http://example.com/faq" }).url).toMatch(/https:\/\//);
+    expect(sourceProblems("url", { ...empty, url: "https://example.com/faq" })).toEqual({});
+    expect(Object.keys(sourceProblems("faq", { ...empty, q: "Cards?" }))).toEqual(["a"]);
+  });
+
+  it("offers the reply language as a list, and keeps a language typed in before the list existed", () => {
+    const auto = languageOptions("auto");
+    expect(auto[0]).toEqual({ value: "auto", label: "Match the customer's language" });
+    expect(auto.map((l) => l.value)).toContain("Hindi");
+    expect(languageOptions("hindi")).toHaveLength(auto.length);
+    expect(languageOptions("Swahili").at(-1)).toEqual({ value: "Swahili", label: "Swahili" });
+  });
+
+  it("uses inline errors, required markers and the app's own confirm dialogs instead of the browser's", () => {
+    const html = render();
+    const forms = html.match(/<form[^>]*aria-label="(AI agent settings|Add knowledge)"[^>]*>/g) ?? [];
+    expect(forms).toHaveLength(2);
+    for (const form of forms) expect(form).toMatch(/ noValidate=""/i);
+    expect(html).not.toMatch(/<(input|textarea)[^>]* required=""/);
+    expect(html).toMatch(/<label for="ai-name"[^>]*>Name<span aria-hidden="true"[^>]*>\*<\/span>/);
+    expect(html).toMatch(/<label for="ai-instructions"[^>]*>Instructions<span aria-hidden="true"[^>]*>\*<\/span>/);
+    expect(html).toMatch(/<select[^>]*id="ai-language"/);
+    expect(html).toContain("Match the customer&#x27;s language");
+    const src = readFileSync(path.join(__dirname, "..", "src/components/ai-agent/AiAgentView.tsx"), "utf8");
+    expect(src).not.toContain("window.confirm");
+    const removeSource = src.slice(src.indexOf("async function remove(source: Source)"), src.indexOf("return (", src.indexOf("async function remove(source: Source)")));
+    expect(removeSource).toMatch(/await confirm\(/);
+  });
+});
+
+describe("AI agent page: pauses, rule-started replies, text files and page refresh (P5)", () => {
+  it("offers 'Only when an automation rule starts it' and says when a paused chat gets AI replies again", () => {
+    const html = render();
+    expect(html).toContain('<option value="when_started">Only when an automation rule starts it</option>');
+    expect(html).toContain("Max AI replies per chat in a day");
+    expect(html).toContain("From 1 to 50 in any 24 hours.");
+    expect(html).toContain("after the chat was marked solved, or after a day without writing");
+    expect(html).toContain("Let the AI answer again");
+  });
+
+  it("adds .txt and .md files and explains Refresh for web pages", () => {
+    const html = render();
+    expect(html).toContain('<option value="file">Text file (.txt or .md)</option>');
+    expect(html).toContain("press Refresh to read one again after it changes");
+  });
+
+  it("checks a chosen file with the server's limits before sending it", () => {
+    expect(fileProblem(null)).toBe("Choose a .txt or .md file.");
+    expect(fileProblem({ name: "menu.pdf", content: "%PDF" })).toMatch(/Only .txt and .md files/);
+    expect(fileProblem({ name: "notes.TXT", content: "   " })).toBe("This file has no text in it.");
+    expect(fileProblem({ name: "notes.md", content: "x".repeat(100_001) })).toMatch(/100,001 characters.*up to 100,000/);
+    expect(fileProblem({ name: "faq.markdown", content: "# FAQ" })).toBeUndefined();
   });
 });

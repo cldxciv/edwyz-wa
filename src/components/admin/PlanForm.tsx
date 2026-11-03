@@ -3,8 +3,9 @@
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import type { PlanCeilingValues } from "@/lib/admin/plans";
+import { AI_REPLIES_PER_HOUR_BY_PLAN, BASE_AI_REPLIES_PER_HOUR, defaultRepliesPerHourFor, prefillRepliesPerHour, repliesPerHourProblem, withoutRepliesPerHour } from "@/lib/billing/ai-allowance";
 import { apiFetch, Button, FormField, Input, Select, Textarea, toast } from "@/components/ui";
-import { PLAN_CEILING_CURRENCIES, validateFeatures, validateLimit, validateMoneyText, validatePlanCode, validatePrice } from "./helpers";
+import { PLAN_CEILING_CURRENCIES, planCodeFrom, validateFeatures, validateLimit, validateMoneyText, validatePlanCode, validatePrice } from "./helpers";
 
 export type PlanFormValues = {
   id?: string;
@@ -20,6 +21,8 @@ export type PlanFormValues = {
   adAccountLimit?: string;
   scheduledPostLimit?: string;
   connectedChannelLimit?: string;
+  /** AI agent replies an hour (Plan.features.aiRepliesPerHour). Left out, the form prefills the plan's value or its default. */
+  aiRepliesPerHour?: string;
   features: string;
   active: boolean;
   sortOrder: string;
@@ -31,8 +34,27 @@ export type PlanFormValues = {
 export const EMPTY_CEILINGS: PlanCeilingValues = { ads: [{ currency: "INR", daily: "", monthly: "" }], whatsappMonthly: "", aiDaily: "" };
 
 export const EMPTY_PLAN: PlanFormValues = {
-  code: "", name: "", description: "", priceRupees: "", intervalMonths: "1", seatLimit: "", contactLimit: "", monthlyBroadcastLimit: "", aiCreditsMonthly: "", adAccountLimit: "", scheduledPostLimit: "", connectedChannelLimit: "", features: "{}", active: true, sortOrder: "0", ceilings: EMPTY_CEILINGS,
+  code: "", name: "", description: "", priceRupees: "", intervalMonths: "1", seatLimit: "", contactLimit: "", monthlyBroadcastLimit: "", aiCreditsMonthly: "", adAccountLimit: "", scheduledPostLimit: "", connectedChannelLimit: "", aiRepliesPerHour: String(BASE_AI_REPLIES_PER_HOUR), features: "{}", active: true, sortOrder: "0", ceilings: EMPTY_CEILINGS,
 };
+
+/**
+ * The "AI replies an hour" field and the features JSON as the form shows them: the field holds the plan's value (or, when the plan
+ * has none, its default: Starter 60, Growth 200, Agency 600, otherwise 60), and the JSON leaves that key out so the value has one
+ * place to change. JSON that does not parse is shown as it is (the form's own check explains it).
+ */
+export function repliesPerHourFields(initial: Pick<PlanFormValues, "code" | "name" | "features" | "aiRepliesPerHour">): { replies: string; features: string } {
+  let parsed: unknown = null;
+  try {
+    parsed = initial.features.trim() ? JSON.parse(initial.features) : {};
+  } catch {
+    parsed = null;
+  }
+  const isObject = !!parsed && typeof parsed === "object" && !Array.isArray(parsed);
+  const replies = initial.aiRepliesPerHour ?? String(prefillRepliesPerHour({ code: initial.code, name: initial.name, features: isObject ? parsed : null }));
+  return { replies, features: isObject ? JSON.stringify(withoutRepliesPerHour(parsed)) : initial.features };
+}
+
+const REPLIES_HINT = `How many replies the AI agent may send in any hour, across all chats. Defaults: Starter ${AI_REPLIES_PER_HOUR_BY_PLAN.starter}, Growth ${AI_REPLIES_PER_HOUR_BY_PLAN.growth}, Agency ${AI_REPLIES_PER_HOUR_BY_PLAN.agency}. Leave empty to use the default for this plan's name.`;
 
 const LIMIT_FIELDS = ["seatLimit", "contactLimit", "monthlyBroadcastLimit", "aiCreditsMonthly", "adAccountLimit", "scheduledPostLimit", "connectedChannelLimit"] as const;
 
@@ -65,6 +87,8 @@ function check(body: Record<string, unknown>, locked: boolean): Errors {
     const e = validateLimit(text(k));
     if (e) errors[k] = e;
   }
+  const replies = repliesPerHourProblem(text("aiRepliesPerHour"));
+  if (replies) errors.aiRepliesPerHour = replies;
   const features = validateFeatures(text("features"));
   if (features) errors.features = features;
   return errors;
@@ -76,6 +100,15 @@ export function PlanForm({ initial = EMPTY_PLAN }: { initial?: PlanFormValues })
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState<Errors>({});
   const [failure, setFailure] = useState<string | null>(null);
+  const prefilled = repliesPerHourFields(initial);
+  const [replies, setReplies] = useState(prefilled.replies);
+  // While a new plan is being named, the field follows the name's default (Growth 200 ...) until the admin types a number.
+  const [repliesTouched, setRepliesTouched] = useState(editing);
+
+  function nameChanged(name: string) {
+    if (repliesTouched) return;
+    setReplies(String(defaultRepliesPerHourFor({ name }) ?? BASE_AI_REPLIES_PER_HOUR));
+  }
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -83,7 +116,14 @@ export function PlanForm({ initial = EMPTY_PLAN }: { initial?: PlanFormValues })
     const f = new FormData(form);
     const body: Record<string, unknown> = Object.fromEntries([...f.entries()].map(([k, v]) => [k, String(v)]));
     body.active = f.get("active") === "on";
+    if (!editing && !String(body.code ?? "").trim()) {
+      body.code = planCodeFrom(String(body.name ?? ""));
+      const codeInput = form.querySelector<HTMLInputElement>('input[name="code"]');
+      if (codeInput) codeInput.value = String(body.code);
+    }
     const found = check(body, !!initial.priceLocked);
+    // With no name there is no code to make: the name's own error says what to do.
+    if (!editing && !String(body.code).trim() && !String(body.name ?? "").trim()) delete found.code;
     setErrors(found);
     setFailure(null);
     if (Object.keys(found).length > 0) {
@@ -95,7 +135,11 @@ export function PlanForm({ initial = EMPTY_PLAN }: { initial?: PlanFormValues })
     try {
       await apiFetch(editing ? `/api/admin/plans/${initial.id}` : "/api/admin/plans", { method: editing ? "PATCH" : "POST", body });
       toast.success(editing ? "Plan saved" : "Plan created");
-      if (!editing) form.reset();
+      if (!editing) {
+        form.reset();
+        setReplies(String(BASE_AI_REPLIES_PER_HOUR));
+        setRepliesTouched(false);
+      }
       router.refresh();
     } catch (err) {
       setFailure(err instanceof Error ? err.message : "Something went wrong.");
@@ -108,7 +152,7 @@ export function PlanForm({ initial = EMPTY_PLAN }: { initial?: PlanFormValues })
   return (
     <form onSubmit={submit} noValidate className="grid gap-4 sm:grid-cols-2">
       <FormField label="Plan name" required error={errors.name} hint="Shown to customers on the billing page.">
-        <Input name="name" defaultValue={initial.name} maxLength={80} />
+        <Input name="name" defaultValue={initial.name} maxLength={80} onChange={(e) => nameChanged(e.target.value)} />
       </FormField>
       <FormField label="Description" optional hint="One short line about who this plan is for.">
         <Input name="description" defaultValue={initial.description} maxLength={500} />
@@ -140,8 +184,19 @@ export function PlanForm({ initial = EMPTY_PLAN }: { initial?: PlanFormValues })
       <FormField label="Broadcast messages a month" optional error={errors.monthlyBroadcastLimit} hint="Leave empty for unlimited.">
         <Input name="monthlyBroadcastLimit" inputMode="numeric" defaultValue={initial.monthlyBroadcastLimit} />
       </FormField>
-      <FormField label="AI credits a month" optional error={errors.aiCreditsMonthly} hint="One reply costs 1 credit, one picture 5. Leave empty to use the platform ceiling (AI_DEFAULT_MONTHLY_CREDITS). AI is never unlimited.">
+      <FormField label="AI credits a month" optional error={errors.aiCreditsMonthly} hint="One reply costs 1 credit, one picture 5. Leave empty to use the platform's default monthly credits. AI is never unlimited.">
         <Input name="aiCreditsMonthly" inputMode="numeric" defaultValue={initial.aiCreditsMonthly ?? ""} />
+      </FormField>
+      <FormField label="AI replies an hour" optional error={errors.aiRepliesPerHour} hint={REPLIES_HINT}>
+        <Input
+          name="aiRepliesPerHour"
+          inputMode="numeric"
+          value={replies}
+          onChange={(e) => {
+            setRepliesTouched(true);
+            setReplies(e.target.value);
+          }}
+        />
       </FormField>
       <FormField label="Ad accounts" optional error={errors.adAccountLimit} hint="Ad accounts that can carry campaigns. Leave empty for unlimited.">
         <Input name="adAccountLimit" inputMode="numeric" defaultValue={initial.adAccountLimit ?? ""} />
@@ -164,14 +219,14 @@ export function PlanForm({ initial = EMPTY_PLAN }: { initial?: PlanFormValues })
       <details data-advanced className="rounded-control border border-border p-3 sm:col-span-2">
         <summary className="flex min-h-10 cursor-pointer items-center text-sm font-medium">Advanced options</summary>
         <div className="mt-3 grid gap-4 sm:grid-cols-2">
-          <FormField label="Plan code" required error={errors.code} hint="A short internal name, lowercase, like starter. Used to identify the plan.">
+          <FormField label="Plan code" required={editing} optional={!editing} error={errors.code} hint={editing ? "A short internal name, lowercase, like starter. Used to identify the plan." : "A short internal name, lowercase, like starter. Left empty, it is made from the plan name."}>
             <Input name="code" defaultValue={initial.code} maxLength={40} autoCapitalize="off" spellCheck={false} />
           </FormField>
           <FormField label="Display order" optional hint="Lower numbers appear first.">
             <Input name="sortOrder" type="number" defaultValue={initial.sortOrder} />
           </FormField>
-          <FormField label="Extra features (JSON object)" optional error={errors.features} hint='For example {"api": true}. Leave as {} if unsure.' className="sm:col-span-2">
-            <Textarea name="features" rows={3} defaultValue={initial.features} className="font-mono" spellCheck={false} />
+          <FormField label="Extra allowances (JSON object)" optional error={errors.features} hint='Allowances by name, for example {"automationTriggersMonthly": 5000}. Every module is on every plan, so there is nothing to switch on here. Leave as {} if unsure.' className="sm:col-span-2">
+            <Textarea name="features" rows={3} defaultValue={prefilled.features} className="font-mono" spellCheck={false} />
           </FormField>
         </div>
       </details>

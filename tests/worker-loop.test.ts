@@ -11,6 +11,20 @@ const db = vi.hoisted(() => ({
   eddyTurn: { findMany: vi.fn(async (_args?: unknown): Promise<unknown[]> => []), updateMany: vi.fn(async (_args?: unknown) => ({ count: 0 })) },
   eddyConversation: { findFirst: vi.fn(async (_args?: unknown): Promise<unknown> => null) },
   membership: { findFirst: vi.fn(async (_args?: unknown): Promise<unknown> => null) },
+  // The promote opt-out sweep's one lookup: does any customer-list audience exist (src/lib/promote/forget.ts). promote.audiences
+  // and the sweep itself (PRM-11) are no longer stubs: each first reads the audiences to work on (findMany), and with none it
+  // does nothing else (no write, no Meta call).
+  adAudience: { findFirst: vi.fn(async (_args?: unknown): Promise<unknown> => null), findMany: vi.fn(async (_args?: unknown): Promise<unknown[]> => []) },
+  // promote.audiences.uploads (PRM-11) first reads the open customer-list uploads, and with none it does nothing else.
+  adAudienceUpload: { findMany: vi.fn(async (_args?: unknown): Promise<unknown[]> => []) },
+  // promote.audience.forget (PRM-11) runs the forget jobs through runDueJobs (mocked below), then deletes the done ones.
+  job: { deleteMany: vi.fn(async (_args?: unknown) => ({ count: 0 })) },
+  // promote.media (PRM-06, src/lib/promote/tasks/media.ts) is no longer a stub: it reads AdMedia for due sends and checks, and
+  // with none due it does nothing else (no write, no Meta call).
+  adMedia: { findMany: vi.fn(async (_args?: unknown): Promise<unknown[]> => []), updateMany: vi.fn(async (_args?: unknown) => ({ count: 0 })) },
+  // promote.review and promote.review.sweep (PRM-08, src/lib/promote/review.ts) are no longer stubs: each first reads the platform
+  // ads to check, and with none it does nothing else (no write, no Meta call).
+  ad: { findMany: vi.fn(async (_args?: unknown): Promise<unknown[]> => []) },
 }));
 const eddyDeps = vi.hoisted(() => ({
   reconcileJob: vi.fn(async () => undefined),
@@ -66,6 +80,8 @@ vi.mock("@/worker/eddy", () => ({
     periodic: ["notices.scan", "actions.expire", "eddy.turns.stale", "eddy.retention", "eddy.erasure-sweep"].map((name) => ({ name, everyMs: 60_000, run: vi.fn() })),
   },
 }));
+// The promote module stands in with one task here; the real module is checked in its own block below (vi.importActual).
+vi.mock("@/lib/promote/worker", () => ({ worker: { queues: {}, periodic: [{ name: "promote.media", everyMs: 60_000, run: vi.fn() }] } }));
 
 import { daemonIsAlive } from "@/worker/daemon";
 import { resetSweepState, runPass, startWorker, workDone, writeHeartbeat, type PassResult } from "@/worker/loop";
@@ -107,13 +123,25 @@ describe("runPass", () => {
   it("runs module queues and, unless told not to, their scheduled tasks", async () => {
     periodic.runPeriodic.mockResolvedValue(true);
     const withTasks = await runPass();
-    expect(withTasks.periodic).toEqual(["automation-task", "spend.commitments.reconcile", "notices.scan", "actions.expire", "eddy.turns.stale", "eddy.retention", "eddy.erasure-sweep"]);
+    expect(withTasks.periodic).toEqual(["automation-task", "spend.commitments.reconcile", "notices.scan", "actions.expire", "eddy.turns.stale", "eddy.retention", "eddy.erasure-sweep", "promote.media"]);
     expect(queue.runDueJobs.mock.calls.map((c) => c[0])).toContain("automation");
 
     periodic.runPeriodic.mockClear();
     const without = await runPass({ periodic: false });
     expect(without.periodic).toEqual([]);
     expect(periodic.runPeriodic).not.toHaveBeenCalled();
+  });
+
+  it("claims no further scheduled task once its tasks have run for the budget; the rest stay due, and every queue is still drained", async () => {
+    // 10 s per task against the 15 s budget: the second still starts, the third is never claimed (so it is still due next pass)
+    periodic.runPeriodic.mockImplementation(async () => {
+      vi.advanceTimersByTime(10_000);
+      return true;
+    });
+    const r = await runPass();
+    expect(r.periodic).toEqual(["automation-task", "spend.commitments.reconcile"]);
+    expect(periodic.runPeriodic).toHaveBeenCalledTimes(2);
+    expect(queue.runDueJobs.mock.calls.map((c) => c[0])).toContain("actions.reconcile");
   });
 });
 
@@ -130,6 +158,21 @@ describe("the spend module (docs/SPEND-CONTROLS-SPEC.md 4.16)", () => {
     const loop = readFileSync(path.join(process.cwd(), "src/worker/loop.ts"), "utf8");
     expect(loop).toContain('import { worker as spend } from "@/lib/spend/worker";');
     expect(loop).toMatch(/const MODULES: WorkerModule\[\] = \[[^\]]*\bspend\b[^\]]*\]/);
+  });
+});
+
+describe("the promote module (docs/IG-PAGE-ADS-SPEC.md 5.5, PRM-00)", () => {
+  it("is registered in MODULES: its periodic tasks run in every pass, so tick covers a dead daemon", async () => {
+    periodic.runPeriodic.mockResolvedValue(true);
+    const r = await runPass();
+    expect(r.periodic).toContain("promote.media");
+    expect(r.periodic.at(-1)).toBe("promote.media");
+  });
+
+  it("the loop imports the promote worker module", () => {
+    const loop = readFileSync(path.join(process.cwd(), "src/worker/loop.ts"), "utf8");
+    expect(loop).toContain('import { worker as promote } from "@/lib/promote/worker";');
+    expect(loop).toMatch(/const MODULES: WorkerModule\[\] = \[[^\]]*\bpromote\b[^\]]*\]/);
   });
 });
 
@@ -442,5 +485,108 @@ describe("src/worker/eddy.ts (docs/EDDY-SPEC.md 8.4, EDDY-16 acceptance 1)", () 
     expect(externals.filter((e) => /^@anthropic-ai\/sdk(\/|$)/.test(e))).toEqual([]);
     const src = readFileSync(path.join(root, "src/worker/eddy.ts"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
     expect(src).not.toMatch(/from "@\/lib\/eddy\/(loop|model-binding)"|ai-stream|@anthropic-ai\/sdk/);
+  });
+});
+
+// =====================================================================================================================
+// The real promote WorkerModule (src/lib/promote/worker.ts): schedule, the PROMOTE_ENABLED gate and no-op task stubs
+// =====================================================================================================================
+
+describe("src/lib/promote/worker.ts (docs/IG-PAGE-ADS-SPEC.md 5.5, PRM-00 acceptance 5)", () => {
+  type PromoteModule = typeof import("@/lib/promote/worker");
+  const real = () => vi.importActual<PromoteModule>("@/lib/promote/worker");
+  const saved = process.env.PROMOTE_ENABLED;
+  const dbCalls = () =>
+    [db.$executeRaw, db.platformSetting.findUnique, db.webhookEvent.findMany, db.actionRecord.updateMany, db.eddyTurn.findMany, db.eddyTurn.updateMany, db.eddyConversation.findFirst, db.membership.findFirst]
+      .reduce((n, fn) => n + fn.mock.calls.length, 0);
+
+  beforeEach(() => vi.useRealTimers());
+  afterEach(() => {
+    if (saved === undefined) delete process.env.PROMOTE_ENABLED;
+    else process.env.PROMOTE_ENABLED = saved;
+    db.adAudience.findFirst.mockReset();
+    db.adAudience.findFirst.mockResolvedValue(null);
+  });
+
+  it("has no queues and the seven tasks of 5.5 at their intervals, plus PRM-11's forget jobs every minute and uploads every 2 minutes", async () => {
+    const { worker } = await real();
+    expect(worker.queues).toEqual({});
+    expect(worker.periodic.map((p) => [p.name, p.everyMs])).toEqual([
+      ["promote.media", 60_000],
+      ["promote.review", 15 * 60_000],
+      ["promote.review.sweep", 2 * 3_600_000],
+      ["promote.leads.backfill", 30 * 60_000],
+      ["promote.audiences", 6 * 3_600_000],
+      ["promote.audiences.optout", 24 * 3_600_000],
+      ["promote.breakdowns", 6 * 3_600_000],
+      ["promote.audience.forget", 60_000],
+      ["promote.audiences.uploads", 2 * 60_000],
+    ]);
+  });
+
+  // The privacy duties of 5.5 (the opt-out sweep and the forget jobs) run whatever PROMOTE_ENABLED says.
+  const PRIVACY_TASKS = ["promote.audiences.optout", "promote.audience.forget"];
+
+  it("every feature task returns at once, with no database call, while PROMOTE_ENABLED is off, unset or unknown", async () => {
+    const { worker, SKIPPED_OFF } = await real();
+    for (const value of [undefined, "off", "enabled"]) {
+      if (value === undefined) delete process.env.PROMOTE_ENABLED;
+      else process.env.PROMOTE_ENABLED = value;
+      for (const task of worker.periodic.filter((t) => !PRIVACY_TASKS.includes(t.name))) expect(await task.run(), `${task.name} with ${value}`).toEqual(SKIPPED_OFF);
+    }
+    expect(dbCalls()).toBe(0);
+    expect(db.adAudience.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("the opt-out sweep is a privacy duty: it runs while PROMOTE_ENABLED is off whenever a customer-list audience exists", async () => {
+    const { worker, SKIPPED_NO_CUSTOMER_LISTS } = await real();
+    const optout = worker.periodic.find((t) => t.name === "promote.audiences.optout")!;
+    for (const value of [undefined, "off", "admins", "on"]) {
+      if (value === undefined) delete process.env.PROMOTE_ENABLED;
+      else process.env.PROMOTE_ENABLED = value;
+      // None exists: one lookup, nothing else (no Meta call, no other table).
+      db.adAudience.findFirst.mockClear();
+      db.adAudience.findFirst.mockResolvedValueOnce(null);
+      expect(await optout.run(), `none with ${value}`).toEqual(SKIPPED_NO_CUSTOMER_LISTS);
+      expect(db.adAudience.findFirst).toHaveBeenCalledTimes(1);
+      expect(db.adAudience.findFirst).toHaveBeenCalledWith({ where: { kind: "customer_list", deletedAt: null }, select: { id: true } });
+      // One exists (a kill switch or rollback after P4): the sweep runs.
+      db.adAudience.findFirst.mockResolvedValueOnce({ id: "aud_1" });
+      expect(await optout.run(), `one with ${value}`).toEqual({ contacts: 0, queued: 0 });
+    }
+    expect(dbCalls()).toBe(0);
+  });
+
+  it("once enabled, each feature task calls its function in src/lib/promote/tasks, which with nothing to do touches neither the other tables nor Meta", async () => {
+    const { worker } = await real();
+    db.adAudience.findFirst.mockResolvedValue({ id: "aud_1" });
+    for (const value of ["admins", "on"]) {
+      process.env.PROMOTE_ENABLED = value;
+      const results = Object.fromEntries(await Promise.all(worker.periodic.map(async (t) => [t.name, await t.run()] as const)));
+      expect(results).toEqual({
+        "promote.media": { uploaded: 0, polled: 0, failed: 0 },
+        "promote.review": { checked: 0, changed: 0, failed: 0 },
+        "promote.review.sweep": { checked: 0, changed: 0, failed: 0 },
+        "promote.leads.backfill": { forms: 0, leads: 0, failed: 0 },
+        "promote.audiences": { audiences: 0, updated: 0, failed: 0 },
+        "promote.audiences.optout": { contacts: 0, queued: 0 },
+        "promote.breakdowns": { campaigns: 0, rows: 0, failed: 0 },
+        "promote.audience.forget": { sent: 0, purged: 0 },
+        "promote.audiences.uploads": { uploads: 0, done: 0, waiting: 0, failed: 0 },
+      });
+    }
+    expect(dbCalls()).toBe(0);
+    // Only the opt-out sweep looked: once per run.
+    expect(db.adAudience.findFirst).toHaveBeenCalledTimes(2);
+  });
+
+  it("the module, its flags and the task stubs import neither the database nor the Graph client, and call no fetch", () => {
+    const dir = path.join(process.cwd(), "src/lib/promote");
+    for (const file of ["worker.ts", "flags.ts", ...readdirSync(path.join(dir, "tasks")).map((f) => `tasks/${f}`)]) {
+      const src = readFileSync(path.join(dir, file), "utf8");
+      expect(src, file).not.toMatch(/from "@\/lib\/(db|graph|ads\/client)"/);
+      expect(src, file).not.toMatch(/\bfetch\(/);
+    }
+    expect(readdirSync(path.join(dir, "tasks")).sort()).toEqual(["audiences.ts", "backfill.ts", "breakdowns.ts", "media.ts", "review.ts"]);
   });
 });

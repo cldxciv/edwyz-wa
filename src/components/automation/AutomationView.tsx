@@ -5,6 +5,7 @@ import { useMemo, useRef, useState } from "react";
 import { Alert, Badge, Button, Card, DataTable, Dialog, EmptyState, ErrorState, FormField, Input, Select, apiFetch, confirm, toast, type Column } from "@/components/ui";
 import { PageHeader } from "@/components/app/PageHeader";
 import { canManage, useApi, useRole } from "@/components/contacts/hooks";
+import { OPT_OUT_RULES } from "@/lib/contacts/opt-out";
 import { AutomationSettings, type SettingsResponse } from "./AutomationSettings";
 import { RULE_FORM_ID, RuleForm } from "./RuleForm";
 import { Toggle } from "./Toggle";
@@ -15,6 +16,13 @@ import { EMPTY_OPTIONS, OUTCOME_LABEL, STARTERS, namesFrom, relativeTime, ruleSe
 type Match = { rule: { id: string; name: string; type: string; replyText: string } | null; matches: { id: string; name: string; does: string[] }[] };
 
 const isV2 = (r: RuleRow) => r.version === 2;
+
+/**
+ * What converting a classic rule changes. It stays quiet while a teammate is handling the chat, as the classic reply did
+ * (convertDefinition leaves "Reply even while a person is handling the chat" off); the two real changes are named.
+ */
+export const CONVERT_BODY =
+  "It keeps the same conditions, reply and waiting time, and it still stays quiet while a teammate is handling the chat. Two things change: each run counts toward your monthly rule runs, and it goes to the end of your new-format rules, so move it if you want it earlier. Afterwards you can add conditions and steps, such as tags or assigning the chat. You cannot switch it back.";
 
 function StarterGallery({ editable }: { editable: boolean }) {
   return (
@@ -95,7 +103,7 @@ export function AutomationView() {
   async function convert(rule: RuleRow) {
     const ok = await confirm({
       title: `Convert "${rule.name}" to the new format?`,
-      body: "It keeps the same conditions, reply and waiting time, and still replies while a teammate is handling the chat. Two things change: each run now counts toward your monthly rule runs, and it goes to the end of your new-format rules, so move it if you want it earlier. Afterwards you can add conditions and steps, such as tags or assigning the chat. You cannot switch it back.",
+      body: CONVERT_BODY,
       confirmLabel: "Convert rule",
     });
     if (!ok) return;
@@ -263,7 +271,7 @@ export function AutomationView() {
     <div>
       <PageHeader
         title="Automation"
-        description="Rules answer and organise chats for you. Pick when a rule starts, what must be true, and what it does. Automatic messages follow WhatsApp's rules: free-form messages only within 24 hours of the customer's last message, and never to people who opted out."
+        description={`Rules answer and organise chats for you. Pick when a rule starts, what must be true, and what it does. Automatic messages follow WhatsApp's rules: free-form messages only within 24 hours of the customer's last message. ${OPT_OUT_RULES}`}
         actions={
           <>
             <Link href="/app/automation/rules/log" className={linkButton("secondary", "md")}>
@@ -318,7 +326,7 @@ export function AutomationView() {
       <Card className="mt-8" title="Try your rules" description="Type a message a customer might send to see which rules would answer it. Nothing is sent.">
         <form onSubmit={runTest} className="space-y-4">
           <FormField label="Sample message">
-            <Input value={sample} maxLength={1000} onChange={(e) => setSample(e.target.value)} placeholder="What are your opening hours?" />
+            <Input value={sample} maxLength={1000} onChange={(e) => setSample(e.target.value)} placeholder="e.g. What are your opening hours?" />
           </FormField>
           <div className="grid gap-3 sm:grid-cols-2">
             <FormField label="Kind of message">
@@ -360,7 +368,7 @@ export function AutomationView() {
               {match.rule && (
                 <div>
                   <p>
-                    <span className="font-semibold">{match.rule.name}</span> ({match.rule.type} classic reply) would reply:
+                    <span className="font-semibold">{match.rule.name}</span> ({match.rule.type}{" "}classic reply) would reply:
                   </p>
                   <p className="mt-2 max-w-[85%] whitespace-pre-wrap break-words rounded-2xl bg-accent px-3.5 py-2 text-on-accent">{match.rule.replyText}</p>
                 </div>

@@ -67,7 +67,8 @@ export function PreviewPanel({ flow, triggerType, keywords }: Props) {
   }
 
   const waiting = state?.waiting;
-  const options = waiting && state ? (state.messages.filter((m) => m.from === "bot" && m.options).at(-1)?.options ?? []) : [];
+  // Only a menu step waits on its own options; a question or a wait never shows the buttons of an earlier menu.
+  const options = waiting && state && (waiting.kind === "buttons" || waiting.kind === "list") ? (state.messages.filter((m) => m.from === "bot" && m.options).at(-1)?.options ?? []) : [];
   const saved = state ? Object.entries(state.variables).filter(([k]) => !k.startsWith("attr.")) : [];
   const hasSteps = flow.nodes.length > 0;
 
@@ -142,6 +143,11 @@ export function PreviewPanel({ flow, triggerType, keywords }: Props) {
                 Send
               </Button>
             </form>
+          )}
+          {waiting?.kind === "delay" && (
+            <Button type="button" variant="secondary" className={touch} onClick={() => { want.current = "next"; setState(reply(flow, state, { endWait: true })); }}>
+              Let the wait end
+            </Button>
           )}
           {!waiting && (
             <Alert tone={state.status === "handoff" ? "good" : "info"}>{state.status === "handoff" ? "The bot handed the chat over to your team." : "The chat has ended. Restart to try another path."}</Alert>

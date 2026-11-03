@@ -128,6 +128,8 @@ function sortRows(rows: Row[], orderBy: OrderBy | undefined): Row[] {
 const TABLE_DEFAULTS: Record<string, () => Row> = {
   actionRecord: () => ({ conversationId: null, turnId: null, toolUseId: null, preview: null, previewHash: null, nonceHash: null, expiresAt: null, decidedAt: null, result: null, error: null, undo: null, undoUntil: null, undoneAt: null, spendPot: null, spendCorrelationId: null, spendApprovalId: null, supersededById: null, contactIds: [], createdAt: new Date(), updatedAt: new Date() }),
   actionInvocation: () => ({ createdAt: new Date() }),
+  // The schema's defaults for a chatbot row (prisma/schema.prisma model Chatbot).
+  chatbot: () => ({ status: "draft", publishedFlow: null, version: 1, phoneNumberId: null, triggerKeywords: [], updatedAt: new Date() }),
 };
 
 export type FakeActionsDb = ReturnType<typeof createFakeActionsDb>;

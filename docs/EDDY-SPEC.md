@@ -1214,12 +1214,12 @@ Eddy appears only inside `AppShell`. It mounts once, after the content column, a
 - **Top bar:** an "Ask Eddy" icon button with the 20 px avatar, at every breakpoint.
   - On phones it sits after the existing search icon; on desktop, before Help.
   - A dot shows unseen notices.
-  - The `aria-label` is "Ask Eddy", or "Ask Eddy, 2 things need you" when notices are waiting.
+  - The `aria-label` is "Ask Eddy", or "Ask Eddy, 2 things need you" when notices are waiting ("Ask Eddy, 1 thing needs you" for one).
 - **Command palette:**
   - a new `CommandRun` `'ask-eddy'`, with an "Ask Eddy" action that is always listed;
   - the no-results row becomes `Ask Eddy: "{query}"`, which opens Eddy and sends the query.
 - **Help menu:** an "Ask Eddy" item.
-- **Getting started page and the dashboard SetupCard:** a "Do this with Eddy" link on each step.
+- **Getting started page and the dashboard SetupCard:** a "Do this with Eddy" link on each step, shown only while Eddy can chat (status `ready`). While Eddy is off, paused or out of allowance the step's own buttons are the way, so the link never opens a panel that cannot help with that step.
 - **Phone More drawer:** an "Ask Eddy" row.
 - **Failed message bubbles in the inbox:** an "Explain" link, which opens Eddy with that message as context.
 
@@ -3037,6 +3037,16 @@ These replace the defaults above where they differ. Builders follow this list.
 13. The platform pays the shared prefix cache write. (default kept)
 14. wa's own Anthropic key with a console spend limit: recommended to the owner. Not a build blocker; until then the gateway hard stop, the probation AI caps and Eddy-off-by-default are the protection.
 15. "What Eddy paused": Phase 0's quality breaker pauses, Eddy reports and explains. (default kept)
+
+### 12.1b Chatbots in the chat (2026-10-30, owner request: "Eddy collects the info in chat and creates a chatbot, and does the modifications")
+
+The chatbot builder routes move from `page_only` to four v1 tools (src/lib/actions/defs/chatbots.ts, tests/actions-chatbots.test.ts):
+
+- `get_chatbot` (any member, as the GET route): the draft flow as JSON text without positions, webhook details hidden, plus what blocks publishing and whether the draft differs from the live steps.
+- `create_chatbot` and `update_chatbot` (owners and admins, undoable): save the draft only. The engine runs `publishedFlow`, so a draft messages nobody. The flow travels as JSON text in `chatbots/flow.ts`'s shape (a strict tool schema cannot express its per-type data) and must pass `validateFlow` in full; the problem sentences go back to the model to fix. Positions come from the builder's `autoLayout`; steps the member placed keep their place. Undo deletes the new draft or puts the previous draft back.
+- `publish_chatbot` (owners and admins, a card with `arms_automation`): turns the bot on or puts the saved changes live. Like `enable_automation`, it refuses a bot with a template step or the AI check (they spend), so the member publishes those on the page. Turning off stays `disable_automation`. `POST /api/chatbots/[id]/publish` is now this tool's route instead of an equivalent of `enable_automation`.
+- Eddy never writes a webhook step: a new one is refused, and saved ones are kept by step id, because a webhook posts customer answers to an address that could come from injected text.
+- The prompt's playbook (section 8, `chatbot`) has Eddy interview one question at a time, show the plan as a list, and build only after a yes.
 
 ### 12.2 Risks
 

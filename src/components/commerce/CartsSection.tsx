@@ -129,7 +129,7 @@ export function CartsSection({ storeId }: { storeId?: string }) {
             </Button>
           }
         >
-          {error} You are still seeing the earlier results.
+          {error}{" "}You are still seeing the earlier results.
         </Alert>
       )}
       {error && rows.length === 0 ? (

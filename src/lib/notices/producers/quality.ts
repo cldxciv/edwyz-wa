@@ -42,6 +42,11 @@ export const producer: NoticeProducer = {
   kinds: ["number_quality_dropped"],
   skipDemo: true,
   numberBased: true,
+  /** Workspaces with a tripped quality breaker on a number. */
+  async due(tenantIds) {
+    const rows = await prisma.spendBreaker.groupBy({ by: ["tenantId"], where: { tenantId: { in: [...tenantIds] }, state: "tripped", scopeType: "phone", kind: { in: [...QUALITY_BREAKERS] } } });
+    return rows.map((r) => r.tenantId);
+  },
   async run(ctx) {
     const breakers = (await prisma.spendBreaker.findMany({
       where: { tenantId: ctx.tenantId, state: "tripped", scopeType: "phone", kind: { in: [...QUALITY_BREAKERS] } },

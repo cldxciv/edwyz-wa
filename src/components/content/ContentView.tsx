@@ -5,7 +5,8 @@ import { PageHeader } from "@/components/app/PageHeader";
 import { canManage, useApi, useRole } from "@/components/contacts/hooks";
 import { Alert, Button, Card, DataTable, Dialog, EmptyState, ErrorState, Skeleton, StatusPill, Tabs, apiFetch, cn, confirm, tabIds, toast, type Column } from "@/components/ui";
 import { friendlyMessage } from "@/components/creative/messages";
-import { dayKey, gridRange, isPastDay, monthGrid } from "@/lib/broadcasts/calendar";
+import { canPlanDay, dayKey, gridRange, monthGrid } from "@/lib/broadcasts/calendar";
+import { MAX_DAYS_AHEAD } from "@/lib/content/schedule";
 import { groupByDay, periodTitle, shiftAnchor, weekDays, weekRange, type CalendarView } from "./calendar-helpers";
 import { Composer } from "./Composer";
 import { channelName, CHANNEL_NAME, formatWhen, mediaUrl, postStatus, type AssetOption, type CalendarEntry, type Post } from "./helpers";
@@ -35,6 +36,17 @@ const CHIP_TONE = {
   neutral: "border-border bg-surface text-muted",
 } as const;
 const GLYPH = { good: "✓", warn: "!", bad: "!", info: "●", neutral: "○" } as const;
+
+/**
+ * Where the calendar opens after a post is saved with a time: the anchor puts its month (month view) or its week (week view) on
+ * screen, and the picked day is the post's day, so the day list under the month grid shows it. Null without a usable time.
+ */
+export function calendarFocus(scheduledAt: string | undefined): { anchor: Date; selectedKey: string } | null {
+  if (!scheduledAt) return null;
+  const at = new Date(scheduledAt);
+  if (Number.isNaN(at.getTime())) return null;
+  return { anchor: at, selectedKey: dayKey(at) };
+}
 
 /** A post in a calendar cell. Exported for tests. */
 export function Chip({ item, onPick }: { item: CalendarEntry; onPick: (id: string) => void }) {
@@ -117,7 +129,7 @@ function MonthGrid({ anchor, today, byDay, selected, onSelect, onPick, onNew, ad
                 const items = byDay.get(cell.key) ?? [];
                 const isToday = cell.key === todayKey;
                 const isSelected = cell.key === selected;
-                const canAdd = admin && !isPastDay(cell.date, today);
+                const canAdd = admin && canPlanDay(cell.date, MAX_DAYS_AHEAD, today);
                 return (
                   <td key={cell.key} className={cn("h-14 border border-border p-0.5 align-top sm:h-28 sm:p-1", !cell.inMonth && "bg-surface text-muted")}>
                     <div className="flex h-full flex-col">
@@ -155,7 +167,7 @@ function MonthGrid({ anchor, today, byDay, selected, onSelect, onPick, onNew, ad
                         {items.length > MAX_CHIPS && (
                           <li>
                             <button type="button" onClick={() => onSelect(cell.key)} className="rounded px-1 text-xs text-muted underline">
-                              {items.length - MAX_CHIPS} more
+                              {items.length - MAX_CHIPS}{" "}more
                             </button>
                           </li>
                         )}
@@ -173,7 +185,7 @@ function MonthGrid({ anchor, today, byDay, selected, onSelect, onPick, onNew, ad
 }
 
 function DayAgenda({ date, items, admin, today, onPick, onNew }: { date: Date; items: CalendarEntry[]; admin: boolean; today: Date; onPick: (id: string) => void; onNew: (key: string) => void }) {
-  const canAdd = admin && !isPastDay(date, today);
+  const canAdd = admin && canPlanDay(date, MAX_DAYS_AHEAD, today);
   return (
     <section aria-label={`Posts on ${longDay(date)}`} className="mt-5">
       {/* Tells screen reader users that the list below changed when they pick another day. */}
@@ -211,12 +223,13 @@ function WeekView({ anchor, today, byDay, onPick, onNew, admin, busy }: { anchor
       {days.map((d) => {
         const key = dayKey(d);
         const items = byDay.get(key) ?? [];
-        const canAdd = admin && !isPastDay(d, today);
+        const canAdd = admin && canPlanDay(d, MAX_DAYS_AHEAD, today);
         return (
           <section key={key} aria-label={`Posts on ${longDay(d)}`} className={cn("flex min-w-0 flex-col rounded-card border bg-raised p-3", key === todayKey ? "border-accent" : "border-border")}>
             <h3 className="text-sm font-semibold">
-              {d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}
-              {key === todayKey && <span className="ml-1.5 text-xs font-medium text-accent-ink">(today)</span>}
+              <span className="whitespace-nowrap">{d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}</span>
+              {/* Its own line: seven narrow day cards cannot fit the date and the marker side by side. */}
+              {key === todayKey && <span className="block text-xs font-medium text-accent-ink">Today</span>}
             </h3>
             <ul className="mt-2 flex-1 space-y-2">
               {items.map((item) => (
@@ -508,9 +521,15 @@ export function ContentView() {
           defaultDate={composer.date}
           onCancel={() => void leaveComposer()}
           onDirtyChange={onDirtyChange}
-          onDone={() => {
+          onDone={(scheduledAt) => {
             setComposer(null);
             setSelected(null);
+            // Open on the post's day: its month (with the day picked) or its week, so a post for next month is in view at once.
+            const focus = calendarFocus(scheduledAt);
+            if (focus) {
+              setAnchor(focus.anchor);
+              setSelectedKey(focus.selectedKey);
+            }
             refresh();
           }}
         />

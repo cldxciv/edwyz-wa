@@ -3,27 +3,30 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const db = vi.hoisted(() => ({
   tenant: { findUnique: vi.fn(), updateMany: vi.fn() },
-  plan: { findUnique: vi.fn(), update: vi.fn() },
+  plan: { findUnique: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
   membership: { count: vi.fn() },
   invite: { count: vi.fn() },
   contact: { count: vi.fn() },
   broadcastRecipient: { count: vi.fn() },
   invoice: { findUnique: vi.fn(), findFirst: vi.fn(), create: vi.fn() },
   billingProfile: { findUnique: vi.fn() },
-  subscription: { findMany: vi.fn(), update: vi.fn() },
+  subscription: { findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
   platformSetting: { findUnique: vi.fn() },
+  auditLog: { create: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({ prisma: db }));
 
-import { assertTenantCanWrite, assertWithinLimit, startTrial } from "@/lib/billing";
+import { assertTenantCanWrite, assertWithinLimit, getBillingStatus, startTrial } from "@/lib/billing";
+import { broadcastQuotaWhere } from "@/lib/billing/limits";
+import { canCancelOnline, isManualPlan, planChoice, renewalText } from "@/components/billing/helpers";
 import {
   buyerStateCode, financialYear, formatInvoiceNumber, isProforma, isValidGstin, issueInvoice, nextSequence, splitInclusive, taxLines, documentTitle,
 } from "@/lib/billing/invoice";
 import { syncPlanToRazorpay, totalCountFor, verifyCheckoutSignature, verifyWebhookSignature } from "@/lib/billing/razorpay";
-import { validateProfile } from "@/lib/billing/service";
-import { computeBillingStatus, type StatusInput } from "@/lib/billing/status";
+import { MANUAL_PLAN_TEXT, cancelAtPeriodEnd, overviewSubscription, startSubscription, validateProfile } from "@/lib/billing/service";
+import { NEXT_STARTING_REASON, computeBillingStatus, type StatusInput } from "@/lib/billing/status";
 import { patchFromEntity } from "@/lib/billing/sync";
-import { reconcileSubscriptions } from "@/lib/billing/worker";
+import { expireManualPlans, reconcileSubscriptions, worker } from "@/lib/billing/worker";
 import { HttpError } from "@/lib/tenancy";
 
 const DAY = 86_400_000;
@@ -74,6 +77,120 @@ describe("computeBillingStatus", () => {
   it("a pending-checkout row (expired, no period) falls back to the trial", () => {
     const s = computeBillingStatus(input({ tenant: { ...tenant, trialEndsAt: new Date(now.getTime() + 2 * DAY) }, subscription: sub({ status: "expired", currentPeriodEnd: null }) }));
     expect(s.state).toBe("trialing");
+  });
+  it("a plan assigned by hand ends at its paid-until date; a Razorpay plan waits for Razorpay", () => {
+    expect(computeBillingStatus(input({ subscription: sub({ manual: true, currentPeriodEnd: new Date(now.getTime() + 1) }) }))).toMatchObject({ state: "active", canWrite: true });
+    const ended = computeBillingStatus(input({ subscription: sub({ manual: true, currentPeriodEnd: now }) }));
+    expect(ended).toMatchObject({ state: "locked", canWrite: false, reason: "Your plan has ended." });
+    expect(computeBillingStatus(input({ subscription: sub({ manual: true, currentPeriodEnd: new Date(now.getTime() - DAY) }) })).state).toBe("locked");
+    // Razorpay rows past their date stay active until the webhook or the reconcile job moves them.
+    expect(computeBillingStatus(input({ subscription: sub({ manual: false, currentPeriodEnd: new Date(now.getTime() - DAY) }) })).state).toBe("active");
+    expect(computeBillingStatus(input({ subscription: sub({ currentPeriodEnd: new Date(now.getTime() - DAY) }) })).state).toBe("active");
+    // Exempt and suspended still win.
+    expect(computeBillingStatus(input({ tenant: { ...tenant, billingExempt: true }, subscription: sub({ manual: true, currentPeriodEnd: now }) })).state).toBe("exempt");
+  });
+  it("an approved new plan that starts the day the old one ended keeps access while its first payment goes through", () => {
+    const end = new Date(now.getTime() - DAY);
+    const ended = sub({ status: "canceled", currentPeriodEnd: end });
+    expect(computeBillingStatus(input({ subscription: ended, nextSubscriptionStartsAt: end }))).toMatchObject({ state: "active", canWrite: true, reason: NEXT_STARTING_REASON, planName: "Pro" });
+    expect(computeBillingStatus(input({ subscription: sub({ status: "expired", currentPeriodEnd: end }), nextSubscriptionStartsAt: end })).state).toBe("active");
+    // Five days at least, or the platform's payment grace when it is longer; then it locks.
+    expect(computeBillingStatus(input({ subscription: ended, nextSubscriptionStartsAt: end, now: new Date(end.getTime() + 5 * DAY) })).state).toBe("locked");
+    expect(computeBillingStatus(input({ subscription: ended, nextSubscriptionStartsAt: end, graceDays: 7, now: new Date(end.getTime() + 6 * DAY) })).state).toBe("active");
+    // Only the plan that follows this one: a start far from the period's end, or none, gives nothing.
+    expect(computeBillingStatus(input({ subscription: ended, nextSubscriptionStartsAt: new Date(end.getTime() + 10 * DAY) })).state).toBe("locked");
+    expect(computeBillingStatus(input({ subscription: ended, nextSubscriptionStartsAt: null })).state).toBe("locked");
+    // A plan assigned by hand has no Razorpay successor.
+    expect(computeBillingStatus(input({ subscription: sub({ manual: true, currentPeriodEnd: end }), nextSubscriptionStartsAt: end })).state).toBe("locked");
+  });
+});
+
+describe("getBillingStatus for hand-assigned plans", () => {
+  const row = (over: Record<string, unknown>) => ({
+    status: "active", suspendedReason: null, billingExempt: false, trialEndsAt: null,
+    subscription: { status: "active", currentPeriodEnd: new Date(Date.now() - DAY), pastDueSince: null, planId: "p1", plan: { name: "Pro" }, ...over },
+  });
+  it("reads razorpaySubscriptionId: null means assigned by hand and locks once the date passed", async () => {
+    db.tenant.findUnique.mockResolvedValue(row({ razorpaySubscriptionId: null }));
+    expect(await getBillingStatus("t1")).toMatchObject({ state: "locked", reason: "Your plan has ended." });
+    expect(db.tenant.findUnique.mock.calls[0][0].select.subscription.select.razorpaySubscriptionId).toBe(true);
+    db.tenant.findUnique.mockResolvedValue(row({ razorpaySubscriptionId: "sub_1" }));
+    expect((await getBillingStatus("t1")).state).toBe("active");
+  });
+});
+
+describe("expireManualPlans", () => {
+  it("marks hand-assigned plans past their date expired, once, and audits each", async () => {
+    const end = new Date(now.getTime() - DAY);
+    db.subscription.findMany.mockResolvedValue([{ id: "s1", tenantId: "t1", currentPeriodEnd: end }, { id: "s2", tenantId: "t2", currentPeriodEnd: end }]);
+    db.subscription.updateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
+    db.auditLog.create.mockResolvedValue({});
+    expect(await expireManualPlans(now)).toBe(1);
+    const where = db.subscription.findMany.mock.calls[0][0].where;
+    expect(where).toEqual({ razorpaySubscriptionId: null, status: "active", currentPeriodEnd: { lte: now } });
+    // The guard repeats the conditions, so a plan the admin re-assigned in the meantime is not touched.
+    expect(db.subscription.updateMany.mock.calls[0][0]).toEqual({ where: { id: "s1", status: "active", razorpaySubscriptionId: null, currentPeriodEnd: { lte: now } }, data: { status: "expired" } });
+    expect(db.auditLog.create).toHaveBeenCalledTimes(1);
+    expect(db.auditLog.create.mock.calls[0][0].data).toMatchObject({ tenantId: "t1", action: "billing.manual_plan_expired", target: "s1" });
+  });
+  it("runs from the billing worker every 15 minutes", () => {
+    const job = worker.periodic.find((p) => p.name === "billing.manual-plan-expiry");
+    expect(job?.everyMs).toBe(15 * 60_000);
+  });
+});
+
+describe("billing page: hand-assigned plans", () => {
+  const row = (over: Record<string, unknown> = {}) => ({ status: "active", currentPeriodEnd: new Date(now.getTime() + DAY), cancelAtPeriodEnd: false, razorpaySubscriptionId: null as string | null, plan: { name: "Pro" }, ...over });
+  it("marks the plan manual, never sends the Razorpay id, and shows an ended one as expired", () => {
+    const live = overviewSubscription(row(), now);
+    expect(live).toMatchObject({ status: "active", manual: true, plan: { name: "Pro" } });
+    expect(live).not.toHaveProperty("razorpaySubscriptionId");
+    expect(overviewSubscription(row({ currentPeriodEnd: now }), now)).toMatchObject({ status: "expired", manual: true });
+    expect(overviewSubscription(row({ razorpaySubscriptionId: "sub_1", currentPeriodEnd: new Date(now.getTime() - DAY) }), now)).toMatchObject({ status: "active", manual: false });
+    expect(overviewSubscription(null)).toBeNull();
+  });
+  it("cancel and a second subscribe point to support instead of failing with nothing to cancel", async () => {
+    const actor = { userId: "u1", tenantId: "t1", role: "owner" as const };
+    db.subscription.findUnique.mockResolvedValue({ id: "s1", status: "active", razorpaySubscriptionId: null, cancelAtPeriodEnd: false, currentPeriodEnd: new Date(Date.now() + DAY) });
+    await expect(cancelAtPeriodEnd(actor)).rejects.toMatchObject({ status: 409, message: MANUAL_PLAN_TEXT });
+    db.plan.findFirst.mockResolvedValue({ id: "p2", active: true });
+    await expect(startSubscription(actor, "p2")).rejects.toMatchObject({ status: 409, message: MANUAL_PLAN_TEXT });
+  });
+  it("the buttons: no Cancel, other plans say to contact support, the date does not claim to renew", () => {
+    const sub = { status: "active", cancelAtPeriodEnd: false, currentPeriodEnd: "2026-12-01T00:00:00Z", plan: { name: "Pro" }, manual: true };
+    expect(canCancelOnline(sub)).toBe(false);
+    expect(isManualPlan(sub)).toBe(true);
+    expect(planChoice({ name: "Growth" }, sub, true)).toEqual({ disabled: true, current: false, reason: "Your plan was set up by our team. Contact support to change it.", action: "none", label: "Subscribe to Growth" });
+    expect(planChoice({ name: "Pro" }, sub, true)).toMatchObject({ disabled: true, current: true });
+    expect(renewalText(sub)).toMatch(/^Runs until .+\. It does not renew by itself\.$/);
+    const paid = { ...sub, manual: false };
+    expect(canCancelOnline(paid)).toBe(true);
+    expect(renewalText(paid)).toMatch(/^Renews on/);
+    // A plan paid online can be changed online (owner decision 4): no "cancel it first" any more.
+    expect(planChoice({ name: "Growth" }, paid, true)).toMatchObject({ disabled: false, action: "downgrade" });
+    // An ended hand-assigned plan (shown as expired) leaves every plan open to buy.
+    expect(planChoice({ name: "Growth" }, { ...sub, status: "expired" }, true)).toEqual({ disabled: false, current: false, reason: null, action: "subscribe", label: "Subscribe to Growth" });
+  });
+  it("an ended hand-assigned plan says it ended, never that it renews", () => {
+    // What the page receives: the overview row after JSON, before and after the billing worker marked it expired.
+    const page = (over: Record<string, unknown>) => JSON.parse(JSON.stringify(overviewSubscription(row(over), now)));
+    for (const ended of [page({ currentPeriodEnd: new Date(now.getTime() - DAY) }), page({ status: "expired", currentPeriodEnd: new Date(now.getTime() - DAY) })]) {
+      const text = renewalText(ended, now);
+      expect(text).toMatch(/^Ended on .+\.$/);
+      expect(text).not.toMatch(/Renews|Runs until/);
+    }
+    expect(renewalText(page({}), now)).toMatch(/^Runs until/);
+  });
+  it("a cancelled or expired Razorpay plan says when it ends or ended; only a live one renews", () => {
+    const at = (days: number) => new Date(now.getTime() + days * DAY).toISOString();
+    const paid = { cancelAtPeriodEnd: false, plan: { name: "Pro" }, manual: false };
+    expect(renewalText({ ...paid, status: "canceled", cancelAtPeriodEnd: true, currentPeriodEnd: at(5) }, now)).toMatch(/^Ends on .+\. It will not renew\.$/);
+    expect(renewalText({ ...paid, status: "canceled", cancelAtPeriodEnd: true, currentPeriodEnd: at(-5) }, now)).toMatch(/^Ended on/);
+    expect(renewalText({ ...paid, status: "expired", currentPeriodEnd: at(-5) }, now)).toMatch(/^Ended on/);
+    // A checkout started over a cancelled plan whose period still runs: that period does not renew by itself.
+    expect(renewalText({ ...paid, status: "expired", currentPeriodEnd: at(5) }, now)).toMatch(/will not renew/);
+    expect(renewalText({ ...paid, status: "active", currentPeriodEnd: at(5) }, now)).toMatch(/^Renews on/);
+    expect(renewalText({ ...paid, status: "past_due", currentPeriodEnd: at(5) }, now)).toMatch(/^Renews on/);
   });
 });
 
@@ -143,14 +260,38 @@ describe("assertWithinLimit", () => {
     await expect(assertWithinLimit("t1", "contacts", 6)).rejects.toMatchObject({ status: 402 });
     expect(db.contact.count).toHaveBeenCalledWith({ where: { tenantId: "t1" } });
   });
-  it("counts broadcast recipients created this month", async () => {
+  it("counts broadcast messages sent this month, on their way, or waiting in a live broadcast; never skipped, failed or draft ones", async () => {
     subscribed();
     db.plan.findUnique.mockResolvedValue(planWith({ monthlyBroadcastLimit: 10 }));
     db.broadcastRecipient.count.mockResolvedValue(8);
     await expect(assertWithinLimit("t1", "broadcastContacts", 3)).rejects.toMatchObject({ status: 402 });
     const where = db.broadcastRecipient.count.mock.calls[0][0].where;
     expect(where.tenantId).toBe("t1");
-    expect(where.broadcast.createdAt.gte.getUTCDate()).toBe(1);
+    const [sent, queued, waiting] = where.OR;
+    expect(sent.status.in).toEqual(["sent", "delivered", "read"]);
+    expect(sent.sentAt.gte.getUTCDate()).toBe(1);
+    expect(queued).toEqual({ status: "queued", broadcast: { status: { in: ["sending", "paused", "scheduled"] } } });
+    expect(waiting.status).toBe("pending");
+    expect(waiting.broadcast.OR[0].status.in).toEqual(["sending", "paused"]);
+    expect(waiting.broadcast.OR[1].status).toBe("scheduled");
+    // Not created-this-month any more: a broadcast created last month but sent this month counts, a canceled one's leftovers do not.
+    expect(JSON.stringify(where)).not.toContain("createdAt");
+    expect(JSON.stringify(where)).not.toMatch(/skipped|failed|draft|canceled/);
+  });
+
+  it("the broadcast quota window is the calendar month in UTC, and a broadcast scheduled for next month holds nothing yet", () => {
+    const where = broadcastQuotaWhere("t1", new Date("2026-03-31T23:30:00Z"));
+    expect(where.OR[0].sentAt?.gte.toISOString()).toBe("2026-03-01T00:00:00.000Z");
+    expect(where.OR[2].broadcast?.OR?.[1].scheduledAt?.lt.toISOString()).toBe("2026-04-01T00:00:00.000Z");
+  });
+  it("a message left queued in a finished broadcast (the worker stopped before sending) does not hold the limit in later months", () => {
+    const { OR } = broadcastQuotaWhere("t1", now);
+    const queued = OR.filter((o) => o.status === "queued");
+    expect(queued).toHaveLength(1);
+    // Counted only while its broadcast can still send it; once sent it counts through sentAt like any other message.
+    const states = (queued[0] as { broadcast: { status: { in: string[] } } }).broadcast.status.in;
+    for (const finished of ["completed", "canceled", "failed", "draft"]) expect(states).not.toContain(finished);
+    expect(states).toEqual(expect.arrayContaining(["sending", "paused"]));
   });
   it("no limit when the plan leaves it unset", async () => {
     subscribed();

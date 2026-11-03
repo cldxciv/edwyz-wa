@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { apiFetch, Button, cn } from "@/components/ui";
+import { apiFetch, Button, cn, Skeleton } from "@/components/ui";
 import { EDDY_EVENTS, onEddyEvent, type EddyDraftDetail, type EddyOpenTemplatesDetail } from "@/components/eddy/events";
 import type { AttachmentKind } from "@/lib/inbox/attachments";
 import { mentionMatches, mentionQuery } from "@/lib/inbox/mentions";
@@ -31,13 +31,14 @@ import {
   type SentAttachment,
 } from "./ux";
 
-type Attachment = { key?: string; mediaId?: string; kind: AttachmentKind; name: string; bytes: number; mime: string; preview: string | null };
+type Attachment = { mediaId: string; kind: AttachmentKind; name: string; bytes: number; mime: string; preview: string | null };
 type Upload = { name: string; progress: number };
 type Suggest = { state: "idle" } | { state: "loading" } | { state: "ready"; drafts: string[]; note: string | null } | { state: "error"; message: string };
 
 export type ComposerProps = {
   conversationId: string;
-  windowOpen: boolean;
+  /** Whether the 24-hour reply window is open; null until the chat has loaded and nobody knows yet. */
+  windowOpen: boolean | null;
   remainingMs: number;
   lastInboundAt: string | null;
   now: Date;
@@ -103,7 +104,12 @@ export function withEddyDraft(current: string, draft: string): string {
 }
 
 export function Composer(props: ComposerProps) {
-  const { conversationId, windowOpen, disabled } = props;
+  const { conversationId } = props;
+  // Until the chat has loaded the reply window is unknown: the box stays in place but disabled, and neither the closed-window
+  // notice, the template picker nor the internal-note hint shows, so opening a chat no longer flashes "Template-only mode".
+  const windowKnown = props.windowOpen !== null;
+  const windowOpen = props.windowOpen === true;
+  const disabled = props.disabled || !windowKnown;
   const [mode, setMode] = useState<"reply" | "note">("reply");
   const [text, setText] = useState(() => readStore(draftKey(conversationId)) ?? "");
   const [noteText, setNoteText] = useState("");
@@ -127,7 +133,7 @@ export function Composer(props: ComposerProps) {
   const inReply = mode === "reply";
   const value = inReply ? text : noteText;
   const setValue = inReply ? setText : setNoteText;
-  const templateOnly = inReply && !windowOpen;
+  const templateOnly = inReply && windowKnown && !windowOpen;
 
   useEffect(() => setSendKey(parseSendKey(readStore(SEND_KEY_KEY))), []);
 
@@ -261,7 +267,7 @@ export function Composer(props: ComposerProps) {
     if (attachment) {
       setSending(true);
       try {
-        await props.onSendMedia({ kind: attachment.kind, key: attachment.key, mediaId: attachment.mediaId, filename: attachment.name, mime: attachment.mime }, text.trim());
+        await props.onSendMedia({ kind: attachment.kind, mediaId: attachment.mediaId, filename: attachment.name, mime: attachment.mime }, text.trim());
         setAttachment(null);
         setText("");
         writeStore(draftKey(conversationId), null);
@@ -322,15 +328,15 @@ export function Composer(props: ComposerProps) {
       req.onload = () => {
         xhr.current = null;
         setUpload(null);
-        let json: { key?: string; mediaId?: string; kind?: string; bytes?: number; filename?: string; error?: string } = {};
+        let json: { mediaId?: string; kind?: string; bytes?: number; filename?: string; mime?: string; error?: string } = {};
         try {
           json = JSON.parse(req.responseText) as typeof json;
         } catch {
           json = {};
         }
         const kinds: string[] = ["image", "video", "audio", "document", "sticker"];
-        if (req.status >= 200 && req.status < 300 && (json.key || json.mediaId) && json.kind && kinds.includes(json.kind)) {
-          setAttachment({ key: json.key, mediaId: json.mediaId, kind: json.kind as AttachmentKind, name: file.name, bytes: json.bytes ?? file.size, mime: file.type, preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : null });
+        if (req.status >= 200 && req.status < 300 && json.mediaId && json.kind && kinds.includes(json.kind)) {
+          setAttachment({ mediaId: json.mediaId, kind: json.kind as AttachmentKind, name: file.name, bytes: json.bytes ?? file.size, mime: json.mime ?? file.type, preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : null });
           focusArea();
         } else setError(json.error ?? "The upload failed. Check your connection and try again.");
       };
@@ -373,94 +379,98 @@ export function Composer(props: ComposerProps) {
   const showTemplates = templateOnly || (inReply && panelOpen);
 
   return (
-    <div className="relative space-y-2 border-t border-border bg-background p-3">
-      <WindowBar open={windowOpen} remainingMs={props.remainingMs} lastInboundAt={props.lastInboundAt} now={props.now} />
+    // On a short screen the composer shrinks before the message thread does: the notices, suggestions and template picker
+    // scroll in their own area, while the message box (and the menus that open above it) keep their full size.
+    <div className="relative flex min-h-0 flex-col gap-2 border-t border-border bg-background p-3">
+      <div className="-m-1 min-h-0 space-y-2 overflow-y-auto p-1">
+        {windowKnown ? <WindowBar open={windowOpen} remainingMs={props.remainingMs} lastInboundAt={props.lastInboundAt} now={props.now} /> : <Skeleton className="h-9 w-full rounded-lg" />}
 
-      <div className="flex items-center justify-between gap-2">
-        <div role="group" aria-label="Message type" className="inline-flex rounded-full border border-border p-0.5 text-xs font-medium">
-          <button type="button" aria-pressed={inReply} onClick={() => setMode("reply")} className={cn("rounded-full px-3 py-1", inReply ? "bg-accent text-white" : "hover:bg-surface")}>Reply</button>
-          <button type="button" aria-pressed={!inReply} onClick={() => setMode("note")} className={cn("rounded-full px-3 py-1", !inReply ? "bg-amber-700 text-white" : "hover:bg-surface")}>Internal note</button>
+        <div className="flex items-center justify-between gap-2">
+          <div role="group" aria-label="Message type" className="inline-flex rounded-full border border-border p-0.5 text-xs font-medium">
+            <button type="button" aria-pressed={inReply} onClick={() => setMode("reply")} className={cn("rounded-full px-3 py-1", inReply ? "bg-accent text-white" : "hover:bg-surface")}>Reply</button>
+            <button type="button" aria-pressed={!inReply} onClick={() => setMode("note")} className={cn("rounded-full px-3 py-1", !inReply ? "bg-amber-700 text-white" : "hover:bg-surface")}>Internal note</button>
+          </div>
+          {inReply && windowOpen && (
+            <div className="flex items-center gap-1">
+              <Button variant="ghost" size="sm" onClick={() => void askForSuggestions()} disabled={disabled || suggest.state === "loading"} title="Draft replies with AI. You review and edit before sending.">
+                <Icon name="sparkle" />{" "}Suggest reply
+              </Button>
+              <Button variant="ghost" size="sm" aria-expanded={panelOpen} onClick={() => { setPanelTemplate(null); setPanelOpen((v) => !v); }} title="Send an approved template">
+                <Icon name="template" />{" "}Template
+              </Button>
+            </div>
+          )}
         </div>
-        {inReply && windowOpen && (
-          <div className="flex items-center gap-1">
-            <Button variant="ghost" size="sm" onClick={() => void askForSuggestions()} disabled={disabled || suggest.state === "loading"} title="Draft replies with AI. You review and edit before sending.">
-              <Icon name="sparkle" /> Suggest reply
-            </Button>
-            <Button variant="ghost" size="sm" aria-expanded={panelOpen} onClick={() => { setPanelTemplate(null); setPanelOpen((v) => !v); }} title="Send an approved template">
-              <Icon name="template" /> Template
-            </Button>
+
+        {inReply && suggest.state !== "idle" && (
+          <div aria-live="polite" className="rounded-lg border border-border bg-surface p-2">
+            {suggest.state === "loading" && <p className="text-xs text-muted">Writing suggestions...</p>}
+            {suggest.state === "error" && (
+              <p className="flex items-start justify-between gap-2 text-xs text-muted">
+                <span>{suggest.message}</span>
+                <button type="button" className="shrink-0 font-semibold underline" onClick={() => setSuggest({ state: "idle" })}>Dismiss</button>
+              </p>
+            )}
+            {suggest.state === "ready" && (
+              <>
+                <div className="mb-1.5 flex items-center justify-between gap-2 text-xs text-muted">
+                  <span>{suggest.note}. Click one to edit it before sending.</span>
+                  <button type="button" className="shrink-0 font-semibold underline" onClick={() => setSuggest({ state: "idle" })}>Dismiss</button>
+                </div>
+                <ul className="flex flex-col gap-1.5">
+                  {suggest.drafts.map((d) => (
+                    <li key={d}>
+                      <button type="button" onClick={() => insertDraft(d)} title={d} className="line-clamp-3 w-full rounded-xl border border-border bg-background px-3 py-1.5 text-left text-xs hover:border-accent">
+                        {d}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        )}
+
+        {showTemplates && (
+          <div className="rounded-lg border border-border p-2">
+            <TemplatePanel
+              templates={props.templates}
+              error={props.templatesError}
+              onRetry={props.onReloadTemplates}
+              initialId={panelTemplate}
+              contactName={props.contactName}
+              onSend={sendTemplate}
+              onCancel={templateOnly ? undefined : () => { setPanelOpen(false); setPanelTemplate(null); }}
+            />
+          </div>
+        )}
+
+        {(attachment || upload) && inReply && (
+          <div className="flex items-center gap-3 rounded-lg border border-border p-2 text-xs">
+            {attachment?.preview ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={attachment.preview} alt="" className="h-12 w-12 rounded-md object-cover" />
+            ) : (
+              <span className="flex h-12 w-12 items-center justify-center rounded-md bg-surface"><Icon name="play" /></span>
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="truncate font-medium">{attachment?.name ?? upload?.name}</p>
+              {upload ? (
+                <div className="mt-1" role="progressbar" aria-label="Upload progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={upload.progress}>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-surface"><div className="h-full bg-accent transition-all" style={{ width: `${upload.progress}%` }} /></div>
+                  <span className="text-muted">Uploading {upload.progress}%</span>
+                </div>
+              ) : (
+                <p className="text-muted">{attachment && formatBytes(attachment.bytes)}. {attachment && (attachment.kind === "audio" || attachment.kind === "sticker") ? "Press send when you are ready." : "Type a caption below, then send."}</p>
+              )}
+            </div>
+            <Button variant="ghost" size="sm" onClick={() => { if (upload) xhr.current?.abort(); setAttachment(null); }}>{upload ? "Cancel" : "Remove"}</Button>
           </div>
         )}
       </div>
 
-      {inReply && suggest.state !== "idle" && (
-        <div aria-live="polite" className="rounded-lg border border-border bg-surface p-2">
-          {suggest.state === "loading" && <p className="text-xs text-muted">Writing suggestions...</p>}
-          {suggest.state === "error" && (
-            <p className="flex items-start justify-between gap-2 text-xs text-muted">
-              <span>{suggest.message}</span>
-              <button type="button" className="shrink-0 font-semibold underline" onClick={() => setSuggest({ state: "idle" })}>Dismiss</button>
-            </p>
-          )}
-          {suggest.state === "ready" && (
-            <>
-              <div className="mb-1.5 flex items-center justify-between gap-2 text-xs text-muted">
-                <span>{suggest.note}. Click one to edit it before sending.</span>
-                <button type="button" className="shrink-0 font-semibold underline" onClick={() => setSuggest({ state: "idle" })}>Dismiss</button>
-              </div>
-              <ul className="flex flex-col gap-1.5">
-                {suggest.drafts.map((d) => (
-                  <li key={d}>
-                    <button type="button" onClick={() => insertDraft(d)} title={d} className="line-clamp-3 w-full rounded-xl border border-border bg-background px-3 py-1.5 text-left text-xs hover:border-accent">
-                      {d}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-        </div>
-      )}
-
-      {showTemplates && (
-        <div className="rounded-lg border border-border p-2">
-          <TemplatePanel
-            templates={props.templates}
-            error={props.templatesError}
-            onRetry={props.onReloadTemplates}
-            initialId={panelTemplate}
-            contactName={props.contactName}
-            onSend={sendTemplate}
-            onCancel={templateOnly ? undefined : () => { setPanelOpen(false); setPanelTemplate(null); }}
-          />
-        </div>
-      )}
-
-      {(attachment || upload) && inReply && (
-        <div className="flex items-center gap-3 rounded-lg border border-border p-2 text-xs">
-          {attachment?.preview ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={attachment.preview} alt="" className="h-12 w-12 rounded-md object-cover" />
-          ) : (
-            <span className="flex h-12 w-12 items-center justify-center rounded-md bg-surface"><Icon name="play" /></span>
-          )}
-          <div className="min-w-0 flex-1">
-            <p className="truncate font-medium">{attachment?.name ?? upload?.name}</p>
-            {upload ? (
-              <div className="mt-1" role="progressbar" aria-label="Upload progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={upload.progress}>
-                <div className="h-1.5 overflow-hidden rounded-full bg-surface"><div className="h-full bg-accent transition-all" style={{ width: `${upload.progress}%` }} /></div>
-                <span className="text-muted">Uploading {upload.progress}%</span>
-              </div>
-            ) : (
-              <p className="text-muted">{attachment && formatBytes(attachment.bytes)}. {attachment && (attachment.kind === "audio" || attachment.kind === "sticker") ? "Press send when you are ready." : "Type a caption below, then send."}</p>
-            )}
-          </div>
-          <Button variant="ghost" size="sm" onClick={() => { if (upload) xhr.current?.abort(); setAttachment(null); }}>{upload ? "Cancel" : "Remove"}</Button>
-        </div>
-      )}
-
       {!templateOnly && (
-        <div className="relative">
+        <div className="relative shrink-0">
           {(slashItems.length > 0 || emojiItems.length > 0 || mentionItems.length > 0) && (
             <ul role="listbox" aria-label={slashItems.length ? "Quick replies and templates" : emojiItems.length ? "Emoji" : "Teammates to mention"} className="absolute inset-x-0 bottom-full z-10 mb-1 max-h-52 overflow-y-auto rounded-xl border border-border bg-background shadow-lg">
               {/* The option itself is the clickable thing: a button inside role=option is a nested control. Keyboard picks happen in the textarea. */}
@@ -542,7 +552,7 @@ export function Composer(props: ComposerProps) {
           <p id="inbox-composer-hint" className="mt-1 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted">
             <span>{sendKey === "enter" ? "Enter sends, Shift+Enter adds a line." : "Ctrl+Enter sends, Enter adds a line."}</span>
             <button type="button" className="underline" aria-label={`Use ${sendKey === "enter" ? "Ctrl+Enter" : "Enter"} to send`} onClick={() => { const next = sendKey === "enter" ? "mod-enter" : "enter"; setSendKey(next); writeStore(SEND_KEY_KEY, next); }}>
-              Use {sendKey === "enter" ? "Ctrl+Enter" : "Enter"} to send
+              Use {sendKey === "enter" ? "Ctrl+Enter" : "Enter"}{" "}to send
             </button>
           </p>
         </div>

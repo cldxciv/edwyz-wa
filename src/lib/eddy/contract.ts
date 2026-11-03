@@ -202,7 +202,10 @@ export type NoticeKind =
   | "spending_stopped"
   | "automation_digest"
   | "setup_next_step"
-  | "eddy_handoff";
+  | "eddy_handoff"
+  // Meta's ad review (docs/IG-PAGE-ADS-SPEC.md 3.9, PRM-08).
+  | "ad_approved"
+  | "ad_rejected";
 
 // ===== In-app links (decision 0) =====
 
@@ -223,6 +226,37 @@ export function safeAppPath(path: unknown): string | null {
   if (pathname.includes("//") || /(^|\/)\.\.?(\/|$)/.test(pathname)) return null;
   return APP_LINK_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`)) ? path : null;
 }
+
+// ===== "Opens Meta" (E-R2, decision 10 extended to IG-PAGE-ADS-SPEC 8.4) =====
+
+/**
+ * The screens an "Opens Meta" button may name: Eddy's own three no-API screens (src/lib/eddy/meta-links.ts) and the ads screens
+ * of IG-PAGE-ADS-SPEC 8.4 (src/lib/meta-connect/meta-screens.ts, the only allowlist of their addresses). Nothing else is ever
+ * rendered as a Meta link (tests/eddy-meta-links.test.ts keeps this list equal to the union of the two files' keys).
+ */
+export const META_SCREEN_HINT_KEYS = [
+  "payment_method",
+  "business_verification",
+  "display_name",
+  "leadgen_tos",
+  "custom_audience_tos",
+  "link_whatsapp_to_page",
+  "link_instagram_to_page",
+  "page_advertise_task",
+  "lead_access_manager",
+  "appeal_ad",
+  "account_quality",
+] as const;
+export type MetaScreenHintKey = (typeof META_SCREEN_HINT_KEYS)[number];
+
+export const isMetaScreenHintKey = (v: unknown): v is MetaScreenHintKey => typeof v === "string" && (META_SCREEN_HINT_KEYS as readonly string[]).includes(v);
+
+/**
+ * The E-R2 UI hint: a labelled "Opens Meta" button. It is resolved on the server (meta-links.ts metaScreenHint) from a screen key
+ * and validated ids, never from model text, and the card renders it only for an allowlisted key (ActionCard safeMetaScreenHint).
+ * `labelKey` is a catalogue key: Eddy's `meta.screen.*` or a `promote.*` key (E-R5).
+ */
+export type MetaScreenHint = { kind: "meta_screen"; key: MetaScreenHintKey; href: string; labelKey: I18nKey };
 
 /** Notice buttons never write and never carry text (critic): a navigation, an Eddy reference by id, or a fresh card. */
 export type NoticeAction =

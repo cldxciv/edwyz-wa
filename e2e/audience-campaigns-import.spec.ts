@@ -78,6 +78,10 @@ test("import: choose step wording, sample download, empty and bad files", async 
   await expect(d.getByRole("heading", { name: "Check before importing" })).toBeVisible();
   await expect(d.getByRole("button", { name: "Import 1 contact" })).toBeEnabled(); // no opt-in rows: no consent box needed
   await expect(d.getByLabel(/I confirm that/)).toHaveCount(0);
+  // Back shows the pasted rows again, so they can be fixed
+  await d.getByRole("button", { name: "Back" }).click();
+  await expect(d.getByRole("button", { name: "Or paste your contacts" })).toHaveAttribute("aria-expanded", "true");
+  await expect(d.getByLabel("CSV text")).toHaveValue("phone\n+919800000001\n");
   // closing restores focus to the opener
   await page.keyboard.press("Escape");
   await expect(dialog(page)).toHaveCount(0);
@@ -98,7 +102,11 @@ test("import: review, consent confirmation, invalid and duplicate rows, result, 
   await expect(stat("Ready to import")).toContainText("4");
   await expect(stat("Duplicates skipped")).toContainText("1");
   await expect(stat("Need fixing")).toContainText("1");
-  await expect(d.getByText(/People already in your contacts are updated, not duplicated/)).toBeVisible();
+  await expect(d.getByText(/Nobody already in your contacts is added twice/)).toBeVisible();
+  // People already in contacts: update (the default) or skip, matched by phone number
+  const existing = d.getByRole("group", { name: "People already in your contacts" });
+  await expect(existing.getByRole("radio")).toHaveCount(2);
+  await expect(existing.getByRole("radio").first()).toBeChecked();
   await expect(d.getByText(/treated as Indian \(\+91\)/)).toBeVisible();
   // invalid row listed with row number (file row 4)
   await expect(d.getByText("Row 4: Not a valid phone number")).toBeVisible();
@@ -143,7 +151,7 @@ test("import: review, consent confirmation, invalid and duplicate rows, result, 
   const row = (await (await db()).query(`select "optIn", "optedOutAt", "optInSource" from "Contact" where "tenantId"=$1 and phone='+919811100004'`, [u.tenantId])).rows[0];
   expect(row.optIn, "import must never opt a contact back in after they opted out").toBe(false);
   expect(row.optedOutAt).not.toBeNull();
-  await expect(page.getByRole("row", { name: /Opted Out Olga/ }).getByText("Opted out", { exact: true })).toBeVisible();
+  await expect(page.getByRole("row", { name: /Opted Out Olga/ }).getByText("Opted out of marketing", { exact: true })).toBeVisible();
   // extra column kept as attribute
   const attr = (await (await db()).query(`select attributes from "Contact" where "tenantId"=$1 and phone='+919811100001'`, [u.tenantId])).rows[0];
   expect(attr.attributes).toMatchObject({ city: "Pune" });

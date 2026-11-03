@@ -39,7 +39,7 @@ import { RoleGate } from "@/components/team/RoleGate";
 import { STATUS_TONE, statusTone as centralTone } from "@/components/ui/status";
 import { MAX_OPEN, MODE_INFO, effectiveForm, isDirty, parseLimit, routingSummary, toBody, toForm, validateForm } from "@/components/routing/helpers";
 import { DEFAULT_SETTINGS, MAX_OPEN_LIMIT } from "@/lib/routing/config";
-import { canRemoveMember, describeExpiry, emailError, removeConfirm, roleChangeConfirm, roleLabel, shouldOpenInvite } from "@/components/team/helpers";
+import { canRemoveMember, describeExpiry, emailError, isOnlyOwner, noTransferNote, removeConfirm, roleChangeConfirm, roleLabel, shouldOpenInvite } from "@/components/team/helpers";
 
 describe("team helpers", () => {
   it("opens the invite dialog only for an explicit ?invite=1", () => {
@@ -69,6 +69,24 @@ describe("team helpers", () => {
     expect(canRemoveMember(admin, admin)).toBe(true);
     expect(canRemoveMember(agent, agent)).toBe(false);
     expect(canRemoveMember(null, agent)).toBe(false);
+  });
+
+  it("never offers Leave workspace or a role change to the only owner (the server keeps one owner)", () => {
+    const owner = { userId: "o", role: "owner" as const };
+    const admin = { userId: "a", role: "admin" as const };
+    expect(isOnlyOwner([owner], "o")).toBe(true);
+    expect(isOnlyOwner([owner, admin], "o")).toBe(true);
+    expect(isOnlyOwner([owner, admin], "a")).toBe(false);
+    expect(isOnlyOwner([owner, { userId: "o2", role: "owner" }], "o")).toBe(false);
+    expect(isOnlyOwner(null, "o")).toBe(false);
+    expect(canRemoveMember(owner, owner, [owner, admin])).toBe(false);
+    expect(canRemoveMember(owner, owner, [owner, { userId: "o2", role: "owner" }])).toBe(true);
+    expect(canRemoveMember(owner, admin, [owner, admin])).toBe(true);
+    expect(canRemoveMember(admin, admin, [owner, admin])).toBe(true);
+    // The hand-over picker says why it is empty instead of showing a lone blank option.
+    expect(noTransferNote([owner], "o")).toBe("Invite a teammate first. Once they join, you can make them the owner here.");
+    expect(noTransferNote([owner, { userId: "o2", role: "owner" }], "o")).toBe("Everyone else here is already an owner.");
+    expect(noTransferNote([owner, admin], "o")).toBeNull();
   });
 
   it("asks before risky role changes and stays quiet for ordinary ones", () => {

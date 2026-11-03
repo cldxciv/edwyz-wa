@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const db = vi.hoisted(() => {
   const model = () => ({ findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), createMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn(), delete: vi.fn(), count: vi.fn() });
   const prisma: Record<string, unknown> = Object.fromEntries(["contact", "conversation", "conversationMark", "message", "note", "automationRun", "ruleExecution", "broadcastRecipient", "auditLog", "job", "phoneNumber"].map((n) => [n, model()]));
+  // promote/forget.ts forgetContact (PRM-11) first looks for the workspace's customer-list audiences on Meta: none here.
+  prisma.adAudience = { findMany: vi.fn(async () => []) };
   prisma.$transaction = (fn: (tx: unknown) => unknown) => fn(prisma);
   return prisma as Record<string, Record<string, ReturnType<typeof vi.fn>>>;
 });

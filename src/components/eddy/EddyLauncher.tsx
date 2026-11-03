@@ -27,6 +27,7 @@ export const chromeLang = (pref: EddyLangPref | null | undefined, turnLang?: Edd
 /** The launcher's accessible name. */
 export function launcherLabel(lang: EddyLang, needsYou: number, working: boolean): string {
   if (working) return tp(lang, "panel.launcher.working");
+  if (needsYou === 1) return t(lang, "launcher.needs.one");
   return needsYou > 0 ? t(lang, "launcher.needs", { count: needsYou }) : t(lang, "launcher");
 }
 

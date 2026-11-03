@@ -23,7 +23,7 @@ vi.mock("@/lib/queue", () => ({ enqueue: vi.fn(async () => ({ id: "job" })) }));
 import { ActivityTable, ActivityTableView, couldAddText, csvHref, resultBadge } from "@/components/spend/ActivityTable";
 import { ApprovalReview, ONLY_OWNER_APPROVES, SIGN_IN_TO_APPROVE, decidedText } from "@/components/spend/ApprovalReview";
 import { ApprovalsCard } from "@/components/spend/ApprovalsCard";
-import { ASSISTANT_ON_LABEL, AssistantsCard, SUGGEST_ONLY_FOR_NOW, enabledPatch, levelSentence } from "@/components/spend/AssistantsCard";
+import { ASSISTANT_ON_LABEL, AssistantsCard, COMING_LATER_TEXT, SUGGEST_ONLY_FOR_NOW, enabledPatch, levelSentence } from "@/components/spend/AssistantsCard";
 import { KillSwitch, OWNER_ONLY_RESUME, RESUME_ASSISTANTS_DIALOG, RESUME_DIALOG, RESUME_LIST_INTRO, STOP_ALL_DIALOG, dialogFor } from "@/components/spend/KillSwitch";
 import { DialogError, META_CONSENT, META_EXPLAINER, MetaConsentText, MetaLimitCard, offboardLabel } from "@/components/spend/MetaLimitCard";
 import { DIGEST_LABEL, NOTIFY_BUTTON, NOTIFY_CONSENT, NOTIFY_TITLE, NotifyCard, STOP_ALERTS_BUTTON, canStopAlerts, channelText, pendingText, phoneProblem } from "@/components/spend/NotifyCard";
@@ -31,7 +31,7 @@ import { NOT_SET, PotCard, limitLine, potRows, readLimitForm, toMajorInput } fro
 import { BANNER_ORDER, SpendBannerBar, isDismissed, pickBanner, rememberDismissal } from "@/components/spend/SpendBanner";
 import { SPENDING_SUBTITLE, SPENDING_TITLE, SpendingSettingsView, approvalFocusTarget } from "@/components/spend/SpendingSettings";
 import { BANNED_COPY_WORDS } from "@/lib/spend/copy";
-import { buildBanners, metaLimitView, spendSummary, staticCopy, bannedCopyIn, type SpendSummaryView } from "@/lib/spend/summary";
+import { NO_FIGURES_YET_NOTE, STALE_FIGURES_NOTE, buildBanners, metaLimitView, spendSummary, staleFiguresNote, staticCopy, bannedCopyIn, type SpendSummaryView } from "@/lib/spend/summary";
 import type { AdAccountInfo } from "@/lib/spend/commitments";
 import type { ApprovalDTO, LedgerRowDTO, MetaLimitState, SpendCapabilities } from "@/lib/spend/types";
 
@@ -307,6 +307,24 @@ describe("pot cards (PotCard)", () => {
     for (const c of ["INR", "USD", "EUR", "GBP", "AED"]) expect(markup).toContain(`<option value="${c}"`);
   });
 
+  it("says Meta's figures are late only with a connected ad account and ads running", async () => {
+    // No ad account: nothing has ever synced, but there are no figures to be late, so only the no-account line shows.
+    const none = await summaryFor("owner", { adAccount: false, allowances: [] });
+    expect(none.pots.ads.notes).toContain("No ad account connected yet. You can set your ads limits now; they apply as soon as you connect one.");
+    expect(none.pots.ads.notes).not.toContain(STALE_FIGURES_NOTE);
+    expect(none.pots.ads.notes).not.toContain(NO_FIGURES_YET_NOTE);
+    expect(none.pots.ads.stale).toBe(false);
+    // Connected, nothing running: no note either.
+    expect((await summaryFor("owner")).pots.ads.notes).not.toContain(STALE_FIGURES_NOTE);
+    const running = { stale: true, perCommitment: [{}] as never[], otherCurrency: [] };
+    expect(staleFiguresNote(false, running, null)).toBeNull();
+    expect(staleFiguresNote(true, { ...running, perCommitment: [] }, null)).toBeNull();
+    expect(staleFiguresNote(true, { ...running, stale: false }, new Date())).toBeNull();
+    expect(staleFiguresNote(true, running, new Date(NOW.getTime() - 2 * 3_600_000))).toBe(STALE_FIGURES_NOTE);
+    // Never synced while ads run: "for over an hour" would not be true, so the line says the figures haven't come yet.
+    expect(staleFiguresNote(true, running, null)).toBe(NO_FIGURES_YET_NOTE);
+  });
+
   it("several ad accounts and none chosen: the owner chooses, the others ask the owner", async () => {
     const owner = await summaryFor("owner", { secondAccount: true, chosen: false });
     expect(owner.pots.ads.notes).toContain("Choose which ad account Edwyz can spend from. Until you do, new ads can't start.");
@@ -439,6 +457,25 @@ describe("assistants (AssistantsCard)", () => {
     expect(enabledPatch(true, true)).toEqual({});
     expect(enabledPatch(false, true)).toEqual({ enabled: true });
     expect(enabledPatch(true, false)).toEqual({ enabled: false });
+  });
+
+  it("an assistant that is coming later has no settings to change; each switch is named after its assistant", async () => {
+    const s = await summaryFor("owner", { mandate: { level: 0, enabled: false, version: 1 } });
+    const planned = s.assistants.filter((a) => a.phase === "planned");
+    expect(planned.map((a) => a.label)).toEqual(["Campaign assistant", "Broadcast assistant", "Follow-up assistant"]);
+    const markup = html(createElement(AssistantsCard, { assistants: planned, assistantSpendEnabled: true, capabilities: s.capabilities, currency: "INR", onChanged: noop }));
+    expect(markup).not.toContain("<form");
+    expect(markup).not.toContain('role="switch"');
+    expect(markup).not.toContain("<select");
+    expect(markup).not.toContain("<input");
+    expect(text(markup)).not.toContain("Suggestions only");
+    expect(text(markup).filter((l) => l === "Coming later")).toHaveLength(3);
+    expect(text(markup).filter((l) => l === COMING_LATER_TEXT)).toHaveLength(3);
+    // The live one keeps its form, and its switch reads "Ad assistant, Assistant on", not just "Assistant on".
+    const live = html(createElement(AssistantsCard, { assistants: s.assistants, assistantSpendEnabled: true, capabilities: s.capabilities, currency: "INR", onChanged: noop }));
+    expect(live.match(/role="switch"/g) ?? []).toHaveLength(1);
+    expect(live).toContain('id="ads_optimizer-name"');
+    expect(live).toContain('aria-labelledby="ads_optimizer-name ads_optimizer-on"');
   });
 
   it("an admin can only lower the level; a team member reads", async () => {

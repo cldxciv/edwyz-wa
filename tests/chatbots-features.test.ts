@@ -167,16 +167,27 @@ describe("template node", () => {
     expect(sent()).toEqual([`failed:${code}`]);
   });
 
-  it("without an error connection the flow still carries on, and an opted-out contact gets nothing", async () => {
-    store.templates = [tpl()];
-    run({ variables: { "1": "a", "2": "b" } });
-    store.contacts[0].optedOutAt = new Date();
-    expect(await handleInboundForChatbots(inbound("hi"))).toBe(false);
-    store.contacts[0].optedOutAt = null;
+  it("without an error connection the flow still carries on", async () => {
     store.templates = [];
+    run({ variables: { "1": "a", "2": "b" } });
     await handleInboundForChatbots(inbound("hi"));
     expect(sent()).toEqual(["after"]);
     expect(session().variables.template_error).toBe("template_unavailable");
+  });
+
+  it("a contact who opted out gets a utility template but never a marketing one (owner default 1)", async () => {
+    store.contacts[0].optedOutAt = new Date(0);
+    store.contacts[0].optIn = true;
+    store.templates = [tpl({ category: "MARKETING" })];
+    run({ variables: { "1": "a", "2": "b" } });
+    await handleInboundForChatbots(inbound("hi"));
+    expect(inbox.sendTemplateMessage).not.toHaveBeenCalled();
+    expect(session().variables.template_error).toBe("opted_out");
+    expect(sent()).toEqual(["after"]);
+
+    store.templates = [tpl({ category: "UTILITY" })];
+    await handleInboundForChatbots(inbound("hi"));
+    expect(inbox.sendTemplateMessage).toHaveBeenCalledTimes(1);
   });
 
   it("a marketing template goes to a contact who opted in", async () => {

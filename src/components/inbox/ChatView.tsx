@@ -1,22 +1,23 @@
 "use client";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { apiFetch, Button, cn, EmptyState, Select } from "@/components/ui";
+import { apiFetch, Button, cn, EmptyState, Select, StatusPill } from "@/components/ui";
 import { avatarHint, displayName, displaySubtitle } from "@/lib/contacts/identity";
 import { deriveStatus } from "@/lib/inbox/status-rules";
 import { Avatar, Icon, WhatsAppGlyph } from "./Avatar";
 import { ConversationBot } from "@/components/chatbots/ConversationBot";
 import { ChatMenu } from "./ChatMenu";
 import { Composer } from "./Composer";
-import { mergeById, statusDisplay, windowRemainingMs, type InboxMessage } from "./helpers";
+import { mergeById, windowRemainingMs, type InboxMessage } from "./helpers";
 import { applyLatestPage, applyOlderPage, EMPTY_HISTORY, restoredScrollTop, type History } from "./history";
 import { Bubble, Lightbox, NoteBubble, UnreadLine, type LightboxItem } from "./MessageBubble";
 import { fetchNotes } from "./notes-cache";
 import type { ConversationDetail, Me, Member, TemplateOption } from "./types";
 import { usePolling } from "./usePolling";
 import { useStreamRefresh, type StreamState } from "./useInboxStream";
-import { buildTimeline, mediaPreview, newInbound, notifyUnreadRefresh, type ChatMessage, type NoteItem, type SentAttachment } from "./ux";
+import { buildTimeline, mediaPreview, newInbound, notifyUnreadRefresh, templatesForWaba, wabaOf, type ChatMessage, type NoteItem, type SentAttachment } from "./ux";
 
 const NOTE_UNDO_MS = 5000;
+const EXPIRED_HINT = "The customer's last message is more than 24 hours old, so only an approved template can be sent";
 
 function ChatSkeleton() {
   return (
@@ -297,7 +298,7 @@ export function ChatView({
   }
 
   async function sendMedia(file: SentAttachment, caption: string) {
-    const ref = file.key ? { mediaKey: file.key } : { mediaId: file.mediaId, ...(file.filename ? { filename: file.filename } : {}), ...(file.mime ? { mime: file.mime } : {}) };
+    const ref = { mediaId: file.mediaId, ...(file.filename ? { filename: file.filename } : {}), ...(file.mime ? { mime: file.mime } : {}) };
     await post({ type: file.kind, ...ref, ...(caption && file.kind !== "audio" && file.kind !== "sticker" ? { caption } : {}) });
   }
 
@@ -323,7 +324,11 @@ export function ChatView({
   }
 
   const remaining = windowRemainingMs(detail?.conversation.lastInboundAt, now);
-  const windowOpen = detail ? detail.windowOpen && remaining > 0 : false;
+  // Unknown (null) until the chat has loaded, so the composer does not flash its closed-window notice and template picker.
+  const windowOpen = detail ? detail.windowOpen && remaining > 0 : null;
+  // The picker offers only templates of this number's WhatsApp Business Account; the thread still renders any template it shows.
+  const numberWaba = wabaOf(detail?.conversation.phoneNumber);
+  const chatTemplates = useMemo(() => templatesForWaba(templates, numberWaba), [templates, numberWaba]);
   const contact = detail?.conversation.contact;
   const authorName = (id: string) => (id === me?.user.id ? "You" : (members.find((m) => m.userId === id)?.name ?? "Teammate"));
   const derived = detail ? deriveStatus({ status: detail.conversation.status, lastInboundAt: detail.conversation.lastInboundAt, lastMessageAt: detail.conversation.lastMessageAt }) : null;
@@ -339,9 +344,12 @@ export function ChatView({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2.5">
+      {/* The header is a size container: the status and assignee menus (also in Details) and the button labels only show when the
+          chat column itself is wide, so a narrow column (phone, or the list and Details open beside it) keeps a one or two row header.
+          The menus override the field's full width and height (w-auto!, min-h-8!): otherwise each took a whole row of the header. */}
+      <header className="@container relative z-(--z-sticky) flex flex-wrap items-center gap-2 border-b border-border px-3 py-2.5">
         <Button variant="ghost" size="sm" className="lg:hidden" onClick={onBack} aria-label="Back to conversations">
-          <Icon name="back" /> Back
+          <Icon name="back" />{" "}Back
         </Button>
         {contact && <Avatar id={contact.id} name={contact.name} phone={avatarHint(contact)} />}
         <div className="min-w-[8rem] flex-1">
@@ -359,24 +367,31 @@ export function ChatView({
         {detail && derived && (
           <>
             <ConversationBot conversationId={conversationId} onChanged={onChanged} />
+            {/* Expired is not a status anyone sets: it says the 24-hour window closed. It sits beside the status, which stays the
+                stored one, so the header and the Details panel always show the same status. */}
+            {derived === "expired" && (
+              <span title={EXPIRED_HINT} className="shrink-0">
+                <StatusPill status="expired" />
+                <span className="sr-only">: {EXPIRED_HINT}</span>
+              </span>
+            )}
             {derived !== "solved" && (
               <Button variant="secondary" size="sm" onClick={() => void change("status", { status: "solved" })} title="Mark solved (e)" aria-label="Solve">
-                <Icon name="check" /> <span className="hidden sm:inline">Solve</span>
+                <Icon name="check" /> <span className="hidden @2xl:inline">Solve</span>
               </Button>
             )}
             <Select
               aria-label="Conversation status"
-              className="hidden w-auto py-1 text-xs md:block"
-              value={derived === "expired" ? "expired" : detail.conversation.status === "resolved" ? "solved" : detail.conversation.status}
+              className="hidden w-auto! min-h-8! py-1! text-xs! @2xl:block"
+              value={detail.conversation.status === "resolved" ? "solved" : detail.conversation.status}
               onChange={(e) => void change("status", { status: e.target.value })}
             >
               <option value="open">Open</option>
               <option value="pending">Pending</option>
               <option value="solved">Solved</option>
               {(me?.role !== "agent" || detail.conversation.status === "blocked") && <option value="blocked">Blocked</option>}
-              <option value="expired" disabled>{statusDisplay("expired")}</option>
             </Select>
-            <Select aria-label="Assignee" className="hidden w-auto py-1 text-xs md:block" value={detail.conversation.assignedToId ?? ""} onChange={(e) => void change("assign", { userId: e.target.value || null })}>
+            <Select aria-label="Assignee" className="hidden w-auto! min-h-8! max-w-44 py-1! text-xs! @2xl:block" value={detail.conversation.assignedToId ?? ""} onChange={(e) => void change("assign", { userId: e.target.value || null })}>
               <option value="">Unassigned</option>
               {members.map((m) => (
                 <option key={m.userId} value={m.userId}>{m.name}</option>
@@ -393,11 +408,13 @@ export function ChatView({
           </>
         )}
         <Button variant={panelOpen ? "primary" : "secondary"} size="sm" onClick={onTogglePanel} aria-pressed={panelOpen} aria-label="Contact details">
-          <Icon name="panel" /> <span className="hidden sm:inline">Details</span>
+          <Icon name="panel" /> <span className="hidden @2xl:inline">Details</span>
         </Button>
       </header>
 
-      <div className="relative min-h-0 flex-1">
+      {/* Messages stay readable on a short screen: the thread keeps at least 30% of the chat column (6rem at the least), and
+          the composer gives up its space first, scrolling its notices and template list. */}
+      <div className="relative min-h-[max(6rem,30%)] flex-1">
         <div
           ref={scroller}
           role="log"
@@ -490,7 +507,7 @@ export function ChatView({
         contactPhone={contact?.phone ?? ""}
         agentName={me?.user.name ?? ""}
         members={members}
-        templates={templates}
+        templates={chatTemplates}
         templatesError={templatesError}
         onReloadTemplates={loadTemplates}
         onSendText={sendText}

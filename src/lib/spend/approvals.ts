@@ -709,6 +709,11 @@ async function applyApproved(db: SpendDb, row: ApprovalRow, approver: Extract<Ap
       await resumeAd(row.tenantId, intent.metaAdId, { action: "resume_ad", metaAdId: intent.metaAdId, previousStatus: "active" }, actor, common);
       return;
     }
+    case "resume_adset": {
+      const { resumeAdSet } = await import("@/lib/ads/actions");
+      await resumeAdSet(row.tenantId, intent.metaAdSetId, { action: "resume_adset", metaAdSetId: intent.metaAdSetId, previousStatus: "active" }, actor, common);
+      return;
+    }
     case "activate": {
       const { activateCampaign, getCampaign } = await import("@/lib/ads/service");
       const c = await getCampaign(row.tenantId, intent.campaignId);

@@ -32,6 +32,8 @@ export type SetupStep = {
   href: string;
   cta: string;
   alt: { href: string; cta: string } | null;
+  /** Where "Review" goes once the step is done: the list of what was made, never the form that makes a new one. */
+  reviewHref: string;
   state: StepState;
   detail: string | null;
   blockedBy: StepId | null;
@@ -42,6 +44,8 @@ export type SetupStep = {
 export type SetupSummary = {
   done: number;
   total: number;
+  /** Steps asked of the owner (done plus todo): what "3 of 4 done" and the ring count, the same on the page and in Eddy. */
+  asked: number;
   percent: number;
   /** Open steps that are still to do and have not been dismissed. */
   remaining: number;
@@ -52,7 +56,8 @@ export type SetupSummary = {
 
 export const TRIAL_NUDGE_DAYS = 3;
 
-type Draft = Omit<SetupStep, "state" | "detail" | "blockedBy" | "blockedReason" | "dismissed">;
+/** reviewHref defaults to href, for steps whose page already lists what was done. */
+type Draft = Omit<SetupStep, "state" | "detail" | "blockedBy" | "blockedReason" | "dismissed" | "reviewHref"> & { reviewHref?: string };
 
 const DRAFTS: Record<StepId, Draft> = {
   connect: {
@@ -74,6 +79,7 @@ const DRAFTS: Record<StepId, Draft> = {
     href: "/app/templates/new",
     cta: "Create a template",
     alt: { href: "/app/templates", cta: "See my templates" },
+    reviewHref: "/app/templates",
   },
   contacts: {
     id: "contacts",
@@ -94,6 +100,7 @@ const DRAFTS: Record<StepId, Draft> = {
     href: "/app/broadcasts/new",
     cta: "Start a broadcast",
     alt: null,
+    reviewHref: "/app/broadcasts",
   },
   invite: {
     id: "invite",
@@ -124,6 +131,7 @@ const DRAFTS: Record<StepId, Draft> = {
     href: "/app/automation/chatbots/new",
     cta: "Build a chatbot",
     alt: { href: "/app/automation/ai-agent", cta: "Use the AI agent" },
+    reviewHref: "/app/automation",
   },
   facebook: {
     id: "facebook",
@@ -222,6 +230,7 @@ export function computeSteps(facts: SetupFacts, dismissed: Iterable<string> = []
     const state: StepState = e.done ? "done" : ESSENTIAL.has(id) || e.urgent ? "todo" : "optional";
     return {
       ...DRAFTS[id],
+      reviewHref: DRAFTS[id].reviewHref ?? DRAFTS[id].href,
       state,
       detail: e.detail ?? null,
       blockedBy: e.done ? null : (e.blockedBy ?? null),
@@ -241,6 +250,7 @@ export function summarize(steps: SetupStep[]): SetupSummary {
   return {
     done,
     total: steps.length,
+    asked: counted,
     percent: counted === 0 ? 100 : Math.round((done / counted) * 100),
     remaining: open.length,
     complete: todo.length === 0,

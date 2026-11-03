@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { startChatbot } from "@/lib/chatbots";
+import { mayReceive, sendKindForCategory } from "@/lib/contacts/opt-out";
 import { sendTemplateMessage } from "@/lib/inbox/service";
 import { describeError } from "@/lib/safe-error";
 import { tenantMayRunBackground } from "@/lib/tenant-state";
@@ -84,7 +85,8 @@ export async function processRun(runId: string, now = new Date()): Promise<boole
   const step = steps[run.stepIndex];
   const [lead, contact] = await loadLeadAndContact(tenantId, run.leadId);
 
-  if (!step || !lead || !contact || !run.sequence.enabled || ENDED_LEAD.includes(lead.status) || contact.optedOutAt) {
+  // An opt-out does not end the run: it stops marketing only, so each template step is checked when it is due (sendStepTemplate).
+  if (!step || !lead || !contact || !run.sequence.enabled || ENDED_LEAD.includes(lead.status)) {
     await finish(runId, tenantId, step ? "stopped" : "completed");
     return true;
   }
@@ -166,6 +168,8 @@ async function sendStepTemplate(tenantId: string, lead: LeadRow, contact: Contac
   if (!template) return null;
   const category = template.category.toLowerCase();
   if (category !== "marketing" && category !== "utility") return null;
+  // An opt-out stops marketing only (lib/contacts/opt-out.ts): a utility step, like an order or booking update, still goes.
+  if (!mayReceive(contact, sendKindForCategory(template.category))) return null;
   if (category === "marketing" && !contact.optIn) return null;
   const components = buildLeadComponents(template.components, lead.fields, contact, step.params);
   if (!components) return null;
@@ -231,8 +235,31 @@ export async function onInboundFromContact(tenantId: string, contactId: string):
   return stopped;
 }
 
-/** Called when a contact opts out (STOP): every active run for that contact ends. */
+/**
+ * Called when a contact opts out (STOP). An opt-out stops marketing only, so a run ends only when nothing it has left can still go
+ * to them: every remaining step sends a marketing template (or one that is no longer approved). A run with a utility template or a
+ * chatbot step left keeps going; each step is checked again when it is due (sendStepTemplate, and the chatbot's own template gate).
+ */
 export async function onContactOptedOut(tenantId: string, contactId: string): Promise<number> {
-  const { count } = await prisma.leadSequenceRun.updateMany({ where: { tenantId, status: "active", lead: { contactId, tenantId } }, data: { status: "stopped", nextRunAt: null } });
-  return count;
+  const runs = await prisma.leadSequenceRun.findMany({
+    where: { tenantId, status: "active", lead: { contactId, tenantId } },
+    include: { sequence: { select: { steps: true } } },
+    take: 100,
+  });
+  if (runs.length === 0) return 0;
+  const remaining = new Map(runs.map((run) => [run.id, readSteps(run.sequence.steps).slice(run.stepIndex)]));
+  const templateIds = [...new Set([...remaining.values()].flat().flatMap((s) => (s.templateId ? [s.templateId] : [])))];
+  const templates = templateIds.length
+    ? await prisma.template.findMany({ where: { tenantId, id: { in: templateIds }, status: "approved" }, select: { id: true, category: true } })
+    : [];
+  // Sequences send marketing and utility templates only (sendStepTemplate), and of those only utility goes after an opt-out.
+  const stillGoes = new Set(templates.filter((t) => sendKindForCategory(t.category) === "utility").map((t) => t.id));
+  let stopped = 0;
+  for (const run of runs) {
+    const steps = remaining.get(run.id) ?? [];
+    if (steps.some((s) => s.chatbotId || (s.templateId && stillGoes.has(s.templateId)))) continue;
+    const { count } = await prisma.leadSequenceRun.updateMany({ where: { id: run.id, tenantId, status: "active" }, data: { status: "stopped", nextRunAt: null } });
+    stopped += count;
+  }
+  return stopped;
 }

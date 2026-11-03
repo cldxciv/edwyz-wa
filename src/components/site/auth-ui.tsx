@@ -44,7 +44,8 @@ function ErrorLine({ id, children }: { id: string; children: ReactNode }) {
   );
 }
 
-function StrengthMeter({ strength, id }: { strength: Strength; id: string }) {
+/** With `quiet` only the bars show: the field's error line already says what is wrong, so the hint would say it twice. */
+function StrengthMeter({ strength, id, quiet }: { strength: Strength; id: string; quiet: boolean }) {
   const colors = ["bg-[#b91c1c]", "bg-[#b45309]", "bg-[#a16207]", "bg-[#15803d]", "bg-[#047857]"];
   return (
     <div id={id} className="mt-2">
@@ -53,10 +54,12 @@ function StrengthMeter({ strength, id }: { strength: Strength; id: string }) {
           <span key={n} className={`h-1.5 flex-1 rounded-full ${strength.score >= n ? colors[strength.score] : "bg-border"}`} />
         ))}
       </div>
-      <p className="mt-1.5 text-xs text-muted">
-        {strength.label && <strong className="font-semibold text-foreground">{strength.label}. </strong>}
-        {strength.hint}
-      </p>
+      {!quiet && (
+        <p className="mt-1.5 text-xs text-muted">
+          {strength.label && <strong className="font-semibold text-foreground">{strength.label}. </strong>}
+          {strength.hint}
+        </p>
+      )}
     </div>
   );
 }
@@ -87,7 +90,9 @@ function Field({ spec, value, error, personal, onChange, onBlur, inputRef }: Fie
   const hintId = `${id}-hint`;
   const errId = `${id}-err`;
   const strengthId = `${id}-strength`;
-  const describedBy = [spec.hint && !spec.strength ? hintId : "", spec.strength ? strengthId : "", error ? errId : ""].filter(Boolean).join(" ") || undefined;
+  // Once something is typed, an error line (too short, too long) says all the meter's hint would, so the hint steps aside.
+  const meterQuiet = Boolean(error && value);
+  const describedBy = [spec.hint && !spec.strength ? hintId : "", spec.strength && !meterQuiet ? strengthId : "", error ? errId : ""].filter(Boolean).join(" ") || undefined;
 
   return (
     <div>
@@ -135,7 +140,7 @@ function Field({ spec, value, error, personal, onChange, onBlur, inputRef }: Fie
           {spec.hint}
         </p>
       )}
-      {spec.strength && <StrengthMeter id={strengthId} strength={passwordStrength(value, personal)} />}
+      {spec.strength && <StrengthMeter id={strengthId} strength={passwordStrength(value, personal)} quiet={meterQuiet} />}
       {error && <ErrorLine id={errId}>{error}</ErrorLine>}
     </div>
   );

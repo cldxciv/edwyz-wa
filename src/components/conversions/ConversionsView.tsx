@@ -1,15 +1,23 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Alert, Badge, Button, Card, DataTable, EmptyState, ErrorState, FormField, Select, Skeleton, apiFetch, toast, type Column } from "@/components/ui";
 import { PageHeader } from "@/components/app/PageHeader";
 import { canManage, useApi, useRole } from "@/components/contacts/hooks";
-import { EVENT_STATUSES, canRequeue, eventLabel, eventStatusView, friendlyError, reasonText } from "./helpers";
+import { EVENT_STATUSES, canRequeue, emptyStatusTitle, eventCountsText, eventLabel, eventStatusView, friendlyError, reasonText } from "./helpers";
 
 type Settings = { enabled: boolean; datasetAssetId: string | null };
 type Dataset = { id: string; name: string; externalId: string; status: string };
 type EventRow = { id: string; eventName: string; eventTime: string; status: string; attempts: number; reason: string | null; createdAt: string };
 type Events = { events: EventRow[]; counts: Record<string, number>; settings: Settings };
+
+/** What is reported to Meta, and when. Shown under the switch so nobody has to guess. */
+export const REPORTED_EVENTS: { name: string; when: string }[] = [
+  { name: "New lead", when: "someone fills in your lead form, or starts a WhatsApp chat from your ad (once per person for each ad in 30 days)" },
+  { name: "Qualified lead", when: "you mark a lead as qualified on the Leads page" },
+  { name: "Purchase", when: "you mark a lead as won on the Leads page" },
+];
 
 function SettingsCard({ settings, datasets, onSaved }: { settings: Settings; datasets: Dataset[]; onSaved: () => void }) {
   const [draft, setDraft] = useState(settings);
@@ -33,7 +41,7 @@ function SettingsCard({ settings, datasets, onSaved }: { settings: Settings; dat
   }
 
   return (
-    <Card title="Settings" description="Tell Meta when a chat turns into a lead or a sale, so your ads can find more people like them.">
+    <Card title="Settings" description="Tell Meta about the leads and sales your ads bring, so your ads can find more people like them.">
       <div className="flex items-start gap-3">
         <input id="conversions-enabled" type="checkbox" className="mt-1 h-4 w-4 shrink-0 accent-accent" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} aria-describedby="conversions-enabled-hint" />
         <label htmlFor="conversions-enabled" className="text-sm">
@@ -43,8 +51,18 @@ function SettingsCard({ settings, datasets, onSaved }: { settings: Settings; dat
           </span>
         </label>
       </div>
+      <div className="mt-4">
+        <p className="text-sm font-medium">What we report</p>
+        <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-muted">
+          {REPORTED_EVENTS.map((e) => (
+            <li key={e.name}>
+              <span className="font-medium text-foreground">{e.name}</span>: when {e.when}.
+            </li>
+          ))}
+        </ul>
+      </div>
       <div className="mt-4 max-w-md">
-        <FormField label="Dataset" hint={datasets.length === 0 ? "No dataset is connected yet. Connect one under Meta connections." : "The Meta dataset that receives the events."}>
+        <FormField label="Dataset" hint={datasets.length === 0 ? "No dataset is connected yet." : "The Meta dataset that receives the events."}>
           <Select value={draft.datasetAssetId ?? ""} onChange={(e) => setDraft({ ...draft, datasetAssetId: e.target.value || null })} disabled={datasets.length === 0}>
             <option value="">Choose automatically</option>
             {datasets.map((d) => (
@@ -54,6 +72,13 @@ function SettingsCard({ settings, datasets, onSaved }: { settings: Settings; dat
             ))}
           </Select>
         </FormField>
+        {datasets.length === 0 && (
+          <p className="mt-1 text-xs">
+            <Link href="/app/settings/connections" className="font-medium text-accent-ink underline underline-offset-2">
+              Connect a dataset under Meta connections
+            </Link>
+          </p>
+        )}
       </div>
       {error && (
         <Alert className="mt-4" tone="bad" title="We could not save these settings">
@@ -180,7 +205,7 @@ export function ConversionsView() {
           )}
           <Card
             title="Events"
-            description={EVENT_STATUSES.map((s) => `${counts[s] ?? 0} ${eventStatusView(s).label.toLowerCase()}`).join(", ")}
+            description={eventCountsText(counts)}
             actions={
               <div className="w-44">
                 <FormField label="Status">
@@ -204,8 +229,8 @@ export function ConversionsView() {
               empty={
                 <EmptyState
                   compact
-                  title={status ? `No ${eventStatusView(status).label.toLowerCase()} events` : "No conversions yet"}
-                  body={status ? "No events have this status." : "When a lead is qualified or a customer buys after a chat, it shows up here."}
+                  title={status ? emptyStatusTitle(status) : "No conversions yet"}
+                  body={status ? "Choose All statuses to see every event." : "When someone fills in your lead form or starts a chat from your ad, or you mark a lead as qualified or won, it shows up here."}
                 />
               }
             />

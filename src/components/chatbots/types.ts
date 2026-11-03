@@ -37,7 +37,12 @@ export type NodeDataMap = {
   set_attribute: { attribute: string; value: string };
   add_tag: { tag: string };
   remove_tag: { tag: string };
-  delay: { minutes: number };
+  /**
+   * onReply, when the customer writes during the wait (same values as src/lib/chatbots/flow.ts DELAY_REPLY_MODES): "continue" ends
+   * the wait and goes on at once, saving the message as {{last_reply}}; "pass" keeps waiting and lets chat routing and rules see the
+   * message. Unset, the bot keeps waiting and keeps the message.
+   */
+  delay: { minutes: number; onReply?: "continue" | "pass" };
   webhook: { url: string; method: "GET" | "POST"; bodyTemplate?: string; saveAs?: string };
   assign: { userId: string; teamId?: string };
   set_status: { status: "open" | "pending" | "solved" };

@@ -255,6 +255,9 @@ test("an admin can see billing but cannot cancel or buy on the owner's behalf th
   await expect(p.getByRole("button", { name: "Cancel subscription" })).toHaveCount(0);
   const cancel = await ctx.request.post("/api/billing/cancel", { headers: { origin: ORIGIN }, data: {} });
   expect([403, 409]).toContain(cancel.status());
+  // An upgrade charges the saved payment method at once, so only the owner changes the plan.
+  const change = await ctx.request.post("/api/billing/change-plan", { headers: { origin: ORIGIN }, data: { planId: "any" } });
+  expect(change.status()).toBe(403);
   await ctx.close();
 });
 

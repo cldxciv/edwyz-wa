@@ -5,7 +5,7 @@ import { AI_LEGACY_ACTOR, reserveAi, type AiFeature, type AiHold } from "@/lib/s
 import type { SpendActor } from "@/lib/spend/types";
 import { HttpError } from "@/lib/tenancy";
 import { usedThisMonth } from "@/lib/usage";
-import { getBillingStatus } from "./status";
+import { getBillingStatus, type BillingStatus } from "./status";
 
 export type LimitKind = "seats" | "contacts" | "broadcastContacts" | "aiCredits" | "adAccounts" | "scheduledPosts" | "channels";
 
@@ -23,19 +23,70 @@ type PlanLimits = {
   connectedChannelLimit: number | null;
 };
 
-const SELECT = { seatLimit: true, contactLimit: true, monthlyBroadcastLimit: true, adAccountLimit: true, scheduledPostLimit: true, connectedChannelLimit: true } as const;
+const SELECT = { name: true, seatLimit: true, contactLimit: true, monthlyBroadcastLimit: true, adAccountLimit: true, scheduledPostLimit: true, connectedChannelLimit: true } as const;
+
+/**
+ * Where a workspace's limits come from, the one rule enforcement, the billing page and the dashboard meter share: none for a
+ * complimentary workspace, the trial allowance (the plan with code "trial", when the platform has one) during a free trial even
+ * when a checkout already named a plan, the chosen plan otherwise when there is one, and otherwise none.
+ */
+export type ResolvedLimits = { status: BillingStatus; from: "plan" | "trial" | null; planName: string | null; limits: PlanLimits | null };
+
+export async function resolveLimits(tenantId: string): Promise<ResolvedLimits> {
+  const status = await getBillingStatus(tenantId);
+  const none: ResolvedLimits = { status, from: null, planName: null, limits: null };
+  if (status.state === "exempt") return none;
+  // A trial uses the trial allowance even when the row names a plan: a checkout opened but never paid writes its plan there.
+  const from = status.state === "trialing" ? "trial" : status.planId ? "plan" : null;
+  if (!from) return none;
+  const plan = await prisma.plan.findUnique({ where: from === "plan" ? { id: status.planId as string } : { code: "trial" }, select: SELECT });
+  if (!plan) return none;
+  const { name, ...limits } = plan;
+  return { status, from, planName: name ?? null, limits };
+}
 
 async function resolvePlanLimits(tenantId: string): Promise<PlanLimits | null> {
-  const status = await getBillingStatus(tenantId);
-  if (status.state === "exempt") return null;
-  if (status.planId) return prisma.plan.findUnique({ where: { id: status.planId }, select: SELECT });
-  if (status.state === "trialing") return prisma.plan.findUnique({ where: { code: "trial" }, select: SELECT });
-  return null;
+  return (await resolveLimits(tenantId)).limits;
 }
 
 export function monthStartUtc(now: Date): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 }
+
+const nextMonthStartUtc = (now: Date) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+
+/**
+ * The broadcast messages that count toward the monthly plan limit, defined once for the meter, the billing page and enforcement:
+ * messages sent this calendar month (UTC), so sent, delivered or read with sentAt in the month; messages on their way right now
+ * (queued) in a broadcast that has not finished; and messages still waiting in a broadcast that is sending, paused or scheduled for
+ * this month (pending). The waiting ones are held against the limit so two broadcasts started together cannot pass it. Skipped
+ * messages (opted out, or left over when a broadcast is canceled) and failed ones never count, and neither does a draft. A queued row
+ * of a finished broadcast (the worker stopped between claiming it and sending) does not hold the limit for ever; if it is sent after
+ * all, the sent branch counts it.
+ *
+ * `excludeBroadcastId`: the broadcast being started. Its own waiting and queued messages are left out, because the start counts its
+ * whole audience as the messages it adds; otherwise "Send now" on a broadcast that was already scheduled counted its own pending
+ * messages twice and could be refused below the limit. Its messages already sent still count.
+ */
+export function broadcastQuotaWhere(tenantId: string, now: Date, opts: { excludeBroadcastId?: string } = {}) {
+  // undefined leaves the filter out (Prisma ignores it), so without a broadcast to leave out the query is exactly as before.
+  const notThis = opts.excludeBroadcastId ? { not: opts.excludeBroadcastId } : undefined;
+  return {
+    tenantId,
+    OR: [
+      { status: { in: ["sent", "delivered", "read"] as ("sent" | "delivered" | "read")[] }, sentAt: { gte: monthStartUtc(now) } },
+      { status: "queued" as const, broadcastId: notThis, broadcast: { status: { in: ["sending", "paused", "scheduled"] as ("sending" | "paused" | "scheduled")[] } } },
+      {
+        status: "pending" as const,
+        broadcastId: notThis,
+        broadcast: { OR: [{ status: { in: ["sending", "paused"] as ("sending" | "paused")[] } }, { status: "scheduled" as const, scheduledAt: { lt: nextMonthStartUtc(now) } }] },
+      },
+    ],
+  };
+}
+
+/** What a usage count may leave out (see broadcastQuotaWhere). */
+export type UsageOptions = { excludeBroadcastId?: string };
 
 const PLAN_FIELD: Record<Exclude<LimitKind, "aiCredits">, keyof PlanLimits> = {
   seats: "seatLimit",
@@ -53,9 +104,12 @@ export async function limitFor(tenantId: string, kind: LimitKind): Promise<numbe
   return plan ? (plan[PLAN_FIELD[kind]] ?? null) : null;
 }
 
-/** Ad accounts that already carry a campaign. An account is "in use" from its first campaign on; archived campaigns do not hold it. */
+/**
+ * Ad accounts that already carry a campaign. An account is "in use" from its first campaign on; archived campaigns and discarded
+ * drafts (hidden from the list, removed by retention) do not hold it. Restoring a discarded draft asks the plan again.
+ */
 export async function usedAdAccountIds(tenantId: string): Promise<Set<string>> {
-  const rows = await prisma.adCampaign.findMany({ where: { tenantId, status: { not: "archived" } }, distinct: ["adAccountAssetId"], select: { adAccountAssetId: true }, take: 1000 });
+  const rows = await prisma.adCampaign.findMany({ where: { tenantId, status: { not: "archived" }, discardedAt: null }, distinct: ["adAccountAssetId"], select: { adAccountAssetId: true }, take: 1000 });
   return new Set(rows.map((r) => r.adAccountAssetId));
 }
 
@@ -65,9 +119,10 @@ export async function usedChannelIds(tenantId: string, excludePostId?: string): 
   return new Set(rows.map((r) => r.assetId));
 }
 
-export async function usageFor(tenantId: string, kind: LimitKind, now = new Date()): Promise<number> {
+export async function usageFor(tenantId: string, kind: LimitKind, now = new Date(), opts: UsageOptions = {}): Promise<number> {
   switch (kind) {
     case "seats": {
+      // An open invite holds a seat: accepting it adds a member without another check.
       const [members, invites] = await Promise.all([
         prisma.membership.count({ where: { tenantId } }),
         prisma.invite.count({ where: { tenantId, acceptedAt: null, expiresAt: { gt: now } } }),
@@ -77,7 +132,7 @@ export async function usageFor(tenantId: string, kind: LimitKind, now = new Date
     case "contacts":
       return prisma.contact.count({ where: { tenantId } });
     case "broadcastContacts":
-      return prisma.broadcastRecipient.count({ where: { tenantId, broadcast: { createdAt: { gte: monthStartUtc(now) } } } });
+      return prisma.broadcastRecipient.count({ where: broadcastQuotaWhere(tenantId, now, opts) });
     case "aiCredits":
       return usedThisMonth(tenantId, "ai_credits", now);
     case "adAccounts":
@@ -109,13 +164,14 @@ function refusal(kind: LimitKind, limit: number, used: number): string {
 /**
  * Throws HttpError(402) when adding would exceed the plan's limit. No limit is applied when the plan leaves it unset, except AI credits,
  * which always have a ceiling. For aiCredits, `adding` is the credit cost of the action about to run. For adAccounts and channels it is
- * the number of NEW accounts (use assertAdAccountAllowed / assertChannelsAllowed, which work that out).
+ * the number of NEW accounts (use assertAdAccountAllowed / assertChannelsAllowed, which work that out). For broadcastContacts, pass
+ * `excludeBroadcastId` when `adding` is the whole audience of a broadcast that may already hold messages (a scheduled one started now).
  */
-export async function assertWithinLimit(tenantId: string, kind: LimitKind, adding = 1): Promise<void> {
+export async function assertWithinLimit(tenantId: string, kind: LimitKind, adding = 1, opts: UsageOptions = {}): Promise<void> {
   if (adding <= 0) return;
   const limit = await limitFor(tenantId, kind);
   if (limit === null || limit === undefined) return;
-  const used = await usageFor(tenantId, kind);
+  const used = await usageFor(tenantId, kind, new Date(), opts);
   if (used + adding > limit) throw new HttpError(402, refusal(kind, limit, used));
 }
 

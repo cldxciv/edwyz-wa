@@ -95,4 +95,13 @@ describe("payload builders", () => {
     expect(p.contact).toBeNull();
     expect(p.source).toBe("meta_lead_form");
   });
+
+  it("lead.created carries where the lead came from, and the catalog explains both sources", () => {
+    const p = leadCreatedPayload({ leadId: "l", status: "new", source: "ctwa", formId: null, campaignId: null, adId: "ad-77", createdAt: "2026-10-30T10:00:00Z", contact: null, fields: { source: "click_to_whatsapp" } });
+    expect(p.source).toBe("ctwa");
+    const doc = eventDoc("lead.created")!;
+    expect(doc.when).toMatch(/click-to-WhatsApp ads/);
+    expect(doc.fields.find((f) => f.name === "source")!.description).toBe("meta_lead_form for a Meta lead form, ctwa for a chat started from a click-to-WhatsApp ad.");
+    expect(doc.fields.find((f) => f.name === "formId")!.description).toMatch(/Null for ctwa leads/);
+  });
 });

@@ -39,6 +39,8 @@ vi.mock("@/lib/broadcasts/blocked", async (importOriginal) => ({ ...(await impor
 vi.mock("@/lib/spend/notify/inbound", () => ({ handleOwnerReply: ownerReply, handleOwnerKeyword: ownerKeyword }));
 vi.mock("@/lib/graph", () => ({ graphFetch }));
 
+import { emitEvent } from "@/lib/integrations/events";
+import { mapMetaStatus } from "@/lib/templates/status";
 import { describeMessage } from "@/lib/webhooks/payload";
 import { ownerReplyPayload, processWebhookEvent, resetNotifierCache } from "@/lib/webhooks/processor";
 
@@ -144,6 +146,67 @@ describe("message types", () => {
     expect(describeMessage({ type: "video", video: { id: "v1" } }).body).toBe("[video]");
   });
 
+  it("writes a catalog order out item by item, with the total when every price is in one currency", () => {
+    const parsed = describeMessage({
+      type: "order",
+      order: {
+        catalog_id: "cat1",
+        text: "Gift wrap please",
+        product_items: [
+          { product_retailer_id: "SKU-1", quantity: "2", item_price: "499.5", currency: "inr" },
+          { product_retailer_id: "SKU-2", quantity: 1, item_price: 100, currency: "INR" },
+        ],
+      },
+    });
+    expect(parsed.body).toBe("[order] 3 items, total 1099 INR\n2 x SKU-1 at 499.50 INR\n1 x SKU-2 at 100 INR\nNote: Gift wrap please");
+    expect(parsed.order).toEqual({
+      catalogId: "cat1",
+      text: "Gift wrap please",
+      total: 1099,
+      currency: "INR",
+      items: [
+        { productRetailerId: "SKU-1", quantity: 2, itemPrice: 499.5, currency: "INR" },
+        { productRetailerId: "SKU-2", quantity: 1, itemPrice: 100, currency: "INR" },
+      ],
+    });
+  });
+
+  it("leaves the total out when prices are missing or in two currencies, and caps a long order", () => {
+    expect(describeMessage({ type: "order", order: { product_items: [{ product_retailer_id: "A", quantity: 1 }] } }).body).toBe("[order] 1 item\n1 x A");
+    const mixed = describeMessage({ type: "order", order: { product_items: [{ product_retailer_id: "A", quantity: 1, item_price: 1, currency: "INR" }, { product_retailer_id: "B", quantity: 1, item_price: 1, currency: "USD" }] } });
+    expect(mixed.order).toMatchObject({ total: null, currency: null });
+    expect(mixed.body.split("\n")[0]).toBe("[order] 2 items");
+    const items = Array.from({ length: 32 }, (_, i) => ({ product_retailer_id: `S${i}`, quantity: 1, item_price: 1, currency: "INR" }));
+    const long = describeMessage({ type: "order", order: { product_items: items } }).body.split("\n");
+    expect(long).toHaveLength(32);
+    expect(long.at(-1)).toBe("and 2 more products");
+    expect(describeMessage({ type: "order", order: {} }).body).toBe("[order] 0 items");
+  });
+
+  it("keeps the names and numbers of shared contact cards", () => {
+    expect(describeMessage({ type: "contacts", contacts: [{ name: { first_name: "Ravi", last_name: "Kumar" }, phones: [{ wa_id: "919999911111" }] }] })).toEqual({
+      type: "contacts",
+      body: "[contacts] Ravi Kumar: +919999911111",
+      contacts: [{ name: "Ravi Kumar", phones: [{ phone: "+919999911111", waId: "919999911111", type: null }] }],
+    });
+    const two = describeMessage({ type: "contacts", contacts: [{ name: { formatted_name: "Asha" }, phones: [{ phone: "+91 1" }, { phone: "+91 2" }] }, { phones: [] }] });
+    expect(two.body).toBe("[contacts] 2 contacts\nAsha: +91 1, +91 2\nNo name");
+    expect(describeMessage({ type: "contacts" }).body).toBe("[contacts]");
+  });
+
+  it("marks reactions and removed reactions with the message they are on", () => {
+    expect(describeMessage({ type: "reaction", reaction: { message_id: "wamid.out", emoji: "\u{1F44D}" } })).toEqual({ type: "reaction", body: "[reaction] \u{1F44D}", reaction: { emoji: "\u{1F44D}", messageId: "wamid.out" } });
+    expect(describeMessage({ type: "reaction", reaction: { message_id: "wamid.out" } })).toEqual({ type: "reaction", body: "[reaction removed]", reaction: { emoji: "", messageId: "wamid.out" } });
+  });
+
+  it("reads WhatsApp system notices without copying Meta's text, which carries names and numbers", () => {
+    const changed = describeMessage({ type: "system", system: { body: "Asha changed from 919876543210 to 919812345678", wa_id: "919812345678", type: "user_changed_number" } });
+    expect(changed).toEqual({ type: "system", body: "[number changed]", system: { event: "number_changed", newWaId: "919812345678" } });
+    expect(describeMessage({ type: "system", system: { type: "user_changed_number" } }).system).toEqual({ event: "number_changed", newWaId: null });
+    expect(describeMessage({ type: "system", system: { type: "user_identity_changed", identity: "x" } })).toEqual({ type: "system", body: "[security code changed]", system: { event: "identity_changed", newWaId: null } });
+    expect(describeMessage({ type: "system", system: { type: "something_new", body: "Private text" } }).body).toBe("[system notice]");
+  });
+
   it("stores media id and mime on the message row", async () => {
     loadEvent(messagesPayload(inboundValue({ type: "image", text: undefined, image: { id: "mid1", mime_type: "image/png" } })));
     await processWebhookEvent("e1");
@@ -164,10 +227,42 @@ describe("STOP handling", () => {
     expect(db.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ tenantId: "t1", action: "contact.opted_out" }) }));
   });
 
-  it.each(["STOP.", "Stop all", "cancel", "Quit", "opt out", "stop please"])("also honours %j (normalised)", async (body) => {
+  it.each(["STOP.", "Stop all", "cancel", "Quit", "opt out", "Opt-Out", "OPTOUT", "  End!  "])("also honours %j (normalised)", async (body) => {
     loadEvent(messagesPayload(inboundValue({ text: { body } })));
     await processWebhookEvent("e1");
     expect(db.contact.updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["cancel my order", "stop please", "STOP sending me messages", "end of the month sale?", "quit smoking tips"])(
+    "%j is an ordinary message: only a whole-message STOP word counts (owner default 1)",
+    async (body) => {
+      loadEvent(messagesPayload(inboundValue({ text: { body } })));
+      await processWebhookEvent("e1");
+      expect(db.contact.updateMany).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ optedOutAt: expect.any(Date) }) }));
+    },
+  );
+
+  it("honours a tap on the template's marketing opt-out button (Stop promotions), but not the same words typed as a sentence", async () => {
+    loadEvent(messagesPayload(inboundValue({ type: "button", text: undefined, button: { text: "Stop promotions", payload: "Stop promotions" } })));
+    await processWebhookEvent("e1");
+    expect(db.contact.updateMany).toHaveBeenCalledWith({ where: { id: "c1", tenantId: "t1" }, data: { optedOutAt: expect.any(Date), optIn: false } });
+    db.contact.updateMany.mockClear();
+    loadEvent(messagesPayload(inboundValue({ text: { body: "stop promotions please, but keep my order updates" } })));
+    await processWebhookEvent("e1");
+    expect(db.contact.updateMany).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ optedOutAt: expect.any(Date) }) }));
+  });
+
+  it("honours the workspace's own STOP words from Inbox settings, read only for a short message", async () => {
+    db.platformSetting.findUnique.mockImplementation(async ({ where }: { where: { key: string } }) => (where.key === "inbox:settings:t1" ? { value: { stopWords: ["band karo"] } } : null));
+    loadEvent(messagesPayload(inboundValue({ text: { body: "Band karo!" } })));
+    await processWebhookEvent("e1");
+    expect(db.contact.updateMany).toHaveBeenCalledWith({ where: { id: "c1", tenantId: "t1" }, data: { optedOutAt: expect.any(Date), optIn: false } });
+    db.contact.updateMany.mockClear();
+    db.platformSetting.findUnique.mockClear();
+    loadEvent(messagesPayload(inboundValue({ text: { body: "please band karo all the messages you send to me every day" } })));
+    await processWebhookEvent("e1");
+    expect(db.contact.updateMany).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ optedOutAt: expect.any(Date) }) }));
+    expect(db.platformSetting.findUnique.mock.calls.filter((c: unknown[]) => (c[0] as { where: { key: string } }).where.key.startsWith("inbox:settings:"))).toEqual([]);
   });
 
   it("honours an opt-out written as a button reply or interactive reply", async () => {
@@ -373,6 +468,82 @@ describe("template status events (6.3)", () => {
     expect(pauseForTemplate).toHaveBeenCalledWith("t1", "tp1", "template_paused");
   });
 
+  it.each(["DELETED", "PENDING_DELETION", "ARCHIVED"])("%s in WhatsApp Manager disables the template and pauses its broadcasts", async (name) => {
+    db.template.findFirst.mockResolvedValue({ id: "tp1", category: "MARKETING", name: "promo", metaTemplateId: "99" });
+    loadEvent(event({ event: name, message_template_id: 99, message_template_name: "promo", message_template_language: "en" }));
+    const result = await processWebhookEvent("e1");
+    expect(result.notes).toEqual([]);
+    expect(db.template.updateMany).toHaveBeenCalledWith({ where: { tenantId: "t1", wabaRefId: "waba_row", metaTemplateId: "99" }, data: { status: "disabled", rejectionReason: null } });
+    expect(pauseForTemplate).toHaveBeenCalledWith("t1", "tp1", "template_paused");
+  });
+
+  it("IN_APPEAL puts a rejected template back under review", async () => {
+    db.template.findFirst.mockResolvedValue({ id: "tp1", category: "UTILITY", name: "notice", metaTemplateId: "99" });
+    loadEvent(event({ event: "IN_APPEAL", message_template_id: 99 }));
+    await processWebhookEvent("e1");
+    expect(db.template.updateMany.mock.calls[0][0].data).toEqual({ status: "pending", rejectionReason: null });
+    expect(pauseForTemplate).not.toHaveBeenCalled();
+  });
+
+  it("LIMIT_EXCEEDED marks the template rejected, as a sync does, and pauses its broadcasts", async () => {
+    db.template.findFirst.mockResolvedValue({ id: "tp1", category: "MARKETING", name: "promo", metaTemplateId: "99" });
+    loadEvent(event({ event: "LIMIT_EXCEEDED", message_template_id: 99 }));
+    const result = await processWebhookEvent("e1");
+    expect(result.notes).toEqual([]);
+    expect(db.template.updateMany).toHaveBeenCalledWith({ where: { tenantId: "t1", wabaRefId: "waba_row", metaTemplateId: "99" }, data: { status: "rejected", rejectionReason: null } });
+    expect(pauseForTemplate).toHaveBeenCalledWith("t1", "tp1", "template_paused");
+  });
+
+  // Every event that is also a template status must land where the next "Update from Meta" puts it, or the status flips back and forth.
+  it.each(["APPROVED", "PENDING", "IN_APPEAL", "REJECTED", "PAUSED", "DISABLED", "FLAGGED", "PENDING_DELETION", "DELETED", "ARCHIVED", "LIMIT_EXCEEDED"])(
+    "%s is stored as the same status a sync stores",
+    async (name) => {
+      db.template.findFirst.mockResolvedValue({ id: "tp1", category: "UTILITY", name: "notice", metaTemplateId: "99" });
+      loadEvent(event({ event: name, message_template_id: 99 }));
+      await processWebhookEvent("e1");
+      expect(db.template.updateMany.mock.calls[0][0].data.status).toBe(mapMetaStatus(name));
+    },
+  );
+
+  it("LOCKED only stops edits: the template stays sendable and its broadcasts keep going", async () => {
+    loadEvent(event({ event: "LOCKED", message_template_id: 99 }));
+    const result = await processWebhookEvent("e1");
+    expect(result.notes).toEqual([]);
+    expect(db.template.updateMany).not.toHaveBeenCalled();
+    expect(pauseForTemplate).not.toHaveBeenCalled();
+  });
+
+  it("UNARCHIVED reads the restored status back from Meta and never resumes broadcasts by itself", async () => {
+    db.template.findFirst.mockResolvedValue({ id: "tp1", category: "UTILITY", name: "notice", metaTemplateId: "99" });
+    graphFetch.mockResolvedValue({ status: "APPROVED", category: "UTILITY" });
+    loadEvent(event({ event: "UNARCHIVED", message_template_id: 99 }));
+    const result = await processWebhookEvent("e1");
+    expect(result.notes).toEqual([]);
+    expect(graphFetch).toHaveBeenCalledWith({ tenantId: "t1", path: "99", query: { fields: "status,category" } });
+    expect(db.template.updateMany).toHaveBeenCalledTimes(1);
+    expect(db.template.updateMany).toHaveBeenCalledWith({ where: { id: "tp1", tenantId: "t1" }, data: { status: "approved", category: "UTILITY" } });
+    expect(emitEvent).toHaveBeenCalledWith("t1", "template.status", expect.objectContaining({ templateId: "tp1", status: "approved" }));
+    expect(pauseForTemplate).not.toHaveBeenCalled();
+  });
+
+  it("UNARCHIVED leaves the template disabled when Meta cannot be reached", async () => {
+    db.template.findFirst.mockResolvedValue({ id: "tp1", category: "UTILITY", name: "notice", metaTemplateId: "99" });
+    graphFetch.mockRejectedValueOnce(new Error("meta down"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    loadEvent(event({ event: "UNARCHIVED", message_template_id: 99 }));
+    await processWebhookEvent("e1");
+    warn.mockRestore();
+    expect(db.template.updateMany).not.toHaveBeenCalled();
+    expect(emitEvent).not.toHaveBeenCalledWith("t1", "template.status", expect.anything());
+  });
+
+  it("an event with no status of its own is recorded as unhandled and changes nothing", async () => {
+    loadEvent(event({ event: "SOMETHING_NEW", message_template_id: 99 }));
+    const result = await processWebhookEvent("e1");
+    expect(result.notes).toEqual(["unhandled template event SOMETHING_NEW"]);
+    expect(db.template.updateMany).not.toHaveBeenCalled();
+  });
+
   it.each(["REINSTATED", "UNPAUSE"])("%s puts the template back to approved and re-reads it from Meta", async (name) => {
     db.template.findFirst.mockResolvedValue({ id: "tp1", category: "MARKETING", name: "promo", metaTemplateId: "99" });
     graphFetch.mockResolvedValue({ status: "APPROVED", category: "UTILITY" });
@@ -524,6 +695,9 @@ describe("owner quick replies to spending notices (7.4)", () => {
     db.platformSetting.findUnique.mockClear();
     loadEvent(messagesPayload(inboundValue({})));
     await processWebhookEvent("e1");
-    expect(db.platformSetting.findUnique).not.toHaveBeenCalled();
+    // A short message may read the workspace's own STOP words (inbox settings), but never the notifier setting.
+    const keys: string[] = db.platformSetting.findUnique.mock.calls.map((c: unknown[]) => (c[0] as { where: { key: string } }).where.key);
+    expect(keys.filter((k) => k === "spend:notify")).toEqual([]);
+    expect(keys.every((k) => k.startsWith("inbox:settings:"))).toBe(true);
   });
 });

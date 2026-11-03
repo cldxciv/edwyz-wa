@@ -173,7 +173,15 @@ describe("sweeper", () => {
     expect(db.conversation.findFirst).toHaveBeenCalledTimes(1);
     const where = db.conversation.findMany.mock.calls[0][0].where;
     expect(where).toMatchObject({ tenantId: "t1", assignedToId: null, status: "open" });
-    expect(where.createdAt.gte).toEqual(new Date("2026-10-26T10:00:00Z"));
+    expect(where.lastInboundAt.gte).toEqual(new Date("2026-10-26T10:00:00Z"));
+  });
+  it("finds a returning customer's old chat by their last message, longest-waiting first", async () => {
+    db.routingConfig.findMany.mockResolvedValue([{ tenantId: "t1" }]);
+    db.conversation.findMany.mockResolvedValue([]);
+    await sweepUnassigned(new Date("2026-10-27T10:00:00Z"));
+    const args = db.conversation.findMany.mock.calls[0][0];
+    expect(args.where).not.toHaveProperty("createdAt");
+    expect(args.orderBy).toEqual({ lastInboundAt: "asc" });
   });
   it("counts assignments and registers a periodic task", async () => {
     db.routingConfig.findMany.mockResolvedValue([{ tenantId: "t1" }]);

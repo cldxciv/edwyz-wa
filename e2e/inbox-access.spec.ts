@@ -93,6 +93,8 @@ test("agent: can take an unassigned chat for themself but cannot reassign or cha
 
 test("agent: the status menu does not offer an option that always fails (Blocked is admin-only)", async ({ page, context }) => {
   await as(agentSession, context);
+  // The header menus show when the chat column is wide; with the list and Details beside it that needs a wide screen.
+  await page.setViewportSize({ width: 1920, height: 900 });
   await openInbox(page);
   await openChat(page, "Mira Mine");
   const header = page.locator("header").filter({ has: page.getByRole("heading", { level: 2, name: /Mira Mine/ }) });
@@ -100,6 +102,9 @@ test("agent: the status menu does not offer an option that always fails (Blocked
   await expect(statusSelect).toBeVisible();
   const options = await statusSelect.locator("option:not([disabled])").allInnerTexts();
   expect(options, "an agent is offered Blocked, but the server answers 403 'Only admins can block a conversation.'").not.toContain("Blocked");
+  const panelStatus = page.getByRole("complementary", { name: "Contact details" }).getByLabel("Status");
+  await expect(panelStatus).toBeVisible();
+  expect(await panelStatus.locator("option").allInnerTexts(), "the Details panel offers what the header does").not.toContain("Blocked");
 });
 
 test("agent: should not be able to message, tag or write notes on a chat assigned to a teammate (same rule as status)", async ({ page, context }) => {
@@ -146,13 +151,18 @@ test("agent: cannot block, cannot invite, cannot use admin APIs from the inbox",
 
 test("owner: can block and reopen a chat, and the chat shows plain wording", async ({ page, context }) => {
   await as(ownerSession, context);
+  await page.setViewportSize({ width: 1920, height: 900 });
   await openInbox(page);
   await openChat(page, "Una Free");
   const header = page.locator("header").filter({ has: page.getByRole("heading", { level: 2, name: /Una Free/ }) });
   await header.getByRole("combobox", { name: "Conversation status" }).selectOption("blocked");
-  await expect(convoButton(page, "Una Free").getByText("Blocked", { exact: true })).toBeVisible({ timeout: 15_000 });
+  // The All list leaves blocked chats out (they are under the Blocked tab); the open chat stays on screen, so it can be reopened.
+  await expect(header.getByRole("combobox", { name: "Conversation status" })).toHaveValue("blocked");
+  await expect(convoButton(page, "Una Free")).toHaveCount(0, { timeout: 15_000 });
   await header.getByRole("combobox", { name: "Conversation status" }).selectOption("open");
   await expect(convoButton(page, "Una Free").getByText("Open", { exact: true })).toBeVisible({ timeout: 15_000 });
+  // Owners can block from the Details panel too, not only from the header.
+  await expect(page.getByRole("complementary", { name: "Contact details" }).getByLabel("Status").locator('option[value="blocked"]')).toHaveCount(1);
 });
 
 test("tenant isolation: a second workspace cannot see or reach the first workspace's chats, by list, screen or direct URL", async ({ page, context, browser }) => {

@@ -1,4 +1,5 @@
 import { reserveCredits } from "@/lib/billing/limits";
+import { aiRepliesPerHour, noteHourlyCapHit, type HourlyAllowance } from "@/lib/billing/ai-hourly";
 import { prisma } from "@/lib/db";
 import { listAllowedTools } from "@/lib/byo-mcp";
 import { listCustomerTools } from "@/lib/byo-mcp/exposure";
@@ -12,17 +13,37 @@ import { SpendBlockedError } from "@/lib/spend/errors";
 import type { SpendActor, SpendRole } from "@/lib/spend/types";
 import { HttpError } from "@/lib/tenancy";
 import { tenantMayRunBackground } from "@/lib/tenant-state";
-import { isStopMessage } from "@/lib/webhooks/payload";
+import { isStopMessage, stopSourceOf } from "@/lib/webhooks/payload";
+import { mayReceive } from "@/lib/contacts/opt-out";
 import { CREDIT_COST } from "@/lib/usage";
 import { AI_REPLY_REF, parseActivation } from "./agents";
 import { buildHistory, generateReply, type GenerateMeter, type GenerateResult } from "./generate";
-import { chunkText, topChunks, type Chunk } from "./text";
+import { liftAiPause, markAiPaused, PAUSE_ACTIONS, PAUSED_ACTION, RESUMED_ACTION, STOP_TAG } from "./pause";
+import { chunkText, pickKnowledge, type Chunk } from "./text";
 
 export { registerAiAgentSeams, resetAiAgentSeams } from "./seams";
+/** The pause tag and its audit rows live in ./pause, so chatbots can pause the agent without loading it. A pause lasts one episode: see pauseLapsed. */
+export { LIFTED_ACTION, PAUSED_ACTION, RESUMED_ACTION, STOP_TAG } from "./pause";
 
-export type AiInboundInput = { tenantId: string; phoneNumberId: string; conversationId: string; contactId: string; text: string; receivedAt: Date };
+/** startedBy "rule": an automation rule's "Let the AI agent answer" step asked for this reply, so the agent's Reply when setting does not apply. */
+export type AiInboundInput = {
+  tenantId: string;
+  phoneNumberId: string;
+  conversationId: string;
+  contactId: string;
+  text: string;
+  receivedAt: Date;
+  startedBy?: "rule";
+  /** The inbound message's type and tapped reply id: the business's own button text is not read as a STOP word (stopSourceOf). */
+  messageType?: string;
+  replyId?: string;
+};
 
-export const STOP_TAG = "ai:stopped";
+const REOPENED_ACTION = "inbox.status.reopened";
+const FRESH_START_ACTIONS = [REOPENED_ACTION, RESUMED_ACTION];
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** Customer messages read when judging whether a pause lapsed. A paused chat rarely has more; the newest one is always checked. */
+const PAUSE_SCAN_MAX = 500;
 export const UNSENT_REF = "ai_reply_unsent";
 export const COOLDOWN_MS = 5_000;
 export const DEFAULT_MAX_REPLIES_PER_HOUR = 60;
@@ -53,11 +74,11 @@ export function matchesHandoffKeyword(text: string, keywords: string[]): boolean
   });
 }
 
-/** Chunks every ready source of the agent and returns the best matches for the query. */
+/** Chunks every ready source of the agent (newest first) and returns the knowledge to send for the query: all of it when it fits, see pickKnowledge. */
 export async function retrieveChunks(tenantId: string, agentId: string, query: string): Promise<Chunk[]> {
-  const sources = await prisma.aiKnowledgeSource.findMany({ where: { tenantId, agentId, status: "ready" }, select: { id: true, title: true, content: true } });
+  const sources = await prisma.aiKnowledgeSource.findMany({ where: { tenantId, agentId, status: "ready" }, orderBy: { createdAt: "desc" }, select: { id: true, title: true, content: true } });
   const all = sources.flatMap((s) => chunkText(s.content).map((text) => ({ sourceId: s.id, title: s.title, text })));
-  return topChunks(query, all);
+  return pickKnowledge(query, all);
 }
 
 type AgentRow = NonNullable<Awaited<ReturnType<typeof pickAgent>>>;
@@ -72,6 +93,7 @@ async function pickAgent(tenantId: string, phoneNumberId: string) {
 
 async function activationAllows(agent: AgentRow, input: AiInboundInput): Promise<boolean> {
   const { activation, minutes } = parseActivation(agent.activation);
+  if (activation === "when_started") return false;
   if (activation === "outside_hours") return !isWithinWorkingHours(await getRoutingSettings(input.tenantId), input.receivedAt);
   if (activation === "no_human_reply_minutes") {
     const since = new Date(input.receivedAt.getTime() - minutes * 60_000);
@@ -87,6 +109,7 @@ async function activationAllows(agent: AgentRow, input: AiInboundInput): Promise
 async function handOff(tenantId: string, conversationId: string, note: string | null): Promise<void> {
   const before = await prisma.conversation.findFirst({ where: { id: conversationId, tenantId }, select: { status: true, contactId: true } });
   await prisma.conversation.updateMany({ where: { id: conversationId, tenantId }, data: { status: "open", statusChangedAt: new Date(), tags: { push: STOP_TAG } } });
+  await markAiPaused(tenantId, conversationId);
   try {
     await emitStatusChanged(tenantId, { conversationId, contactId: before?.contactId ?? null, from: before?.status ?? null, to: "open", source: "system" });
   } catch (error) {
@@ -106,10 +129,31 @@ async function handOff(tenantId: string, conversationId: string, note: string | 
   }
 }
 
-/** AI_MAX_REPLIES_PER_HOUR: workspace-wide hourly cap on AI replies, whatever the number of conversations. */
+/**
+ * AI_MAX_REPLIES_PER_HOUR: the platform's hourly cap on AI replies, workspace-wide whatever the number of conversations. Since
+ * owner decision 3 it is only the fallback: the workspace's plan sets the cap (repliesPerHourFor), and this applies when no plan
+ * value can be found.
+ */
 export function maxRepliesPerHour(): number {
   const raw = Number(process.env.AI_MAX_REPLIES_PER_HOUR);
   return process.env.AI_MAX_REPLIES_PER_HOUR?.trim() && Number.isInteger(raw) && raw >= 0 ? raw : DEFAULT_MAX_REPLIES_PER_HOUR;
+}
+
+/** The workspace's AI replies per hour: its plan's value (Starter 60, Growth 200, Agency 600 by default), else maxRepliesPerHour(). */
+export function repliesPerHourFor(tenantId: string): Promise<HourlyAllowance> {
+  return aiRepliesPerHour(tenantId, { fallback: maxRepliesPerHour() });
+}
+
+/** AI replies sent in the last 60 minutes: the count the hourly cap is checked against. */
+const repliesInLastHour = (tenantId: string, now = Date.now()) =>
+  prisma.usageLedger.count({ where: { tenantId, meter: "ai_credits", refType: AI_REPLY_REF, createdAt: { gte: new Date(now - 3_600_000) } } });
+
+export type HourlyReplyUse = { used: number; limit: number; source: HourlyAllowance["source"] };
+
+/** The hour's use against the allowance, for the AI agent screen. The same count and the same allowance as the reply admission. */
+export async function hourlyReplyUse(tenantId: string, now = Date.now()): Promise<HourlyReplyUse> {
+  const [used, allowance] = await Promise.all([repliesInLastHour(tenantId, now), repliesPerHourFor(tenantId)]);
+  return { used, limit: allowance.limit, source: allowance.source };
 }
 
 /** Hourly reply slots taken in this process by replies that have not finished yet (AI_MAX_REPLIES_PER_HOUR). */
@@ -124,7 +168,7 @@ export function resetAiReservations() {
 
 type Admission =
   | { ok: true; hold: AiHold; release: () => void }
-  | { ok: false; reason: "budget" | "frozen" | "hourly"; error?: SpendBlockedError };
+  | { ok: false; reason: "budget" | "frozen" | "hourly"; error?: SpendBlockedError; used?: number; limit?: number };
 
 /**
  * Decides whether one more reply may start. The hourly reply cap stays a per-process slot count over the hour's
@@ -136,13 +180,15 @@ type Admission =
 async function admit(tenantId: string, opts: { hourly: boolean; feature: AiFeature; actor: SpendActor }): Promise<Admission> {
   let slot = false;
   if (opts.hourly) {
-    const since = new Date(Date.now() - 3_600_000);
+    const now = Date.now();
+    // The plan's allowance (read once per admission; the lookup is cached for a minute per workspace).
+    const cap = (await repliesPerHourFor(tenantId)).limit;
     for (let attempt = 0; ; attempt++) {
       const seen = finished.get(tenantId) ?? 0;
-      const sent = await prisma.usageLedger.count({ where: { tenantId, meter: "ai_credits", refType: AI_REPLY_REF, createdAt: { gte: since } } });
+      const sent = await repliesInLastHour(tenantId, now);
       if ((finished.get(tenantId) ?? 0) !== seen && attempt < 2) continue;
       const pending = reserved.get(tenantId) ?? 0;
-      if (sent + pending >= maxRepliesPerHour()) return { ok: false, reason: "hourly" };
+      if (sent + pending >= cap) return { ok: false, reason: "hourly", used: sent, limit: cap };
       reserved.set(tenantId, pending + 1);
       slot = true;
       break;
@@ -234,25 +280,109 @@ async function chatbotIsRunning(tenantId: string, conversationId: string, contac
   }
 }
 
+/**
+ * When the pause began: the latest hand-over that paused the agent here (PAUSED_ACTION). When the latest row ends a pause instead,
+ * or there is none, the tag came from a hand-over that writes no row (the WhatsApp-limit hand-over, or one from before these rows
+ * existed); those stamp statusChangedAt when they pause, so the pause is dated by that, never before the agent was last let back
+ * in. Null when nothing dates it.
+ */
+async function pauseBegan(tenantId: string, conversationId: string, statusChangedAt: Date | null): Promise<Date | null> {
+  const row = await prisma.auditLog.findFirst({ where: { tenantId, target: conversationId, action: { in: PAUSE_ACTIONS } }, orderBy: { createdAt: "desc" }, select: { action: true, createdAt: true } });
+  if (row?.action === PAUSED_ACTION) return row.createdAt;
+  const dates = [row?.createdAt, statusChangedAt].filter((d): d is Date => d instanceof Date);
+  return dates.length ? new Date(Math.max(...dates.map((d) => d.getTime()))) : null;
+}
+
+/**
+ * A pause belongs to one episode of the chat, so a customer who once asked for a person is not left without the AI for good.
+ * It lapses when, since the pause began, the customer went quiet for more than a day and then wrote again (they are starting
+ * something new), or a solved chat was reopened by the customer. Judged from the pause's start, not only from this message, so
+ * a first message that a chatbot answered, that had no text, or that the agent left alone still ends the old pause.
+ */
+async function pauseLapsed(input: AiInboundInput, conversation: { status: string; statusChangedAt?: Date | null }): Promise<boolean> {
+  const { tenantId, conversationId, receivedAt } = input;
+  // This message reopened a solved chat (the reopen stamps statusChangedAt with the message's own time).
+  if (conversation.status === "open" && conversation.statusChangedAt && conversation.statusChangedAt.getTime() >= receivedAt.getTime()) return true;
+  const since = await pauseBegan(tenantId, conversationId, conversation.statusChangedAt ?? null);
+  if (!since) {
+    // Nothing dates the pause: this message alone decides, by the customer's message before it.
+    const previous = await prisma.message.findFirst({ where: { tenantId, conversationId, direction: "inbound", createdAt: { lt: receivedAt } }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
+    return Boolean(previous?.createdAt) && receivedAt.getTime() - previous!.createdAt.getTime() > DAY_MS;
+  }
+  const [reopened, inbound] = await Promise.all([
+    prisma.auditLog.findFirst({ where: { tenantId, action: REOPENED_ACTION, target: conversationId, createdAt: { gt: since } }, select: { id: true } }),
+    prisma.message.findMany({
+      where: { tenantId, conversationId, direction: "inbound", createdAt: { gt: since, lte: receivedAt } },
+      orderBy: { createdAt: "asc" },
+      take: PAUSE_SCAN_MAX,
+      select: { createdAt: true },
+    }),
+  ]);
+  if (reopened) return true;
+  // Silence is counted from the pause's start, so a customer who had been quiet before a teammate paused the agent is not "new".
+  let previous = since.getTime();
+  for (const message of inbound) {
+    if (message.createdAt.getTime() - previous > DAY_MS) return true;
+    previous = message.createdAt.getTime();
+  }
+  // This message, in case it is not stored yet (with a full page, the newest messages were not read, so the gap is unknown).
+  return inbound.length < PAUSE_SCAN_MAX && receivedAt.getTime() - previous > DAY_MS;
+}
+
+/** When the chat last started afresh within the window (the customer wrote into a solved chat, or a teammate let the AI answer again). */
+async function freshStart(tenantId: string, conversationId: string, since: Date): Promise<Date | null> {
+  try {
+    const row = await prisma.auditLog.findFirst({ where: { tenantId, action: { in: FRESH_START_ACTIONS }, target: conversationId, createdAt: { gte: since } }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
+    return row?.createdAt ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The AI replies that count toward "Max AI replies per chat": those of the last 24 hours, or only those since the chat started
+ * afresh. The fresh start is looked up only when the day's count already reaches the limit, so a normal reply costs no extra query.
+ */
+async function repliesCounted(tenantId: string, conversationId: string, receivedAt: Date, max: number): Promise<number> {
+  const since = new Date(receivedAt.getTime() - DAY_MS);
+  const where = { tenantId, meter: "ai_credits", refType: AI_REPLY_REF, refId: conversationId };
+  const inDay = await prisma.usageLedger.count({ where: { ...where, createdAt: { gte: since } } });
+  if (inDay < max) return inDay;
+  const fresh = await freshStart(tenantId, conversationId, since);
+  return fresh ? prisma.usageLedger.count({ where: { ...where, createdAt: { gte: fresh } } }) : inDay;
+}
+
 async function run(input: AiInboundInput): Promise<boolean> {
   const { tenantId, conversationId } = input;
-  if (!input.text.trim() || isStopMessage(input.text)) return false;
+  if (!input.text.trim() || isStopMessage(input.text, [], stopSourceOf(input.messageType, input.replyId))) return false;
   if (!(await tenantMayRunBackground(tenantId))) return false;
   const [conversation, contact] = await Promise.all([
-    prisma.conversation.findFirst({ where: { id: conversationId, tenantId }, select: { status: true, tags: true, lastInboundAt: true, contactId: true } }),
+    prisma.conversation.findFirst({ where: { id: conversationId, tenantId }, select: { status: true, statusChangedAt: true, tags: true, lastInboundAt: true, contactId: true } }),
     prisma.contact.findFirst({ where: { id: input.contactId, tenantId }, select: { name: true, optedOutAt: true } }),
   ]);
   if (!conversation || !contact || conversation.contactId !== input.contactId) return false;
-  if (conversation.status === "blocked" || contact.optedOutAt || conversation.tags.includes(STOP_TAG)) return false;
-  if (await chatbotIsRunning(tenantId, conversationId, input.contactId)) return false;
-
+  if (conversation.status === "blocked" || !mayReceive(contact, "service")) return false;
   const agent = await pickAgent(tenantId, input.phoneNumberId);
-  if (!agent || !(await activationAllows(agent, input))) return false;
+  if (!agent) return false;
+
+  // The pause is decided first, and once: a new episode lifts it here, before the chatbot, Reply when, window and cooldown checks,
+  // so a message the agent then leaves alone (outside its hours, say) still ends the old pause.
+  let pausedCount: number | null = null;
+  if (conversation.tags.includes(STOP_TAG)) {
+    if (!(await pauseLapsed(input, conversation))) return false;
+    pausedCount = await repliesCounted(tenantId, conversationId, input.receivedAt, agent.maxRepliesPerConversation);
+    // A new episode, but the chat already used its AI replies for the day: the team keeps it, with no second hand-off note.
+    if (pausedCount >= agent.maxRepliesPerConversation) return false;
+    await liftAiPause(tenantId, conversationId, conversation.tags);
+  }
+  if (await chatbotIsRunning(tenantId, conversationId, input.contactId)) return false;
+  // A rule's "Let the AI agent answer" step is an explicit request, so the agent's own Reply when setting does not apply to it.
+  if (input.startedBy !== "rule" && !(await activationAllows(agent, input))) return false;
   if (!isWithinServiceWindow(conversation.lastInboundAt ?? input.receivedAt)) return false;
 
   const [latest, replyCount, replies] = await Promise.all([
     prisma.message.findFirst({ where: { tenantId, conversationId }, orderBy: { createdAt: "desc" }, select: { direction: true, createdAt: true } }),
-    prisma.usageLedger.count({ where: { tenantId, meter: "ai_credits", refType: AI_REPLY_REF, refId: conversationId } }),
+    pausedCount ?? repliesCounted(tenantId, conversationId, input.receivedAt, agent.maxRepliesPerConversation),
     prisma.usageLedger.findFirst({ where: { tenantId, meter: "ai_credits", refType: AI_REPLY_REF, refId: conversationId }, orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
   ]);
   if (latest && latest.direction === "outbound" && latest.createdAt >= input.receivedAt) return false;
@@ -267,7 +397,11 @@ async function run(input: AiInboundInput): Promise<boolean> {
   }
   const admission = await admit(tenantId, { hourly: true, feature: "agent_reply", actor: AI_AGENT_ACTOR });
   if (!admission.ok) {
-    if (admission.reason === "hourly") return false;
+    if (admission.reason === "hourly") {
+      // The message waits for the team. The admins get one notice for the hour (it never fails the reply path).
+      await noteHourlyCapHit(tenantId, { used: admission.used ?? admission.limit ?? 0, limit: admission.limit ?? 0 });
+      return false;
+    }
     // The AI limit is used up, or spending is stopped: the chat goes to a person, never left unanswered (4.10, 6.4).
     await handOff(tenantId, conversationId, HANDOFF_NOTE);
     return true;
@@ -304,6 +438,20 @@ async function reply(input: AiInboundInput, agent: AgentRow, contactName: string
     throw error;
   }
   await charge(hold, { type: AI_REPLY_REF, id: conversationId });
+  return true;
+}
+
+/**
+ * A teammate lets the AI agent answer a paused chat again ("Let the AI answer again" in the inbox). The pause ends now, and the
+ * audit row it leaves starts the chat's reply count afresh, so the next customer message gets an AI reply. Returns false when the
+ * chat was not paused (nothing changes then).
+ */
+export async function resumeAiAgent(tenantId: string, conversationId: string, userId: string): Promise<boolean> {
+  const conversation = await prisma.conversation.findFirst({ where: { id: conversationId, tenantId }, select: { tags: true } });
+  if (!conversation) throw new HttpError(404, "Conversation not found.");
+  const tags = Array.isArray(conversation.tags) ? conversation.tags : [];
+  if (!tags.includes(STOP_TAG)) return false;
+  await liftAiPause(tenantId, conversationId, tags, { action: RESUMED_ACTION, userId });
   return true;
 }
 

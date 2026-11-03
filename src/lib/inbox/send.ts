@@ -1,5 +1,6 @@
 import { NoValidTokenError } from "@/lib/crypto/tokens";
 import { prisma } from "@/lib/db";
+import { markAiPaused } from "@/lib/ai-agent/pause";
 import type { JobContext } from "@/lib/queue";
 import { GraphError, graphFetch } from "@/lib/graph";
 import { emitEvent } from "@/lib/integrations/events";
@@ -11,6 +12,7 @@ import { finishSend, messagingGate, releaseMessageSpend, type MessageSpendFields
 import { tenantMayRunBackground } from "@/lib/tenant-state";
 import { asArr, asJsonArr, asRec, str } from "@/lib/webhooks/payload";
 import { recipientAddress, type RecipientAddress } from "@/lib/contacts/identity";
+import { mayReceive, sendKindForCategory } from "@/lib/contacts/opt-out";
 import { normalizeInteractive } from "./interactive";
 
 type SendResponse = { messages?: { id?: string }[] };
@@ -140,6 +142,7 @@ async function handOffForLimit(tenantId: string, conversationId: string, period:
   await step("open the chat", () =>
     prisma.conversation.updateMany({ where: { id: conversationId, tenantId }, data: { status: "open", statusChangedAt: now, ...(tags.includes(AI_STOP_TAG) ? {} : { tags: [...tags, AI_STOP_TAG] }) } }),
   );
+  await step("date the AI pause", () => markAiPaused(tenantId, conversationId));
   if (conversation.status !== "open") {
     await step("announce the status", async () =>
       (await import("@/lib/integrations/emitters")).emitStatusChanged(tenantId, { conversationId, contactId: conversation.contactId ?? null, from: conversation.status, to: "open", source: "system" }),
@@ -171,7 +174,8 @@ export async function processSendJob(payload: unknown, context?: JobContext): Pr
   const address = recipientAddress(contact);
   if (!address) return failUnsent(message, tenantId, "no_recipient");
   // STOP can arrive while a template waits in the queue: it is checked again at send time, not only when the message was queued.
-  if (message.type === "template" && contact.optedOutAt) return failUnsent(message, tenantId, "opted_out");
+  // An opt-out stops marketing only; the category is the one stamped when the message was queued (none reads as marketing).
+  if (message.type === "template" && !mayReceive(contact, sendKindForCategory(message.pricingCategory))) return failUnsent(message, tenantId, "opted_out");
   if ("bsuid" in address && message.type === "template" && (await isAuthenticationTemplate(tenantId, job))) {
     return failUnsent(message, tenantId, "bsuid_auth_template");
   }

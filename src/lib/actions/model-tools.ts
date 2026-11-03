@@ -3,11 +3,15 @@
  * definitions `{name, description, input_schema, strict: true}`, sorted by name:
  * - only actions on the surface whose minRole the role class meets (the owner uses the admin set; there are no owner-only
  *   v1 tools), and v2 actions only in phase 2, so Eddy never offers what the member cannot do;
+ * - (PRM-13, generalised by MCC-00) a tool that names a `feature` only while that feature is on: promote (PROMOTE_ENABLED not
+ *   off), studio (STUDIO_ENABLED=on), canva (Studio on and Canva configured) and meta_ads_mcp (META_ADS_MCP=on). The flags are
+ *   platform-wide, so the sets stay byte-identical for every tenant (IG-PAGE-ADS-SPEC 1.4), and with every flag at its default
+ *   the sets are exactly the pinned ones;
  * - strict tool use rejects string, number and array-size constraints (minLength, maxLength, minimum, maximum, maxItems)
  *   and this layer does not rely on pattern support, so those move into the property's description; invoke.ts still
  *   validates the full schema before anything runs (G3);
  * - `eager_input_streaming: true` only on the four long-text tools;
- * - the output depends on nothing but the registry and the phase, so it is byte-identical for every tenant and member of a
+ * - the output depends on nothing but the registry, the phase and the platform feature flags, so it is byte-identical for every tenant and member of a
  *   role class and the cached prefix is shared across the platform.
  * TOOLSET_VERSION hashes both sets; it is stored on each conversation and a change starts a new one.
  *
@@ -15,10 +19,13 @@
  * (Phase 0 bypass rule B2b).
  */
 import { readEddyConfig } from "@/lib/eddy/contract";
+import { metaAdsMcpEnabled } from "@/lib/meta-ads-mcp/flags";
+import { promoteEnabled } from "@/lib/promote/flags";
+import { canvaEnabled, studioEnabled } from "@/lib/studio/flags";
 import { canonicalJson, sha256Hex } from "./canonical";
 import { listActions, onRegistryChange, registryGeneration, type AnyActionDef } from "./registry";
 import type { JsonSchema } from "./schema";
-import type { Role, Surface } from "./types";
+import type { ActionFeature, Role, Surface } from "./types";
 
 export type RoleClass = "agent" | "admin";
 
@@ -103,11 +110,38 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
+/** One entry per ActionFeature: the compiler refuses a new member of the union until it is listed here. */
+const FEATURE_LIST: Readonly<Record<ActionFeature, true>> = { canva: true, meta_ads_mcp: true, promote: true, studio: true };
+
+/** Every feature a tool can name (types.ts ActionFeature), sorted. */
+export const ACTION_FEATURES: readonly ActionFeature[] = Object.freeze((Object.keys(FEATURE_LIST) as ActionFeature[]).sort());
+
+/**
+ * The features switched on for the whole platform, read from the flags on every call (so an env change needs no restart):
+ * promote while PROMOTE_ENABLED is not off, studio while STUDIO_ENABLED=on, canva while Studio is on and Canva is configured,
+ * meta_ads_mcp while META_ADS_MCP=on. Every flag defaults to off, so by default the set holds none of them.
+ */
+export function platformFeatures(env: Record<string, string | undefined> = process.env): ReadonlySet<ActionFeature> {
+  const on = new Set<ActionFeature>();
+  if (promoteEnabled(env) !== "off") on.add("promote");
+  if (studioEnabled(env)) on.add("studio");
+  if (canvaEnabled(env)) on.add("canva");
+  if (metaAdsMcpEnabled(env)) on.add("meta_ads_mcp");
+  return on;
+}
+
 export type ToolsetOptions = {
   /** EDDY_PHASE; v2 actions are offered only in phase 2. Defaults to the platform configuration. */
   phase?: 1 | 2;
   /** Definitions to build from instead of the registry (tests). */
   defs?: readonly AnyActionDef[];
+  /** The features whose tools are offered (a tool without a feature always is). Defaults to platformFeatures(). */
+  features?: Iterable<ActionFeature>;
+  /**
+   * (PRM-13, kept working) true adds "promote" to the feature set and false takes it out; the other features still come from
+   * `features` or the platform flags.
+   */
+  promote?: boolean;
 };
 
 const memo = new Map<string, readonly ModelTool[]>();
@@ -115,15 +149,25 @@ let memoGeneration = -1;
 
 const currentPhase = (): 1 | 2 => readEddyConfig(process.env, () => undefined).phase;
 
+/** The feature set a toolset is built with: `features` or the platform flags, then the `promote` shorthand. */
+export function toolsetFeatures(options: Pick<ToolsetOptions, "features" | "promote"> = {}): ReadonlySet<ActionFeature> {
+  const set = new Set<ActionFeature>(options.features ?? platformFeatures());
+  if (options.promote === true) set.add("promote");
+  if (options.promote === false) set.delete("promote");
+  return set;
+}
+
 /** The toolset of a role class on a surface, sorted by name, strict, frozen. Byte-identical for every tenant. */
 export function toolsFor(roleClass: RoleClass, surface: Surface = "eddy", options: ToolsetOptions = {}): readonly ModelTool[] {
   const phase = options.phase ?? currentPhase();
+  const features = toolsetFeatures(options);
   const build = () =>
     deepFreeze(
       [...(options.defs ?? listActions())]
         .filter((d) => d.surfaces.includes(surface))
         .filter((d) => RANK[d.minRole] <= CLASS_RANK[roleClass])
         .filter((d) => d.version === "v1" || phase >= 2)
+        .filter((d) => d.feature === undefined || features.has(d.feature))
         .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
         .map(toTool),
     );
@@ -132,7 +176,8 @@ export function toolsFor(roleClass: RoleClass, surface: Surface = "eddy", option
     memo.clear();
     memoGeneration = registryGeneration();
   }
-  const key = `${roleClass}:${surface}:${phase}`;
+  // The feature set is part of the key, so flipping a flag gives a new set at once and never a stale cached one.
+  const key = `${roleClass}:${surface}:${phase}:${[...features].sort().join(",") || "-"}`;
   let tools = memo.get(key);
   if (!tools) {
     tools = build();

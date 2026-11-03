@@ -20,12 +20,18 @@ export const viewport: Viewport = { width: "device-width", initialScale: 1 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
+    // The theme script below sets data-theme on <html> before React hydrates; suppressHydrationWarning covers that one attribute.
+    <html lang="en" suppressHydrationWarning>
       <body className="min-h-screen">
-        {/* Applies the theme the person picked in the app (or the system one) before first paint, on every page, so /login and the home page match the workspace. */}
+        {/* Applies the theme the person picked in the app (or the system one) before first paint, on every page, so /login and the home page match the workspace.
+            It carries no nonce (this layout also wraps prerendered pages); the strict CSP allows it by its hash, THEME_INIT_SCRIPT_HASH in src/lib/security/csp.ts. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
-        {/* Pages with their own shell (app, admin) carry a skip link that jumps past the sidebar and top bar, so this one steps aside there. */}
-        <a href="#content" className="[body:has([data-shell-skip])_&]:hidden sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:rounded focus:bg-white focus:px-3 focus:py-2">
+        {/* Pages with their own shell (app, admin) carry a skip link that jumps past the sidebar and top bar, so this one steps aside there.
+            z-50 lifts it above the public pages' sticky header (z-30), which otherwise covers it while it has focus. */}
+        <a
+          href="#content"
+          className="[body:has([data-shell-skip])_&]:hidden sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded focus:border focus:border-border focus:bg-background focus:px-3 focus:py-2 focus:text-foreground focus:shadow-lg"
+        >
           Skip to content
         </a>
         <div id="content">{children}</div>

@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { log } from "@/lib/log";
 import { safeEqual } from "@/lib/meta";
 import { errorResponse } from "@/lib/tenancy";
 import { daemonIsAlive } from "@/worker/daemon";
@@ -23,9 +24,9 @@ export async function POST(request: Request) {
     const result = await runPass();
     await prisma
       .$executeRaw`INSERT INTO "PlatformSetting" (key, value, "updatedAt") VALUES ('worker:heartbeat', '{}'::jsonb, now()) ON CONFLICT (key) DO UPDATE SET "updatedAt" = now()`
-      .catch(() => console.error("[worker] could not write the heartbeat"));
+      .catch((error: unknown) => log.error("worker.heartbeat_failed", { err: error, route: "internal.tick" }));
     return Response.json(result, { headers: { "Cache-Control": "no-store" } });
   } catch (e) {
-    return errorResponse(e);
+    return errorResponse(e, request);
   }
 }

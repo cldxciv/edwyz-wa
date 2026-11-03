@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dropdown } from "@/components/app/Dropdown";
-import { notConfiguredNotice } from "@/components/meta-connect/ConnectionsPanel";
+import { notConfiguredNotice, whatsAppLine } from "@/components/meta-connect/ConnectionsPanel";
 import { ReportsView } from "@/components/reports/ReportsView";
 import { browserTimeZone, useBrowserTimeZone } from "@/components/reports/useBrowserTimeZone";
 import { META_CONNECT_SCOPES } from "@/lib/meta-connect/scopes";
@@ -107,6 +107,17 @@ describe("Meta connections page copy", () => {
     expect(withCards).toMatch(/not switched on/);
     expect(withCards).not.toMatch(/not configured/);
     expect(withCards).toMatch(/still work/);
+  });
+
+  it("says whether WhatsApp is connected and links owners and admins to its own page", () => {
+    expect(whatsAppLine([{ displayPhone: "+1 711-268-5789", verifiedName: "Edwyz" }], true)).toEqual({ text: "Your WhatsApp number is connected: +1 711-268-5789 · Edwyz.", link: "Manage WhatsApp" });
+    expect(whatsAppLine([{ displayPhone: "+91 98100 00000", verifiedName: null }, { displayPhone: "+91 98100 00001", verifiedName: "Shop" }], false)).toEqual({
+      text: "Your WhatsApp numbers are connected: +91 98100 00000, +91 98100 00001 · Shop.",
+      link: null,
+    });
+    expect(whatsAppLine([], true)).toEqual({ text: "No WhatsApp number connected yet.", link: "Connect WhatsApp" });
+    expect(whatsAppLine(undefined, false)).toEqual({ text: "No WhatsApp number connected yet. Ask an owner or admin to connect one.", link: null });
+    expect(source("src/components/meta-connect/ConnectionsPanel.tsx")).not.toContain("Nothing connected yet");
   });
 
   it("shows the raw Meta user id as a muted detail, not as the card title", () => {

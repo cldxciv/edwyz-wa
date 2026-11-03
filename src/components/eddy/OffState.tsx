@@ -108,7 +108,8 @@ const TONE: Record<OffKind, "neutral" | "info" | "warn" | "bad"> = {
 export function SetupList({ lang }: { lang: EddyLang }) {
   const setup = useSetup();
   const titleId = useId();
-  const steps = setup.data?.steps.filter((s) => !s.dismissed) ?? [];
+  // The steps asked of the owner, counted as the setup page counts them ("3 of 4 done"), not every optional extra.
+  const steps = setup.data?.steps.filter((s) => !s.dismissed && s.state !== "optional") ?? [];
   const nextId = setup.data?.summary.nextStepId ?? null;
   const progress: ProgressStep[] = steps.map((s) => ({ id: s.id, label: s.title, state: s.state === "done" ? "done" : s.id === nextId ? "current" : "todo" }));
   const next = steps.find((s) => s.id === nextId);
@@ -120,7 +121,7 @@ export function SetupList({ lang }: { lang: EddyLang }) {
         </h3>
         {setup.data && (
           <span className="text-xs text-muted" lang={htmlLang(lang)}>
-            {tp(lang, "panel.setup.progress", { done: setup.data.summary.done, total: setup.data.summary.total })}
+            {tp(lang, "panel.setup.progress", { done: setup.data.summary.done, total: setup.data.summary.asked })}
           </span>
         )}
       </div>

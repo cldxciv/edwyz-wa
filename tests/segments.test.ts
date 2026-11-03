@@ -8,6 +8,7 @@ const db = vi.hoisted(() => ({
 vi.mock("@/lib/db", () => ({ prisma: db }));
 
 import {
+  type Condition,
   type ContactSnapshot,
   conditionMatches,
   conditionWhere,
@@ -99,6 +100,13 @@ describe("matching a contact in code", () => {
     expect(conditionMatches(contact(), { field: "attr:missing", op: "not_exists" })).toBe(true);
     expect(conditionMatches(contact(), { field: "attr:missing", op: "is_not", value: "x" })).toBe(true);
   });
+  it("reads a NULL tags column as no tags, and every negative attribute test holds for a missing attribute", () => {
+    const bare = contact({ tags: null as unknown as string[], attributes: {} });
+    expect(conditionMatches(bare, { field: "tag", op: "not_has", value: "vip" })).toBe(true);
+    expect(conditionMatches(bare, { field: "tag", op: "has", value: "vip" })).toBe(false);
+    for (const op of ["is_not", "not_contains"] as const) expect(conditionMatches(bare, { field: "attr:city", op, value: "Pune" }), op).toBe(true);
+    expect(conditionMatches(bare, { field: "attr:city", op: "not_exists" })).toBe(true);
+  });
   it("evaluates tags, country, dates and last message", () => {
     expect(conditionMatches(contact(), { field: "tag", op: "has", value: "vip" })).toBe(true);
     expect(conditionMatches(contact(), { field: "tag", op: "not_has", value: "vip" })).toBe(false);
@@ -151,6 +159,13 @@ describe("filter to SQL", () => {
       OR: [{ phone: { startsWith: "+91" } }, { AND: [{ phone: null }, { bsuid: { startsWith: "IN.", mode: "insensitive" } }] }],
     });
   });
+  it("keeps contacts whose tags column is NULL in 'is not tagged'", () => {
+    expect(conditionWhere({ field: "tag", op: "not_has", value: "vip" })).toEqual({ OR: [{ tags: { equals: null } }, { NOT: { tags: { has: "vip" } } }] });
+  });
+  it("keeps the NULL-safe tag test when it only narrows an attribute scan", () => {
+    const f = parseFilter({ all: [{ field: "tag", op: "not_has", value: "vip" }, { field: "attr:city", op: "is", value: "Pune" }] });
+    expect(prefilterWhere(f)).toEqual({ AND: [{ OR: [{ tags: { equals: null } }, { NOT: { tags: { has: "vip" } } }] }] });
+  });
   it("pre-filters a scan only on plain all-conditions", () => {
     const f = parseFilter({
       all: [
@@ -161,6 +176,114 @@ describe("filter to SQL", () => {
     expect(usesAttributes(f)).toBe(true);
     expect(prefilterWhere(f)).toEqual({ AND: [{ tags: { has: "a" } }] });
     expect(() => filterToWhere(f)).toThrow();
+  });
+});
+
+/*
+ * A tiny reader of the Prisma where clauses filter.ts builds, with SQL's three-valued logic: a comparison with a NULL
+ * column is unknown (null), NOT unknown stays unknown, and only rows that come out true are returned. This is what made
+ * NOT { tags: { has } } drop every contact whose tags column is NULL.
+ */
+type Row = { name: string | null; phone: string | null; bsuid: string | null; tags: string[] | null; optInSource: string | null; leadStage: string | null; ownerUserId: string | null; createdAt: Date; optInAt: Date | null; conversations: { lastInboundAt: Date | null }[] };
+type Tri = boolean | null;
+const and3 = (xs: Tri[]): Tri => (xs.includes(false) ? false : xs.includes(null) ? null : true);
+const or3 = (xs: Tri[]): Tri => (xs.includes(true) ? true : xs.includes(null) ? null : false);
+const not3 = (x: Tri): Tri => (x === null ? null : !x);
+
+function fieldTest(key: string, value: unknown, test: unknown): Tri {
+  if (test === null) return value === null;
+  if (typeof test !== "object" || test instanceof Date) return value === null ? null : value === test;
+  const t = test as Record<string, unknown>;
+  if (key === "tags") {
+    if ("equals" in t && t.equals === null) return value === null;
+    if (value === null) return null;
+    return (value as string[]).includes(t.has as string);
+  }
+  if ("not" in t && t.not === null) return value !== null;
+  if (value === null) return null;
+  const ci = (s: unknown) => (t.mode === "insensitive" ? String(s).toLowerCase() : String(s));
+  if ("equals" in t) return ci(value) === ci(t.equals);
+  if ("contains" in t) return ci(value).includes(ci(t.contains));
+  if ("startsWith" in t) return ci(value).startsWith(ci(t.startsWith));
+  const time = (value as Date).getTime();
+  if ("lt" in t) return time < (t.lt as Date).getTime();
+  if ("gt" in t) return time > (t.gt as Date).getTime();
+  if ("gte" in t) return time >= (t.gte as Date).getTime();
+  throw new Error(`untested where: ${JSON.stringify(test)}`);
+}
+
+function sqlMatches(row: Row, where: Record<string, unknown>): Tri {
+  return and3(
+    Object.entries(where).map(([key, test]): Tri => {
+      if (key === "AND") return and3((test as Record<string, unknown>[]).map((w) => sqlMatches(row, w)));
+      if (key === "OR") return or3((test as Record<string, unknown>[]).map((w) => sqlMatches(row, w)));
+      if (key === "NOT") return not3(sqlMatches(row, test as Record<string, unknown>));
+      if (key === "conversations") {
+        const { some, none } = test as { some?: Record<string, unknown>; none?: Record<string, unknown> };
+        const hit = row.conversations.some((cv) => sqlMatches({ ...row, ...cv } as Row, (some ?? none)!) === true);
+        return some ? hit : !hit;
+      }
+      return fieldTest(key, row[key as keyof Row] ?? null, test);
+    }),
+  );
+}
+
+describe("SQL and code give the same answer for negative rules, NULL columns included", () => {
+  const base: Row = {
+    name: "Asha Rao",
+    phone: "+919876543210",
+    bsuid: null,
+    tags: ["vip"],
+    optInSource: "website",
+    leadStage: "Qualified",
+    ownerUserId: "u1",
+    createdAt: new Date(now.getTime() - 40 * day),
+    optInAt: null,
+    conversations: [{ lastInboundAt: new Date(now.getTime() - 5 * day) }],
+  };
+  const rows: Record<string, Row> = {
+    "tagged vip": base,
+    "other tags": { ...base, tags: ["wholesale"] },
+    "empty tag list": { ...base, tags: [] },
+    "NULL tags (inbound contact)": { ...base, tags: null, name: null, leadStage: null, ownerUserId: null, optInSource: null, conversations: [] },
+    "no phone, BSUID only": { ...base, phone: null, bsuid: "IN.12345", tags: null },
+    "blank lead stage": { ...base, leadStage: "" },
+  };
+  const snapshot = (r: Row): ContactSnapshot => ({ ...r, tags: r.tags ?? [], attributes: {}, lastInboundAt: r.conversations[0]?.lastInboundAt ?? null });
+  const negative: { rule: Condition; matches: string[] }[] = [
+    { rule: { field: "tag", op: "not_has", value: "vip" }, matches: ["other tags", "empty tag list", "NULL tags (inbound contact)", "no phone, BSUID only"] },
+    { rule: { field: "name", op: "is_not", value: "Asha Rao" }, matches: ["NULL tags (inbound contact)"] },
+    { rule: { field: "name", op: "not_contains", value: "zzz" }, matches: Object.keys(rows) },
+    { rule: { field: "name", op: "not_exists" }, matches: ["NULL tags (inbound contact)"] },
+    { rule: { field: "phone", op: "is_not", value: "+919876543210" }, matches: ["no phone, BSUID only"] },
+    { rule: { field: "phone", op: "not_contains", value: "98765" }, matches: ["no phone, BSUID only"] },
+    { rule: { field: "phone", op: "not_exists" }, matches: ["no phone, BSUID only"] },
+    { rule: { field: "leadStage", op: "is_not", value: "qualified" }, matches: ["NULL tags (inbound contact)", "blank lead stage"] },
+    { rule: { field: "leadStage", op: "not_exists" }, matches: ["NULL tags (inbound contact)", "blank lead stage"] },
+    { rule: { field: "optInSource", op: "not_contains", value: "web" }, matches: ["NULL tags (inbound contact)"] },
+    { rule: { field: "ownerUserId", op: "is_not", value: "u1" }, matches: ["NULL tags (inbound contact)"] },
+    { rule: { field: "optInAt", op: "not_exists" }, matches: Object.keys(rows) },
+    { rule: { field: "country", op: "is_not", value: "US" }, matches: Object.keys(rows) },
+    { rule: { field: "country", op: "is_not", value: "IN" }, matches: [] },
+    { rule: { field: "lastInbound", op: "never" }, matches: ["NULL tags (inbound contact)"] },
+    { rule: { field: "lastInbound", op: "older_than_days", value: "30" }, matches: ["NULL tags (inbound contact)"] },
+  ];
+
+  it.each(negative)("$rule.field $rule.op $rule.value", ({ rule, matches }) => {
+    const c = parseFilter({ all: [rule] }).all![0];
+    for (const [label, row] of Object.entries(rows)) {
+      const want = matches.includes(label);
+      expect({ label, sql: sqlMatches(row, conditionWhere(c, now) as Record<string, unknown>) === true }).toEqual({ label, sql: want });
+      expect({ label, code: conditionMatches(snapshot(row), c, now) }).toEqual({ label, code: want });
+    }
+  });
+  it("counts the untagged contact for 'is not tagged' in both all and any mode", () => {
+    const untagged = rows["NULL tags (inbound contact)"];
+    const rule = { field: "tag", op: "not_has", value: "vip" };
+    for (const f of [parseFilter({ all: [rule] }), parseFilter({ any: [rule, { field: "name", op: "is", value: "nobody" }] })]) {
+      expect(sqlMatches(untagged, filterToWhere(f, now) as Record<string, unknown>)).toBe(true);
+      expect(filterMatches(snapshot(untagged), f, now)).toBe(true);
+    }
   });
 });
 

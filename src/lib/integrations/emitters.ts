@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { emitEvent } from "./events";
-import { broadcastCompletedPayload, broadcastTotals, conversationStatusChangedPayload, leadCreatedPayload } from "./payloads";
+import { broadcastCompletedPayload, broadcastTotals, conversationStatusChangedPayload, leadCreatedPayload, type LeadSource } from "./payloads";
 
 /** A conversation moved between statuses. source is "user" for a person or API key, "system" for automations and customer replies. */
 export async function emitStatusChanged(tenantId: string, i: { conversationId: string; contactId: string | null; from: string | null; to: string; changedBy?: string | null; source: "user" | "system" }): Promise<void> {
@@ -22,7 +22,24 @@ export async function emitBroadcastCompleted(tenantId: string, b: { id: string; 
   await emitEvent(tenantId, "broadcast.completed", broadcastCompletedPayload({ broadcastId: b.id, name: b.name ?? null, templateId: b.templateId ?? null, completedAt, totals }));
 }
 
-type LeadRow = { id: string; status: string; fields: unknown; campaignMetaId: string | null; adMetaId: string | null; createdAt: Date; contactId: string | null; leadForm?: { metaFormId: string } | null; leadFormId?: string | null };
+type LeadRow = {
+  id: string;
+  status: string;
+  fields: unknown;
+  campaignMetaId: string | null;
+  adMetaId: string | null;
+  createdAt: Date;
+  contactId: string | null;
+  leadForm?: { metaFormId: string } | null;
+  leadFormId?: string | null;
+  leadgenId?: string | null;
+};
+
+/**
+ * A click-to-WhatsApp lead's leadgenId starts with "ctwa:" (CTWA_LEADGEN_PREFIX in src/lib/conversions/referral.ts, not imported
+ * here because that module emits through this one); every other stored lead came from a Meta lead form.
+ */
+export const leadSourceOf = (leadgenId: string | null | undefined): LeadSource => (leadgenId?.startsWith("ctwa:") ? "ctwa" : "meta_lead_form");
 
 const asText = (v: unknown): string => (typeof v === "string" ? v : typeof v === "number" || typeof v === "boolean" ? String(v) : "");
 
@@ -33,17 +50,20 @@ export function leadFieldsAsText(fields: unknown): Record<string, string> {
   return out;
 }
 
+/** lead.created for a stored lead: from a Meta lead form (lib/leads/ingest) or a chat started from an ad (recordCtwaLead). */
 export async function emitLeadCreated(tenantId: string, lead: LeadRow, metaFormId?: string | null): Promise<void> {
   const contact = lead.contactId
     ? await prisma.contact.findFirst({ where: { id: lead.contactId, tenantId }, select: { id: true, phone: true, bsuid: true, waId: true, username: true, name: true } }).catch(() => null)
     : null;
+  const source = leadSourceOf(lead.leadgenId);
   await emitEvent(
     tenantId,
     "lead.created",
     leadCreatedPayload({
       leadId: lead.id,
       status: lead.status,
-      formId: metaFormId ?? lead.leadForm?.metaFormId ?? null,
+      source,
+      formId: source === "ctwa" ? null : (metaFormId ?? lead.leadForm?.metaFormId ?? null),
       campaignId: lead.campaignMetaId,
       adId: lead.adMetaId,
       createdAt: lead.createdAt,

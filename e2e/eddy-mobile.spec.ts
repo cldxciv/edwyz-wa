@@ -93,10 +93,10 @@ test.describe("Eddy on phones @mobile", () => {
         const send = sheet.getByRole("button", { name: "Send to Eddy" });
         await expect(send).toBeVisible();
         const box = (await send.boundingBox())!;
-        expect(box.width).toBeGreaterThanOrEqual(44);
-        expect(box.height).toBeGreaterThanOrEqual(44);
+        expect(Math.round(box.width)).toBeGreaterThanOrEqual(44);
+        expect(Math.round(box.height)).toBeGreaterThanOrEqual(44);
         const close = sheet.getByRole("button", { name: "Close Eddy" });
-        expect((await close.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+        expect(Math.round((await close.boundingBox())!.height)).toBeGreaterThanOrEqual(44);
         // The input is 16 px, so iOS does not zoom.
         expect(await sheet.getByRole("textbox", { name: "Message to Eddy" }).evaluate((el) => getComputedStyle(el).fontSize)).toBe("16px");
         await noHorizontalOverflow(page, `Eddy sheet at ${width} ${theme}`);

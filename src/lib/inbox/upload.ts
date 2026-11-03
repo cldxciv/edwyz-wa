@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { GraphError, graphUpload } from "@/lib/graph";
 import { HttpError } from "@/lib/tenancy";
 import {
+  ATTACHMENT_LIMITS,
   attachmentProblem,
   classifyAttachment,
   formatLimit,
@@ -10,11 +11,16 @@ import {
   stickerLimit,
   type AttachmentKind,
 } from "./attachments";
+import { keepPendingUpload } from "./media";
 
 export type UploadedAttachment = { mediaId: string; kind: AttachmentKind; mime: string; bytes: number; filename: string };
 
-const MAX_CONCURRENT_UPLOADS = 3;
-let active = 0;
+/**
+ * Each upload is held in memory, so the uploads of one process share a budget sized by the largest file each type may be:
+ * three 100 MB documents at once, or dozens of 5 MB photos.
+ */
+export const UPLOAD_MEMORY_BUDGET = 3 * ATTACHMENT_LIMITS.document;
+let reserved = 0;
 
 async function readLimited(request: Request, limit: number, tooBig: string): Promise<Buffer> {
   const declared = Number(request.headers.get("content-length") ?? 0);
@@ -49,7 +55,8 @@ function nameFromHeader(request: Request): string {
 /**
  * Reads the raw request body (Content-Type is the file's type, X-File-Name its URL-encoded name), applies the WhatsApp size
  * and type rules, and uploads it to Meta with the workspace's token. Returns the media id to send with POST ../messages.
- * Nothing is stored on our disk. At most three uploads run at once per process because the file is held in memory.
+ * Photos and videos go this way too, never into the media library. The only copy on our disk is the chat's preview, which
+ * expires on its own (keepPendingUpload in ./media).
  */
 export async function uploadAttachmentToMeta(tenantId: string, conversationId: string, request: Request): Promise<UploadedAttachment> {
   const conversation = await prisma.conversation.findFirst({
@@ -64,8 +71,8 @@ export async function uploadAttachmentToMeta(tenantId: string, conversationId: s
   const upFront = attachmentProblem({ type: declaredType, size: declaredSize > 0 ? declaredSize : 1 });
   if (!cls || upFront) throw new HttpError(cls ? 413 : 415, upFront ?? "That file type is not supported.");
 
-  if (active >= MAX_CONCURRENT_UPLOADS) throw new HttpError(429, "Other files are uploading. Try again in a moment.");
-  active += 1;
+  if (reserved + cls.maxBytes > UPLOAD_MEMORY_BUDGET) throw new HttpError(429, "Other files are uploading. Try again in a moment.");
+  reserved += cls.maxBytes;
   try {
     const bytes = await readLimited(request, cls.maxBytes, `This file is larger than the ${formatLimit(cls.maxBytes)} WhatsApp allows.`);
     if (bytes.length === 0) throw new HttpError(400, "The upload is empty.");
@@ -89,8 +96,9 @@ export async function uploadAttachmentToMeta(tenantId: string, conversationId: s
       throw new HttpError(502, "We could not upload this file to WhatsApp. Try again.");
     }
     if (!id || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new HttpError(502, "We could not upload this file to WhatsApp. Try again.");
+    await keepPendingUpload(tenantId, id, bytes);
     return { mediaId: id, kind: cls.kind, mime: cls.mime, bytes: bytes.length, filename };
   } finally {
-    active -= 1;
+    reserved -= cls.maxBytes;
   }
 }

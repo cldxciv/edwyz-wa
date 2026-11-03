@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const db = vi.hoisted(() => {
   const m = () => ({ findFirst: vi.fn(), findFirstOrThrow: vi.fn(async () => ({ id: "c1" })), findMany: vi.fn(async (..._args: unknown[]) => [] as unknown[]), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() });
-  return { contact: m(), conversation: m(), message: m(), broadcast: m(), broadcastRecipient: m(), platformSetting: m(), auditLog: m() };
+  // adAudience: promote/forget.ts forgetContact (PRM-11) first looks for the workspace's customer-list audiences on Meta (none).
+  return { contact: m(), conversation: m(), message: m(), broadcast: m(), broadcastRecipient: m(), platformSetting: m(), auditLog: m(), adAudience: m() };
 });
 vi.mock("@/lib/db", () => ({ prisma: db }));
 vi.mock("@/lib/billing", () => ({ assertTenantCanWrite: async () => undefined, assertWithinLimit: async () => undefined, startTrial: async () => undefined }));
@@ -40,6 +41,7 @@ import { checkLoginLimits, resetLoginLimits } from "@/lib/auth/ratelimit";
 import { isStopMessage } from "@/lib/webhooks/payload";
 import { createContact, listContacts, updateContact } from "@/lib/contacts/service";
 import { errorResponse } from "@/lib/tenancy";
+import { setLogSink } from "@/lib/log";
 import { describeError, sanitizeMessage } from "@/lib/safe-error";
 import { getDeletionRequest, markDeletionCompleted, recordDeletionRequest } from "@/lib/storage";
 import nextConfig from "../next.config";
@@ -169,14 +171,21 @@ describe("F24 body limits", () => {
 });
 
 describe("F9 opt-out detection and opt-in restriction", () => {
-  it.each(["STOP", "stop.", "  Stop All ", "UNSUBSCRIBE", "End", "cancel", "Quit", "opt out", "OPTOUT", "Stop please!", "STOP sending me messages"])(
+  // Owner default 1 (2026-10-31): the STOP words are stop, stop all, unsubscribe, opt out, cancel, end and quit, plus words each
+  // workspace adds, and only a whole-message match counts. "Stop please!" and "STOP sending me messages" opted out under the older
+  // "starts with stop" rule; a workspace that wants them adds them as its own words (the last case below).
+  it.each(["STOP", "stop.", "  Stop All ", "UNSUBSCRIBE", "End", "cancel", "Quit", "opt out", "OPTOUT", "Opt-out!", "ＳＴＯＰ"])(
     "treats %j as an opt-out",
     (text) => expect(isStopMessage(text)).toBe(true),
   );
-  it.each(["", "hello", "please do not stop", "when does the bus stop here at the main square", "ending soon", "stopover info"])(
+  it.each(["", "hello", "please do not stop", "when does the bus stop here at the main square", "ending soon", "stopover info", "cancel my order", "Stop please!", "STOP sending me messages"])(
     "does not treat %j as an opt-out",
     (text) => expect(isStopMessage(text)).toBe(false),
   );
+  it("honours a workspace's own words, whole-message only", () => {
+    expect(isStopMessage("Stop please!", ["stop please"])).toBe(true);
+    expect(isStopMessage("stop please now", ["stop please"])).toBe(false);
+  });
 
   const agent = { userId: "u1", tenantId: "t1", role: "agent" as const };
   const admin = { ...agent, role: "admin" as const };
@@ -223,18 +232,23 @@ describe("F26 cursors must belong to the tenant", () => {
 
 describe("F25 errors do not leak personal data", () => {
   it("errorResponse logs only the class name and code, never the message", async () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    // errorResponse logs through @/lib/log (api.unexpected); docs/ops.md section 4.
+    const lines: string[] = [];
+    setLogSink((_level, line) => lines.push(line));
     class PrismaClientKnownRequestError extends Error {
       code = "P2002";
     }
-    const res = errorResponse(new PrismaClientKnownRequestError("Invalid invocation: phone +919876543210 body 'my secret'"));
-    expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ error: "Something went wrong." });
-    const logged = spy.mock.calls.flat().join(" ");
+    try {
+      const res = errorResponse(new PrismaClientKnownRequestError("Invalid invocation: phone +919876543210 body 'my secret'"));
+      expect(res.status).toBe(500);
+      expect(await res.json()).toEqual({ error: "Something went wrong." });
+    } finally {
+      setLogSink(null);
+    }
+    const logged = lines.join(" ");
     expect(logged).toContain("PrismaClientKnownRequestError P2002");
     expect(logged).not.toContain("919876543210");
     expect(logged).not.toContain("secret");
-    spy.mockRestore();
   });
 
   it("sanitizeMessage strips emails and long digit runs and truncates", () => {

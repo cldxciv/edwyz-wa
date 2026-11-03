@@ -1,3 +1,4 @@
+import { markAiPaused, STOP_TAG as AI_STOP_TAG } from "@/lib/ai-agent/pause";
 import { emitAttributeChanges, emitTagChanges } from "@/lib/automation/v2/emit";
 import { prisma } from "@/lib/db";
 import { emitEvent } from "@/lib/integrations/events";
@@ -5,7 +6,9 @@ import { contactOptedOutPayload } from "@/lib/integrations/payloads";
 import { sendText, sendTemplateMessage } from "@/lib/inbox/service";
 import { buildList, buildReplyButtons, INTERACTIVE_LIMITS, sendInteractive, type InteractiveOption } from "@/lib/inbox/interactive";
 import { bodyText, cleanVariable, fillTemplate, variableCount } from "@/lib/inbox/template-vars";
+import { isWithinServiceWindow } from "@/lib/inbox/window";
 import { describeError } from "@/lib/safe-error";
+import { mayReceive, optedOutSince, sendKindForCategory } from "@/lib/contacts/opt-out";
 import { HttpError } from "@/lib/tenancy";
 import { tenantMayRunBackground } from "@/lib/tenant-state";
 import { backgroundGate } from "@/lib/tenant-lifecycle-state";
@@ -15,6 +18,7 @@ import { classifyWithAi, DEFAULT_ESCALATION_MESSAGE, detectEscalation, type Esca
 import { parseSettings, TEAM_QUEUE, validateFlow, type BotSettings, type FlowDefinition, type FlowNode } from "./flow";
 import { callWebhook } from "./http";
 import { getSeams } from "./seams";
+import { buildTemplateComponents as buildSharedTemplate } from "./template-build";
 import { evaluateCondition, interpolate, resolveValue, validateAnswer, type VarContext } from "./vars";
 
 export const MAX_STEPS_PER_RUN = 200;
@@ -47,13 +51,21 @@ type State = {
   flow: FlowDefinition;
   nodes: Map<string, FlowNode>;
   vars: Record<string, unknown>;
-  contact: { id: string; name: string | null; phone: string | null; attributes: Record<string, unknown>; tags: string[]; optedOut: boolean; optIn: boolean };
+  /** optedOut and optedOutAt: the contact opted out of marketing (lib/contacts/opt-out.ts); optedOutAt is when, so a STOP sent during this session ends it. */
+  contact: { id: string; name: string | null; phone: string | null; attributes: Record<string, unknown>; tags: string[]; optedOut: boolean; optedOutAt: Date | null; optIn: boolean };
   settings: BotSettings;
   phoneNumberId: string;
   wabaRefId: string | null;
   blocked: boolean;
+  /** When the customer last wrote: free messages are allowed for 24 hours after it. */
+  lastInboundAt: Date | null;
+  /** Set when a wait ends after the 24-hour window closed: the first free message hands the chat over instead (see windowClosedNow). */
+  windowClosed: boolean;
   steps: number;
 };
+
+/** Session variable naming the wait step the bot is sleeping in, so a customer message during the wait follows that step's setting. */
+export const SLEEPING_AT = "__sleepingAt";
 
 class StopRun extends Error {
   /** aborted: the session was ended from outside (teammate, block), so nothing else may run, not even a hand-over. */
@@ -62,8 +74,9 @@ class StopRun extends Error {
   }
 }
 
+/** Reads a published flow for running. Publish-only checks added later are skipped, so a bot that went live before them keeps working. */
 export function parseFlow(value: unknown): FlowDefinition | null {
-  const result = validateFlow(value);
+  const result = validateFlow(value, { published: true });
   return result.ok && result.flow ? result.flow : null;
 }
 
@@ -74,7 +87,7 @@ const norm = (v: string) => v.normalize("NFKC").trim().toLowerCase();
 async function loadState(session: SessionRow, flow: FlowDefinition): Promise<State | null> {
   const [contact, conversation] = await Promise.all([
     prisma.contact.findFirst({ where: { id: session.contactId, tenantId: session.tenantId } }),
-    prisma.conversation.findFirst({ where: { id: session.conversationId, tenantId: session.tenantId }, select: { phoneNumberId: true, status: true, phoneNumber: { select: { wabaRefId: true } } } }),
+    prisma.conversation.findFirst({ where: { id: session.conversationId, tenantId: session.tenantId }, select: { phoneNumberId: true, status: true, lastInboundAt: true, phoneNumber: { select: { wabaRefId: true } } } }),
   ]);
   if (!contact || !conversation) return null;
   return {
@@ -89,12 +102,15 @@ async function loadState(session: SessionRow, flow: FlowDefinition): Promise<Sta
       attributes: { ...asRec(contact.attributes) },
       tags: contact.tags ?? [],
       optedOut: Boolean(contact.optedOutAt),
+      optedOutAt: contact.optedOutAt ?? null,
       optIn: Boolean(contact.optIn),
     },
     settings: parseSettings(flow.settings),
     phoneNumberId: conversation.phoneNumberId,
     wabaRefId: conversation.phoneNumber?.wabaRefId ?? null,
     blocked: conversation.status === "blocked",
+    lastInboundAt: conversation.lastInboundAt ?? null,
+    windowClosed: false,
     steps: 0,
   };
 }
@@ -138,7 +154,9 @@ async function assertStillRunning(s: State) {
 }
 
 function reserveSend(s: State) {
-  if (s.contact.optedOut) throw new StopRun("completed");
+  // The bot answers the customer, which an opt-out never blocks (lib/contacts/opt-out.ts); a marketing template is refused in
+  // sendTemplateNode. An opt-out made during this session (a STOP, or this bot's own Stop messages step) ends it: nothing more is sent.
+  if (!mayReceive(s.contact, "service") || optedOutSince(s.contact, s.session.startedAt)) throw new StopRun("completed");
   const now = Date.now();
   const recent = recentSends(s, now);
   if (recent.length >= MAX_BOT_MESSAGES_PER_MINUTE) throw new StopRun("expired");
@@ -205,52 +223,34 @@ function hasEdge(s: State, nodeId: string, label: string) {
   return s.flow.edges.some((e) => e.from === nodeId && e.label === label);
 }
 
-type TemplateComponent = { type?: unknown; format?: unknown; text?: unknown; buttons?: unknown };
 type TemplateBuild = { components: unknown[] } | { error: string };
 
-const upper = (v: unknown) => (typeof v === "string" ? v.toUpperCase() : "");
-const componentList = (v: unknown): TemplateComponent[] => (Array.isArray(v) ? v.filter((c): c is TemplateComponent => Boolean(c) && typeof c === "object") : []);
-
+/** The step's values filled from saved answers, built by the shared template builder (also used by automation rules). */
 function buildTemplateComponents(s: State, node: Extract<FlowNode, { type: "send_template" }>, templateComponents: unknown): TemplateBuild {
-  const list = componentList(templateComponents);
-  const out: unknown[] = [];
-  const header = list.find((c) => upper(c.type) === "HEADER");
-  const format = header ? upper(header.format) || "TEXT" : "";
-  if (header && format === "TEXT" && /\{\{/.test(String(header.text ?? ""))) {
-    const value = cleanVariable(text(s, node.data.headerVariable ?? "")).slice(0, 1024);
-    if (!value) return { error: "missing_header_value" };
-    out.push({ type: "header", parameters: [{ type: "text", text: value }] });
-  } else if (header && ["IMAGE", "VIDEO", "DOCUMENT"].includes(format)) {
-    const link = interpolate(node.data.headerMediaUrl ?? "", ctxOf(s)).trim();
-    if (!/^https:\/\/\S+$/i.test(link)) return { error: "missing_header_media" };
-    const kind = format.toLowerCase();
-    out.push({ type: "header", parameters: [{ type: kind, [kind]: { link } }] });
-  }
-
-  const hasBody = list.some((c) => upper(c.type) === "BODY");
+  const hasBody = Array.isArray(templateComponents) && templateComponents.some((c) => Boolean(c) && typeof c === "object" && String((c as { type?: unknown }).type).toUpperCase() === "BODY");
   const needed = variableCount(bodyText(templateComponents));
   const keys = Object.keys(node.data.variables).sort((a, b) => Number(a) - Number(b));
+  const body = (hasBody ? keys.slice(0, needed) : keys).map((key) => cleanVariable(text(s, node.data.variables[key])).slice(0, 1024) || "-");
+  const built = buildSharedTemplate(templateComponents, {
+    header: text(s, node.data.headerVariable ?? ""),
+    headerMediaUrl: interpolate(node.data.headerMediaUrl ?? "", ctxOf(s)),
+    body,
+    button: text(s, node.data.buttonVariable ?? ""),
+  });
+  // Problems are reported in the order of the template: the header, then the text values, then the button.
+  if ("error" in built && built.error !== "missing_button_value") return built;
   if (keys.length < needed) return { error: "missing_variables" };
-  const params = (hasBody ? keys.slice(0, needed) : keys).map((key) => ({ type: "text", text: cleanVariable(text(s, node.data.variables[key])).slice(0, 1024) || "-" }));
-  if (params.length) out.push({ type: "body", parameters: params });
-
-  const buttons = componentList(list.find((c) => upper(c.type) === "BUTTONS")?.buttons);
-  for (const [index, button] of buttons.entries()) {
-    if (upper(button.type) !== "URL" || !/\{\{/.test(String((button as { url?: unknown }).url ?? ""))) continue;
-    const value = cleanVariable(text(s, node.data.buttonVariable ?? "")).slice(0, 1024);
-    if (!value) return { error: "missing_button_value" };
-    out.push({ type: "button", sub_type: "url", index: String(index), parameters: [{ type: "text", text: value }] });
-  }
-  return { components: out };
+  return built;
 }
 
 /** Sends the approved template with its header, body and button values filled from saved answers. Returns an error code instead of throwing for problems the flow can route around. */
 async function sendTemplateNode(s: State, node: Extract<FlowNode, { type: "send_template" }>): Promise<string | null> {
-  if (s.contact.optedOut) return "opted_out";
   // A template belongs to one WhatsApp Business account; the number this chat runs on must be in the same one, or Meta rejects the send.
   if (!s.wabaRefId) return "template_unavailable";
   const template = await prisma.template.findFirst({ where: { id: node.data.templateId, tenantId: s.session.tenantId, wabaRefId: s.wabaRefId, status: "approved" } });
   if (!template) return "template_unavailable";
+  // An opt-out blocks marketing only: a utility or login-code template still goes to a contact who opted out.
+  if (!mayReceive(s.contact, sendKindForCategory(template.category))) return "opted_out";
   if (template.category === "MARKETING" && !s.contact.optIn) return "no_opt_in";
   const built = buildTemplateComponents(s, node, template.components);
   if ("error" in built) return built.error;
@@ -302,7 +302,6 @@ async function rememberOwnAssignment(s: State) {
   if (row?.assignedAt) s.vars.__assignedAt = row.assignedAt.toISOString();
 }
 
-const AI_STOP_TAG = "ai:stopped";
 const REASON_TEXT: Record<string, string> = {
   human_request: "The customer asked to talk to a person.",
   frustration: "The customer seemed frustrated.",
@@ -338,6 +337,8 @@ async function handOver(s: State, opts: { teamId?: string; userId?: string; note
     const conversation = await prisma.conversation.findFirst({ where: { id: conversationId, tenantId }, select: { tags: true } });
     const tags = Array.isArray(conversation?.tags) ? conversation.tags : [];
     if (conversation && !tags.includes(AI_STOP_TAG)) await prisma.conversation.updateMany({ where: { id: conversationId, tenantId }, data: { tags: [...tags, AI_STOP_TAG] } });
+    // Dated even when the chat was paused already: this hand-over starts the pause again, for this episode of the chat.
+    if (conversation) await markAiPaused(tenantId, conversationId);
     if (opts.note) await prisma.note.create({ data: { tenantId, conversationId, authorId: "chatbot", body: summaryNote(s, opts.reason) } });
   } catch (error) {
     console.error("[chatbot] hand-over details could not be saved:", describeError(error));
@@ -356,6 +357,14 @@ async function escalate(s: State, signal: EscalationSignal) {
   }
   await handOver(s, { teamId: esc.teamId, userId: esc.userId, note: true, reason: REASON_TEXT[signal.kind] });
   await finish(s, "handed_off");
+}
+
+const WINDOW_CLOSED_REASON = "The 24-hour window closed while the chatbot was waiting, so it could not send its next message. Send an approved template to reach the customer.";
+
+/** The bot's next message is a free one, but the 24-hour window closed during a wait, so WhatsApp would refuse it: the team takes the chat, with a note. */
+async function handOverClosedWindow(s: State): Promise<Outcome> {
+  await handOver(s, { note: true, reason: WINDOW_CLOSED_REASON });
+  return { kind: "finish", status: "handed_off" };
 }
 
 const AI_MIN_WORDS = 4;
@@ -398,13 +407,14 @@ async function subscribeContact(s: State, source: string | undefined) {
   await prisma.auditLog.create({ data: { tenantId, action: "contact.consent_recorded", target: s.contact.id, meta: { source: note, via: "chatbot" } } });
 }
 
-/** Opts the contact out of messages the way a STOP reply does, so no bot, rule or campaign writes to them again. */
+/** Opts the contact out of marketing the way a STOP reply does (lib/contacts/opt-out.ts): no marketing template, broadcast or follow-up reaches them again. */
 async function unsubscribeContact(s: State) {
   const { tenantId } = s.session;
   const optedOutAt = new Date();
   const before = await prisma.contact.findFirst({ where: { id: s.contact.id, tenantId }, select: { id: true, phone: true, bsuid: true, waId: true, username: true, name: true, optedOutAt: true } });
   await prisma.contact.updateMany({ where: { id: s.contact.id, tenantId }, data: { optedOutAt: before?.optedOutAt ?? optedOutAt, optIn: false } });
   s.contact.optedOut = true;
+  s.contact.optedOutAt = optedOutAt;
   await prisma.auditLog.create({ data: { tenantId, action: "contact.opted_out", target: s.contact.id, meta: { via: "chatbot", source: "Chatbot unsubscribe step" } } });
   // Tell subscribed integrations once; a contact who had already opted out is not announced again. Never let a webhook failure break the flow.
   if (before && !before.optedOutAt) {
@@ -427,12 +437,18 @@ async function runWebhook(s: State, node: Extract<FlowNode, { type: "webhook" }>
 async function runNode(s: State, node: FlowNode): Promise<Outcome> {
   const tenantId = s.session.tenantId;
   const conversationId = s.session.conversationId;
+  // After a wait that outlived the 24-hour window, steps that send nothing and templates run as usual; the first free message
+  // hands over instead, and a hand-over or Stop messages step does its job without its own message.
   switch (node.type) {
-    case "send_text":
-      await emit(s, text(s, node.data.text));
+    case "send_text": {
+      const body = text(s, node.data.text);
+      if (s.windowClosed && body.trim()) return handOverClosedWindow(s);
+      await emit(s, body);
       return { kind: "next" };
+    }
     case "send_buttons":
     case "send_list": {
+      if (s.windowClosed) return handOverClosedWindow(s);
       await emitMenu(s, menuOf(s, node));
       s.vars.__retries = 0;
       return { kind: "wait" };
@@ -443,6 +459,7 @@ async function runNode(s: State, node: FlowNode): Promise<Outcome> {
       return failure && hasEdge(s, node.id, "error") ? { kind: "next", label: "error" } : { kind: "next" };
     }
     case "ask": {
+      if (s.windowClosed) return handOverClosedWindow(s);
       await emitQuestion(s, text(s, node.data.text), node.data.choices);
       s.vars.__retries = 0;
       return { kind: "wait" };
@@ -483,15 +500,18 @@ async function runNode(s: State, node: FlowNode): Promise<Outcome> {
     case "set_status":
       await getSeams().setStatus(tenantId, conversationId, node.data.status);
       return { kind: "next" };
-    case "handoff":
-      if (node.data.message) await emit(s, text(s, node.data.message));
-      await handOver(s, { teamId: node.data.teamId, userId: node.data.userId, note: node.data.note !== false, reason: "The chatbot reached a hand-over step." });
+    case "handoff": {
+      const unsent = Boolean(node.data.message) && s.windowClosed;
+      if (node.data.message && !unsent) await emit(s, text(s, node.data.message));
+      const reason = unsent ? "The chatbot reached a hand-over step. Its message was not sent because the 24-hour window had closed." : "The chatbot reached a hand-over step.";
+      await handOver(s, { teamId: node.data.teamId, userId: node.data.userId, note: node.data.note !== false, reason });
       return { kind: "finish", status: "handed_off" };
+    }
     case "subscribe":
       await subscribeContact(s, node.data.source);
       return { kind: "next" };
     case "unsubscribe":
-      if (node.data.message) await emit(s, text(s, node.data.message));
+      if (node.data.message && !s.windowClosed) await emit(s, text(s, node.data.message));
       await unsubscribeContact(s);
       return { kind: "finish", status: "completed" };
     case "end":
@@ -513,6 +533,7 @@ export async function execute(s: State, startId: string | null): Promise<void> {
       const next = edgeTarget(s, node.id, outcome.kind === "next" ? outcome.label : undefined);
       if (outcome.kind === "sleep") {
         if (!next) break;
+        s.vars[SLEEPING_AT] = node.id;
         return await save(s, { status: "active", currentNodeId: next, waitingNodeId: null, wakeAt: outcome.wakeAt });
       }
       nodeId = next;
@@ -612,7 +633,7 @@ export async function resumeSession(session: SessionRow, flow: FlowDefinition, r
   });
   if (claim.count === 0) return true;
   const state = await loadState(session, flow);
-  if (state?.contact.optedOut) {
+  if (state && (!mayReceive(state.contact, "service") || optedOutSince(state.contact, session.startedAt))) {
     await endSession({ ...session, status: "active" }, "completed");
     return false;
   }
@@ -622,19 +643,32 @@ export async function resumeSession(session: SessionRow, flow: FlowDefinition, r
   }
   const node = session.waitingNodeId ? state?.nodes.get(session.waitingNodeId) : undefined;
   if (!state || !node) {
+    // The step the customer was answering is gone (the bot was republished without it). The session ends, and the message is
+    // not reported as handled: it goes on to the AI agent, routing and rules instead of getting no answer at all.
     await endSession({ ...session, status: "active" }, "completed");
-    return true;
+    return false;
   }
   await resumeWaiting(state, node, reply, replyId);
   return true;
 }
 
 /**
- * Continues a session whose delay has elapsed. Returns false when another process already claimed it, or when the workspace is
- * suspended, deleted or billing-locked: then nothing is claimed or sent and the session keeps its wake time (see
- * resumeDelayedSessions, which pushes it back instead of dropping it).
+ * The 24-hour window closed while this session ran: the customer was writing when it started or when this wait began, and is not
+ * now. Its next free message would be refused, so the bot hands the chat over at that step instead of ending silently (see
+ * runNode). A bot that a rule started on a customer whose window was already closed runs its steps as before.
  */
-export async function wakeSession(session: SessionRow, flow: FlowDefinition): Promise<boolean> {
+function windowClosedNow(s: State, session: SessionRow, now: Date): boolean {
+  if (isWithinServiceWindow(s.lastInboundAt, now)) return false;
+  return isWithinServiceWindow(s.lastInboundAt, session.startedAt ?? session.updatedAt) || isWithinServiceWindow(s.lastInboundAt, session.updatedAt);
+}
+
+/**
+ * Continues a session whose delay has elapsed, or (with `reply`) a sleeping session the customer wrote to, when its wait step says
+ * to go on at once. Returns false when another process already claimed it, or when the workspace is suspended, deleted or
+ * billing-locked: then nothing is claimed or sent and the session keeps its wake time (see resumeDelayedSessions, which pushes it
+ * back instead of dropping it).
+ */
+export async function wakeSession(session: SessionRow, flow: FlowDefinition, opts: { reply?: string } = {}): Promise<boolean> {
   if (!session.wakeAt) return false;
   if (!(await tenantMayRunBackground(session.tenantId))) return false;
   if (await stepsAsideForHuman(session, flow)) {
@@ -651,7 +685,7 @@ export async function wakeSession(session: SessionRow, flow: FlowDefinition): Pr
     await endSession(session, "expired");
     return true;
   }
-  if (state.contact.optedOut) {
+  if (!mayReceive(state.contact, "service") || optedOutSince(state.contact, session.startedAt)) {
     await endSession(session, "completed");
     return true;
   }
@@ -659,8 +693,21 @@ export async function wakeSession(session: SessionRow, flow: FlowDefinition): Pr
     await endSession(session, "expired");
     return true;
   }
+  delete state.vars[SLEEPING_AT];
+  if (opts.reply !== undefined) state.vars.last_reply = opts.reply.slice(0, 1024);
+  state.windowClosed = windowClosedNow(state, session, new Date());
   await execute(state, session.currentNodeId);
   return true;
+}
+
+/** The wait step a sleeping session is in: the one it noted when it fell asleep, or (for older sessions) the wait that leads to its next step. */
+export function sleepingStep(session: Pick<SessionRow, "variables" | "currentNodeId">, flow: FlowDefinition): Extract<FlowNode, { type: "delay" }> | null {
+  const noted = asRec(session.variables)[SLEEPING_AT];
+  const byNote = typeof noted === "string" ? flow.nodes.find((n) => n.id === noted) : undefined;
+  if (byNote?.type === "delay") return byNote;
+  const edge = flow.edges.find((e) => !e.label && e.to === session.currentNodeId && flow.nodes.find((n) => n.id === e.from)?.type === "delay");
+  const node = edge ? flow.nodes.find((n) => n.id === edge.from) : undefined;
+  return node?.type === "delay" ? node : null;
 }
 
 export async function beginSession(session: SessionRow, flow: FlowDefinition, triggerText: string): Promise<void> {

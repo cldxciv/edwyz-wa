@@ -492,7 +492,16 @@ export const ModelName = {
   ActionInvocation: 'ActionInvocation',
   Notice: 'Notice',
   NoticeReceipt: 'NoticeReceipt',
-  NoticeScanState: 'NoticeScanState'
+  NoticeScanState: 'NoticeScanState',
+  AdMedia: 'AdMedia',
+  AdAudience: 'AdAudience',
+  AdAudienceUpload: 'AdAudienceUpload',
+  AdTest: 'AdTest',
+  InsightBreakdown: 'InsightBreakdown',
+  StudioItem: 'StudioItem',
+  StudioJob: 'StudioJob',
+  CanvaConnection: 'CanvaConnection',
+  CanvaReturnState: 'CanvaReturnState'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -508,7 +517,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "tenant" | "user" | "membership" | "invite" | "session" | "waba" | "phoneNumber" | "accessToken" | "onboardingLog" | "contact" | "conversation" | "message" | "note" | "quickReply" | "template" | "broadcast" | "broadcastRecipient" | "webhookEvent" | "auditLog" | "walletTransaction" | "job" | "plan" | "subscription" | "billingProfile" | "invoice" | "paymentEvent" | "platformSetting" | "automationRule" | "automationRun" | "apiKey" | "webhookEndpoint" | "webhookDelivery" | "dailyMetric" | "emailToken" | "chatbot" | "chatbotSession" | "routingConfig" | "agentAvailability" | "metaConnection" | "metaAsset" | "brand" | "creativeBrief" | "creativeAngle" | "creativeAsset" | "approvalRequest" | "adCampaign" | "adSet" | "ad" | "insightSnapshot" | "optimizerProposal" | "leadForm" | "lead" | "leadSequence" | "leadSequenceRun" | "scheduledPost" | "postTarget" | "conversionEvent" | "usageLedger" | "aiAgent" | "aiKnowledgeSource" | "mcpConnection" | "shopifyStore" | "abandonedCart" | "team" | "teamMember" | "segment" | "conversationMark" | "savedInboxFilter" | "replyMaterial" | "ruleExecution" | "spendControl" | "spendAllowance" | "spendCeiling" | "spendCommitment" | "spendCounter" | "spendReservation" | "spendDaily" | "intradaySpendSample" | "spendLedger" | "metaSpendLimit" | "spendConsent" | "assistantMandate" | "spendApproval" | "spendBreaker" | "assistantShadowRecord" | "ownerNotifyChannel" | "eddyWorkspaceSetting" | "eddyUserPref" | "eddyConversation" | "eddyMessage" | "eddyTurn" | "actionRecord" | "actionInvocation" | "notice" | "noticeReceipt" | "noticeScanState"
+    modelProps: "tenant" | "user" | "membership" | "invite" | "session" | "waba" | "phoneNumber" | "accessToken" | "onboardingLog" | "contact" | "conversation" | "message" | "note" | "quickReply" | "template" | "broadcast" | "broadcastRecipient" | "webhookEvent" | "auditLog" | "walletTransaction" | "job" | "plan" | "subscription" | "billingProfile" | "invoice" | "paymentEvent" | "platformSetting" | "automationRule" | "automationRun" | "apiKey" | "webhookEndpoint" | "webhookDelivery" | "dailyMetric" | "emailToken" | "chatbot" | "chatbotSession" | "routingConfig" | "agentAvailability" | "metaConnection" | "metaAsset" | "brand" | "creativeBrief" | "creativeAngle" | "creativeAsset" | "approvalRequest" | "adCampaign" | "adSet" | "ad" | "insightSnapshot" | "optimizerProposal" | "leadForm" | "lead" | "leadSequence" | "leadSequenceRun" | "scheduledPost" | "postTarget" | "conversionEvent" | "usageLedger" | "aiAgent" | "aiKnowledgeSource" | "mcpConnection" | "shopifyStore" | "abandonedCart" | "team" | "teamMember" | "segment" | "conversationMark" | "savedInboxFilter" | "replyMaterial" | "ruleExecution" | "spendControl" | "spendAllowance" | "spendCeiling" | "spendCommitment" | "spendCounter" | "spendReservation" | "spendDaily" | "intradaySpendSample" | "spendLedger" | "metaSpendLimit" | "spendConsent" | "assistantMandate" | "spendApproval" | "spendBreaker" | "assistantShadowRecord" | "ownerNotifyChannel" | "eddyWorkspaceSetting" | "eddyUserPref" | "eddyConversation" | "eddyMessage" | "eddyTurn" | "actionRecord" | "actionInvocation" | "notice" | "noticeReceipt" | "noticeScanState" | "adMedia" | "adAudience" | "adAudienceUpload" | "adTest" | "insightBreakdown" | "studioItem" | "studioJob" | "canvaConnection" | "canvaReturnState"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -7616,6 +7625,672 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    AdMedia: {
+      payload: Prisma.$AdMediaPayload<ExtArgs>
+      fields: Prisma.AdMediaFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.AdMediaFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdMediaPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.AdMediaFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdMediaPayload>
+        }
+        findFirst: {
+          args: Prisma.AdMediaFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdMediaPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.AdMediaFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdMediaPayload>
+        }
+        findMany: {
+          args: Prisma.AdMediaFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdMediaPayload>[]
+        }
+        create: {
+          args: Prisma.AdMediaCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdMediaPayload>
+        }
+        createMany: {
+          args: Prisma.AdMediaCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.AdMediaCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdMediaPayload>[]
+        }
+        delete: {
+          args: Prisma.AdMediaDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdMediaPayload>
+        }
+        update: {
+          args: Prisma.AdMediaUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdMediaPayload>
+        }
+        deleteMany: {
+          args: Prisma.AdMediaDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.AdMediaUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.AdMediaUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdMediaPayload>[]
+        }
+        upsert: {
+          args: Prisma.AdMediaUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdMediaPayload>
+        }
+        aggregate: {
+          args: Prisma.AdMediaAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateAdMedia>
+        }
+        groupBy: {
+          args: Prisma.AdMediaGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AdMediaGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.AdMediaCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AdMediaCountAggregateOutputType> | number
+        }
+      }
+    }
+    AdAudience: {
+      payload: Prisma.$AdAudiencePayload<ExtArgs>
+      fields: Prisma.AdAudienceFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.AdAudienceFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudiencePayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.AdAudienceFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudiencePayload>
+        }
+        findFirst: {
+          args: Prisma.AdAudienceFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudiencePayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.AdAudienceFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudiencePayload>
+        }
+        findMany: {
+          args: Prisma.AdAudienceFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudiencePayload>[]
+        }
+        create: {
+          args: Prisma.AdAudienceCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudiencePayload>
+        }
+        createMany: {
+          args: Prisma.AdAudienceCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.AdAudienceCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudiencePayload>[]
+        }
+        delete: {
+          args: Prisma.AdAudienceDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudiencePayload>
+        }
+        update: {
+          args: Prisma.AdAudienceUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudiencePayload>
+        }
+        deleteMany: {
+          args: Prisma.AdAudienceDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.AdAudienceUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.AdAudienceUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudiencePayload>[]
+        }
+        upsert: {
+          args: Prisma.AdAudienceUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudiencePayload>
+        }
+        aggregate: {
+          args: Prisma.AdAudienceAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateAdAudience>
+        }
+        groupBy: {
+          args: Prisma.AdAudienceGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AdAudienceGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.AdAudienceCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AdAudienceCountAggregateOutputType> | number
+        }
+      }
+    }
+    AdAudienceUpload: {
+      payload: Prisma.$AdAudienceUploadPayload<ExtArgs>
+      fields: Prisma.AdAudienceUploadFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.AdAudienceUploadFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudienceUploadPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.AdAudienceUploadFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudienceUploadPayload>
+        }
+        findFirst: {
+          args: Prisma.AdAudienceUploadFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudienceUploadPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.AdAudienceUploadFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudienceUploadPayload>
+        }
+        findMany: {
+          args: Prisma.AdAudienceUploadFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudienceUploadPayload>[]
+        }
+        create: {
+          args: Prisma.AdAudienceUploadCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudienceUploadPayload>
+        }
+        createMany: {
+          args: Prisma.AdAudienceUploadCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.AdAudienceUploadCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudienceUploadPayload>[]
+        }
+        delete: {
+          args: Prisma.AdAudienceUploadDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudienceUploadPayload>
+        }
+        update: {
+          args: Prisma.AdAudienceUploadUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudienceUploadPayload>
+        }
+        deleteMany: {
+          args: Prisma.AdAudienceUploadDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.AdAudienceUploadUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.AdAudienceUploadUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudienceUploadPayload>[]
+        }
+        upsert: {
+          args: Prisma.AdAudienceUploadUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdAudienceUploadPayload>
+        }
+        aggregate: {
+          args: Prisma.AdAudienceUploadAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateAdAudienceUpload>
+        }
+        groupBy: {
+          args: Prisma.AdAudienceUploadGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AdAudienceUploadGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.AdAudienceUploadCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AdAudienceUploadCountAggregateOutputType> | number
+        }
+      }
+    }
+    AdTest: {
+      payload: Prisma.$AdTestPayload<ExtArgs>
+      fields: Prisma.AdTestFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.AdTestFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdTestPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.AdTestFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdTestPayload>
+        }
+        findFirst: {
+          args: Prisma.AdTestFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdTestPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.AdTestFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdTestPayload>
+        }
+        findMany: {
+          args: Prisma.AdTestFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdTestPayload>[]
+        }
+        create: {
+          args: Prisma.AdTestCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdTestPayload>
+        }
+        createMany: {
+          args: Prisma.AdTestCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.AdTestCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdTestPayload>[]
+        }
+        delete: {
+          args: Prisma.AdTestDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdTestPayload>
+        }
+        update: {
+          args: Prisma.AdTestUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdTestPayload>
+        }
+        deleteMany: {
+          args: Prisma.AdTestDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.AdTestUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.AdTestUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdTestPayload>[]
+        }
+        upsert: {
+          args: Prisma.AdTestUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$AdTestPayload>
+        }
+        aggregate: {
+          args: Prisma.AdTestAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateAdTest>
+        }
+        groupBy: {
+          args: Prisma.AdTestGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AdTestGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.AdTestCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AdTestCountAggregateOutputType> | number
+        }
+      }
+    }
+    InsightBreakdown: {
+      payload: Prisma.$InsightBreakdownPayload<ExtArgs>
+      fields: Prisma.InsightBreakdownFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.InsightBreakdownFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InsightBreakdownPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.InsightBreakdownFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InsightBreakdownPayload>
+        }
+        findFirst: {
+          args: Prisma.InsightBreakdownFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InsightBreakdownPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.InsightBreakdownFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InsightBreakdownPayload>
+        }
+        findMany: {
+          args: Prisma.InsightBreakdownFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InsightBreakdownPayload>[]
+        }
+        create: {
+          args: Prisma.InsightBreakdownCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InsightBreakdownPayload>
+        }
+        createMany: {
+          args: Prisma.InsightBreakdownCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.InsightBreakdownCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InsightBreakdownPayload>[]
+        }
+        delete: {
+          args: Prisma.InsightBreakdownDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InsightBreakdownPayload>
+        }
+        update: {
+          args: Prisma.InsightBreakdownUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InsightBreakdownPayload>
+        }
+        deleteMany: {
+          args: Prisma.InsightBreakdownDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.InsightBreakdownUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.InsightBreakdownUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InsightBreakdownPayload>[]
+        }
+        upsert: {
+          args: Prisma.InsightBreakdownUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InsightBreakdownPayload>
+        }
+        aggregate: {
+          args: Prisma.InsightBreakdownAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateInsightBreakdown>
+        }
+        groupBy: {
+          args: Prisma.InsightBreakdownGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.InsightBreakdownGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.InsightBreakdownCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.InsightBreakdownCountAggregateOutputType> | number
+        }
+      }
+    }
+    StudioItem: {
+      payload: Prisma.$StudioItemPayload<ExtArgs>
+      fields: Prisma.StudioItemFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.StudioItemFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioItemPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.StudioItemFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioItemPayload>
+        }
+        findFirst: {
+          args: Prisma.StudioItemFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioItemPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.StudioItemFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioItemPayload>
+        }
+        findMany: {
+          args: Prisma.StudioItemFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioItemPayload>[]
+        }
+        create: {
+          args: Prisma.StudioItemCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioItemPayload>
+        }
+        createMany: {
+          args: Prisma.StudioItemCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.StudioItemCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioItemPayload>[]
+        }
+        delete: {
+          args: Prisma.StudioItemDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioItemPayload>
+        }
+        update: {
+          args: Prisma.StudioItemUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioItemPayload>
+        }
+        deleteMany: {
+          args: Prisma.StudioItemDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.StudioItemUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.StudioItemUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioItemPayload>[]
+        }
+        upsert: {
+          args: Prisma.StudioItemUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioItemPayload>
+        }
+        aggregate: {
+          args: Prisma.StudioItemAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateStudioItem>
+        }
+        groupBy: {
+          args: Prisma.StudioItemGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.StudioItemGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.StudioItemCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.StudioItemCountAggregateOutputType> | number
+        }
+      }
+    }
+    StudioJob: {
+      payload: Prisma.$StudioJobPayload<ExtArgs>
+      fields: Prisma.StudioJobFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.StudioJobFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioJobPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.StudioJobFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioJobPayload>
+        }
+        findFirst: {
+          args: Prisma.StudioJobFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioJobPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.StudioJobFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioJobPayload>
+        }
+        findMany: {
+          args: Prisma.StudioJobFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioJobPayload>[]
+        }
+        create: {
+          args: Prisma.StudioJobCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioJobPayload>
+        }
+        createMany: {
+          args: Prisma.StudioJobCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.StudioJobCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioJobPayload>[]
+        }
+        delete: {
+          args: Prisma.StudioJobDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioJobPayload>
+        }
+        update: {
+          args: Prisma.StudioJobUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioJobPayload>
+        }
+        deleteMany: {
+          args: Prisma.StudioJobDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.StudioJobUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.StudioJobUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioJobPayload>[]
+        }
+        upsert: {
+          args: Prisma.StudioJobUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StudioJobPayload>
+        }
+        aggregate: {
+          args: Prisma.StudioJobAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateStudioJob>
+        }
+        groupBy: {
+          args: Prisma.StudioJobGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.StudioJobGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.StudioJobCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.StudioJobCountAggregateOutputType> | number
+        }
+      }
+    }
+    CanvaConnection: {
+      payload: Prisma.$CanvaConnectionPayload<ExtArgs>
+      fields: Prisma.CanvaConnectionFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.CanvaConnectionFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaConnectionPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.CanvaConnectionFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaConnectionPayload>
+        }
+        findFirst: {
+          args: Prisma.CanvaConnectionFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaConnectionPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.CanvaConnectionFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaConnectionPayload>
+        }
+        findMany: {
+          args: Prisma.CanvaConnectionFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaConnectionPayload>[]
+        }
+        create: {
+          args: Prisma.CanvaConnectionCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaConnectionPayload>
+        }
+        createMany: {
+          args: Prisma.CanvaConnectionCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.CanvaConnectionCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaConnectionPayload>[]
+        }
+        delete: {
+          args: Prisma.CanvaConnectionDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaConnectionPayload>
+        }
+        update: {
+          args: Prisma.CanvaConnectionUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaConnectionPayload>
+        }
+        deleteMany: {
+          args: Prisma.CanvaConnectionDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.CanvaConnectionUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.CanvaConnectionUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaConnectionPayload>[]
+        }
+        upsert: {
+          args: Prisma.CanvaConnectionUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaConnectionPayload>
+        }
+        aggregate: {
+          args: Prisma.CanvaConnectionAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateCanvaConnection>
+        }
+        groupBy: {
+          args: Prisma.CanvaConnectionGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.CanvaConnectionGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.CanvaConnectionCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.CanvaConnectionCountAggregateOutputType> | number
+        }
+      }
+    }
+    CanvaReturnState: {
+      payload: Prisma.$CanvaReturnStatePayload<ExtArgs>
+      fields: Prisma.CanvaReturnStateFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.CanvaReturnStateFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaReturnStatePayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.CanvaReturnStateFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaReturnStatePayload>
+        }
+        findFirst: {
+          args: Prisma.CanvaReturnStateFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaReturnStatePayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.CanvaReturnStateFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaReturnStatePayload>
+        }
+        findMany: {
+          args: Prisma.CanvaReturnStateFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaReturnStatePayload>[]
+        }
+        create: {
+          args: Prisma.CanvaReturnStateCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaReturnStatePayload>
+        }
+        createMany: {
+          args: Prisma.CanvaReturnStateCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.CanvaReturnStateCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaReturnStatePayload>[]
+        }
+        delete: {
+          args: Prisma.CanvaReturnStateDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaReturnStatePayload>
+        }
+        update: {
+          args: Prisma.CanvaReturnStateUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaReturnStatePayload>
+        }
+        deleteMany: {
+          args: Prisma.CanvaReturnStateDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.CanvaReturnStateUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.CanvaReturnStateUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaReturnStatePayload>[]
+        }
+        upsert: {
+          args: Prisma.CanvaReturnStateUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$CanvaReturnStatePayload>
+        }
+        aggregate: {
+          args: Prisma.CanvaReturnStateAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateCanvaReturnState>
+        }
+        groupBy: {
+          args: Prisma.CanvaReturnStateGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.CanvaReturnStateGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.CanvaReturnStateCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.CanvaReturnStateCountAggregateOutputType> | number
+        }
+      }
+    }
   }
 } & {
   other: {
@@ -8327,7 +9002,13 @@ export const BrandScalarFieldEnum = {
   industry: 'industry',
   specialAdCategory: 'specialAdCategory',
   createdAt: 'createdAt',
-  updatedAt: 'updatedAt'
+  updatedAt: 'updatedAt',
+  logoMediaKey: 'logoMediaKey',
+  fontStyle: 'fontStyle',
+  defaultLanguage: 'defaultLanguage',
+  tagline: 'tagline',
+  contactLine: 'contactLine',
+  isDefault: 'isDefault'
 } as const
 
 export type BrandScalarFieldEnum = (typeof BrandScalarFieldEnum)[keyof typeof BrandScalarFieldEnum]
@@ -8423,7 +9104,19 @@ export const AdCampaignScalarFieldEnum = {
   assistantKey: 'assistantKey',
   lifetimeBudgetMinor: 'lifetimeBudgetMinor',
   targetCostPerResultMinor: 'targetCostPerResultMinor',
-  sandbox: 'sandbox'
+  sandbox: 'sandbox',
+  goal: 'goal',
+  surface: 'surface',
+  sourceKind: 'sourceKind',
+  sourceRef: 'sourceRef',
+  sourcePostTargetId: 'sourcePostTargetId',
+  placementMode: 'placementMode',
+  reviewState: 'reviewState',
+  reviewCheckedAt: 'reviewCheckedAt',
+  advantageState: 'advantageState',
+  discardedAt: 'discardedAt',
+  runDays: 'runDays',
+  startMode: 'startMode'
 } as const
 
 export type AdCampaignScalarFieldEnum = (typeof AdCampaignScalarFieldEnum)[keyof typeof AdCampaignScalarFieldEnum]
@@ -8439,7 +9132,16 @@ export const AdSetScalarFieldEnum = {
   targeting: 'targeting',
   dailyBudgetMinor: 'dailyBudgetMinor',
   createdAt: 'createdAt',
-  lifetimeBudgetMinor: 'lifetimeBudgetMinor'
+  lifetimeBudgetMinor: 'lifetimeBudgetMinor',
+  variantKey: 'variantKey',
+  audienceId: 'audienceId',
+  optimizationGoal: 'optimizationGoal',
+  destinationType: 'destinationType',
+  bidStrategy: 'bidStrategy',
+  bidAmountMinor: 'bidAmountMinor',
+  schedule: 'schedule',
+  effectiveStatus: 'effectiveStatus',
+  effectivePlacements: 'effectivePlacements'
 } as const
 
 export type AdSetScalarFieldEnum = (typeof AdSetScalarFieldEnum)[keyof typeof AdSetScalarFieldEnum]
@@ -8454,7 +9156,14 @@ export const AdScalarFieldEnum = {
   name: 'name',
   status: 'status',
   creative: 'creative',
-  createdAt: 'createdAt'
+  createdAt: 'createdAt',
+  format: 'format',
+  mediaIds: 'mediaIds',
+  variantLabel: 'variantLabel',
+  sourcePostRef: 'sourcePostRef',
+  effectiveStatus: 'effectiveStatus',
+  reviewFeedback: 'reviewFeedback',
+  reviewCheckedAt: 'reviewCheckedAt'
 } as const
 
 export type AdScalarFieldEnum = (typeof AdScalarFieldEnum)[keyof typeof AdScalarFieldEnum]
@@ -8473,7 +9182,15 @@ export const InsightSnapshotScalarFieldEnum = {
   frequency: 'frequency',
   qualityRanking: 'qualityRanking',
   raw: 'raw',
-  createdAt: 'createdAt'
+  createdAt: 'createdAt',
+  reach: 'reach',
+  linkClicks: 'linkClicks',
+  thruplays: 'thruplays',
+  videoP25: 'videoP25',
+  videoP50: 'videoP50',
+  videoP75: 'videoP75',
+  videoP100: 'videoP100',
+  messagingStarts: 'messagingStarts'
 } as const
 
 export type InsightSnapshotScalarFieldEnum = (typeof InsightSnapshotScalarFieldEnum)[keyof typeof InsightSnapshotScalarFieldEnum]
@@ -8505,7 +9222,17 @@ export const LeadFormScalarFieldEnum = {
   name: 'name',
   consentText: 'consentText',
   status: 'status',
-  createdAt: 'createdAt'
+  createdAt: 'createdAt',
+  origin: 'origin',
+  formType: 'formType',
+  locale: 'locale',
+  spec: 'spec',
+  metaStatus: 'metaStatus',
+  syncedAt: 'syncedAt',
+  copiedFromId: 'copiedFromId',
+  lastBackfillAt: 'lastBackfillAt',
+  testLeadUntil: 'testLeadUntil',
+  hiddenAt: 'hiddenAt'
 } as const
 
 export type LeadFormScalarFieldEnum = (typeof LeadFormScalarFieldEnum)[keyof typeof LeadFormScalarFieldEnum]
@@ -8525,7 +9252,13 @@ export const LeadScalarFieldEnum = {
   status: 'status',
   assignedToId: 'assignedToId',
   firstResponseAt: 'firstResponseAt',
-  createdAt: 'createdAt'
+  createdAt: 'createdAt',
+  source: 'source',
+  platform: 'platform',
+  adsetMetaId: 'adsetMetaId',
+  isOrganic: 'isOrganic',
+  isTest: 'isTest',
+  conversationId: 'conversationId'
 } as const
 
 export type LeadScalarFieldEnum = (typeof LeadScalarFieldEnum)[keyof typeof LeadScalarFieldEnum]
@@ -9363,6 +10096,218 @@ export const NoticeScanStateScalarFieldEnum = {
 export type NoticeScanStateScalarFieldEnum = (typeof NoticeScanStateScalarFieldEnum)[keyof typeof NoticeScanStateScalarFieldEnum]
 
 
+export const AdMediaScalarFieldEnum = {
+  id: 'id',
+  tenantId: 'tenantId',
+  adAccountAssetId: 'adAccountAssetId',
+  source: 'source',
+  sourceKey: 'sourceKey',
+  kind: 'kind',
+  mime: 'mime',
+  bytes: 'bytes',
+  sha256: 'sha256',
+  width: 'width',
+  height: 'height',
+  durationMs: 'durationMs',
+  videoCodec: 'videoCodec',
+  rotation: 'rotation',
+  ratio: 'ratio',
+  fits: 'fits',
+  problems: 'problems',
+  metaImageHash: 'metaImageHash',
+  metaVideoId: 'metaVideoId',
+  metaThumbHash: 'metaThumbHash',
+  status: 'status',
+  error: 'error',
+  attempts: 'attempts',
+  nextCheckAt: 'nextCheckAt',
+  lastUsedAt: 'lastUsedAt',
+  adOnly: 'adOnly',
+  createdByUserId: 'createdByUserId',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type AdMediaScalarFieldEnum = (typeof AdMediaScalarFieldEnum)[keyof typeof AdMediaScalarFieldEnum]
+
+
+export const AdAudienceScalarFieldEnum = {
+  id: 'id',
+  tenantId: 'tenantId',
+  adAccountAssetId: 'adAccountAssetId',
+  kind: 'kind',
+  name: 'name',
+  metaAudienceId: 'metaAudienceId',
+  spec: 'spec',
+  status: 'status',
+  sizeLower: 'sizeLower',
+  sizeUpper: 'sizeUpper',
+  deliveryStatus: 'deliveryStatus',
+  consentBasis: 'consentBasis',
+  rowsUploaded: 'rowsUploaded',
+  lastSyncedAt: 'lastSyncedAt',
+  lastError: 'lastError',
+  createdByUserId: 'createdByUserId',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt',
+  deletedAt: 'deletedAt'
+} as const
+
+export type AdAudienceScalarFieldEnum = (typeof AdAudienceScalarFieldEnum)[keyof typeof AdAudienceScalarFieldEnum]
+
+
+export const AdAudienceUploadScalarFieldEnum = {
+  id: 'id',
+  tenantId: 'tenantId',
+  audienceId: 'audienceId',
+  sessionId: 'sessionId',
+  mode: 'mode',
+  totalRows: 'totalRows',
+  sentRows: 'sentRows',
+  batchSeq: 'batchSeq',
+  status: 'status',
+  requestedByUserId: 'requestedByUserId',
+  startedAt: 'startedAt',
+  finishedAt: 'finishedAt',
+  error: 'error',
+  createdAt: 'createdAt'
+} as const
+
+export type AdAudienceUploadScalarFieldEnum = (typeof AdAudienceUploadScalarFieldEnum)[keyof typeof AdAudienceUploadScalarFieldEnum]
+
+
+export const AdTestScalarFieldEnum = {
+  id: 'id',
+  tenantId: 'tenantId',
+  campaignId: 'campaignId',
+  kind: 'kind',
+  mode: 'mode',
+  metaStudyId: 'metaStudyId',
+  metric: 'metric',
+  minResults: 'minResults',
+  minDays: 'minDays',
+  status: 'status',
+  winnerAdSetId: 'winnerAdSetId',
+  verdict: 'verdict',
+  decidedAt: 'decidedAt',
+  decidedByUserId: 'decidedByUserId',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type AdTestScalarFieldEnum = (typeof AdTestScalarFieldEnum)[keyof typeof AdTestScalarFieldEnum]
+
+
+export const InsightBreakdownScalarFieldEnum = {
+  id: 'id',
+  tenantId: 'tenantId',
+  entityType: 'entityType',
+  entityMetaId: 'entityMetaId',
+  date: 'date',
+  dimension: 'dimension',
+  dimKey: 'dimKey',
+  spendMinor: 'spendMinor',
+  impressions: 'impressions',
+  reach: 'reach',
+  clicks: 'clicks',
+  results: 'results',
+  thruplays: 'thruplays',
+  raw: 'raw',
+  syncedAt: 'syncedAt'
+} as const
+
+export type InsightBreakdownScalarFieldEnum = (typeof InsightBreakdownScalarFieldEnum)[keyof typeof InsightBreakdownScalarFieldEnum]
+
+
+export const StudioItemScalarFieldEnum = {
+  id: 'id',
+  tenantId: 'tenantId',
+  mediaKey: 'mediaKey',
+  kind: 'kind',
+  source: 'source',
+  title: 'title',
+  templateId: 'templateId',
+  templateVersion: 'templateVersion',
+  size: 'size',
+  format: 'format',
+  width: 'width',
+  height: 'height',
+  bytes: 'bytes',
+  sha256: 'sha256',
+  inputs: 'inputs',
+  brandId: 'brandId',
+  canvaDesignId: 'canvaDesignId',
+  canvaPage: 'canvaPage',
+  canvaUserId: 'canvaUserId',
+  parentItemId: 'parentItemId',
+  createdByUserId: 'createdByUserId',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type StudioItemScalarFieldEnum = (typeof StudioItemScalarFieldEnum)[keyof typeof StudioItemScalarFieldEnum]
+
+
+export const StudioJobScalarFieldEnum = {
+  id: 'id',
+  tenantId: 'tenantId',
+  userId: 'userId',
+  kind: 'kind',
+  state: 'state',
+  input: 'input',
+  progress: 'progress',
+  resultItemIds: 'resultItemIds',
+  error: 'error',
+  attempts: 'attempts',
+  nextPollAt: 'nextPollAt',
+  finishedAt: 'finishedAt',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type StudioJobScalarFieldEnum = (typeof StudioJobScalarFieldEnum)[keyof typeof StudioJobScalarFieldEnum]
+
+
+export const CanvaConnectionScalarFieldEnum = {
+  id: 'id',
+  tenantId: 'tenantId',
+  userId: 'userId',
+  canvaUserId: 'canvaUserId',
+  canvaTeamId: 'canvaTeamId',
+  displayName: 'displayName',
+  scopes: 'scopes',
+  accessTokenEnc: 'accessTokenEnc',
+  refreshTokenEnc: 'refreshTokenEnc',
+  accessExpiresAt: 'accessExpiresAt',
+  refreshingUntil: 'refreshingUntil',
+  status: 'status',
+  lastError: 'lastError',
+  lastUsedAt: 'lastUsedAt',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type CanvaConnectionScalarFieldEnum = (typeof CanvaConnectionScalarFieldEnum)[keyof typeof CanvaConnectionScalarFieldEnum]
+
+
+export const CanvaReturnStateScalarFieldEnum = {
+  id: 'id',
+  tenantId: 'tenantId',
+  userId: 'userId',
+  connectionId: 'connectionId',
+  designId: 'designId',
+  purpose: 'purpose',
+  itemId: 'itemId',
+  exportSpec: 'exportSpec',
+  returnPath: 'returnPath',
+  createdAt: 'createdAt',
+  expiresAt: 'expiresAt',
+  usedAt: 'usedAt'
+} as const
+
+export type CanvaReturnStateScalarFieldEnum = (typeof CanvaReturnStateScalarFieldEnum)[keyof typeof CanvaReturnStateScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -9950,6 +10895,15 @@ export type GlobalOmitConfig = {
   notice?: Prisma.NoticeOmit
   noticeReceipt?: Prisma.NoticeReceiptOmit
   noticeScanState?: Prisma.NoticeScanStateOmit
+  adMedia?: Prisma.AdMediaOmit
+  adAudience?: Prisma.AdAudienceOmit
+  adAudienceUpload?: Prisma.AdAudienceUploadOmit
+  adTest?: Prisma.AdTestOmit
+  insightBreakdown?: Prisma.InsightBreakdownOmit
+  studioItem?: Prisma.StudioItemOmit
+  studioJob?: Prisma.StudioJobOmit
+  canvaConnection?: Prisma.CanvaConnectionOmit
+  canvaReturnState?: Prisma.CanvaReturnStateOmit
 }
 
 /* Types for Logging */

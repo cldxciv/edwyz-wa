@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { receivableWhere } from "@/lib/contacts/opt-out";
 import { type Actor, HttpError } from "@/lib/tenancy";
 import { broadcastSupportReason } from "./components";
 import { parsePolicy, parseVariableMap } from "./mapping";
@@ -77,8 +78,9 @@ export async function createFollowUp(actor: Actor, id: string, input: { template
     });
     if (open > 0) throw new HttpError(409, "There is already an unfinished retry for this broadcast. Send it or cancel it first, so nobody is messaged twice.");
   }
+  // A follow-up is a broadcast: it needs a recorded opt-in, which an opt-out clears, and opted-out people never get its marketing.
   const rows = await prisma.broadcastRecipient.findMany({
-    where: { tenantId: actor.tenantId, broadcastId: source.id, status: { in: STATUSES[outcome] }, contact: { optIn: true, optedOutAt: null } },
+    where: { tenantId: actor.tenantId, broadcastId: source.id, status: { in: STATUSES[outcome] }, contact: { optIn: true, ...receivableWhere("marketing") } },
     select: { contactId: true },
     take: CAP,
   });

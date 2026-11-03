@@ -1,0 +1,34 @@
+# /etc/logrotate.d/edwyz-wa: rotates wa's own log files (the cron logs and the two pm2 apps' logs), and nothing else on the shared VPS.
+#   /var/log/edwyz-wa-alert.log        deploy/alert-wa.sh (a line every 5 minutes)
+#   /var/log/edwyz-wa-alert.cron.log   deploy/cron-wa-alert
+#   /var/log/edwyz-wa-backup.log       deploy/cron-wa-backup
+#   /var/log/edwyz-wa-tick.log         deploy/cron-wa-tick (errors only)
+#   /var/log/edwyz-wa-restore-check.log  restore-check-wa.sh when RESTORE_CHECK_LOG points there
+# pm2's logs of the two wa apps are rotated by the second block, with copytruncate because pm2 keeps them open. The owner chose this
+# over pm2-logrotate (2026-10-31: "rotate wa logs only"), which would also rotate the other tenants' pm2 logs. Use one, never both.
+# Install (root): install -m 644 deploy/logrotate-edwyz-wa /etc/logrotate.d/edwyz-wa && logrotate -d /etc/logrotate.d/edwyz-wa
+# The daily logrotate run (cron.daily or the logrotate.timer) picks it up; nothing to restart. Every writer opens its file afresh
+# for each line or run, so a plain rename is safe and copytruncate is not needed. If `logrotate -d` reports insecure permissions
+# on /var/log, the host's /etc/logrotate.conf lacks Ubuntu's global `su root adm`: add `su root adm` inside the block below.
+/var/log/edwyz-wa-*.log {
+    weekly
+    maxsize 20M
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root root
+}
+
+# edwyz-wa-out.log, edwyz-wa-error.log and the worker's edwyz-wa-worker-out.log and edwyz-wa-worker-error.log.
+/root/.pm2/logs/edwyz-wa-*.log {
+    daily
+    maxsize 20M
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}

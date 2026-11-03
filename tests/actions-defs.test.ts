@@ -262,15 +262,18 @@ describe("send_text_reply (4.6, EDDY-05 acceptance 4 and 14)", () => {
     expect(sent.origin).not.toBe("human");
   });
 
-  it("refuses a closed 24-hour window and an opted-out contact, before any card or send", async () => {
+  it("refuses a closed 24-hour window before any card or send", async () => {
     const closed = await proposeAction(eddy(), "send_text_reply", { conversationId: "cv_closed", text: "Hi" }, {}, testDeps());
     expect(closed.model).toMatchObject({ status: "failed", code: "conflict" });
     expect((closed.model as { detail: { text: string } }).detail.text).toMatch(/24-hour customer service window is closed/);
-    const optedOut = await proposeAction(eddy(), "send_text_reply", { conversationId: "cv_out", text: "Hi" }, {}, testDeps());
-    expect(optedOut.model).toMatchObject({ status: "failed", code: "conflict" });
-    expect((optedOut.model as { detail: { text: string } }).detail.text).toMatch(/opted out/);
     expect(h.sendText).not.toHaveBeenCalled();
     expect(h.db.rows("actionRecord").filter((r) => r.action === "send_text_reply")).toHaveLength(0);
+  });
+
+  it("offers a reply card for a contact who opted out: an opt-out stops marketing only, and nothing is sent before the tap", async () => {
+    const optedOut = await proposeAction(eddy(), "send_text_reply", { conversationId: "cv_out", text: "Hi" }, {}, testDeps());
+    expect(optedOut.model).toMatchObject({ status: "preview_shown" });
+    expect(h.sendText).not.toHaveBeenCalled();
   });
 
   it("re-checks the window at confirm: a window that closed since the preview refuses the tap", async () => {

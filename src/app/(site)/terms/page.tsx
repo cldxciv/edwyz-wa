@@ -24,13 +24,13 @@ export default function TermsPage() {
     <LegalDoc title="Terms of Service" summary={SUMMARY} sections={S}>
       <Sec section={sec("service")}>
         <p>
-          These terms govern your use of {COMPANY.product} at wa.edwyz.com, provided by {COMPANY.legalName} (&ldquo;Edwyz&rdquo;, &ldquo;we&rdquo;). By
+          These terms govern your use of {COMPANY.product} at wa.edwyz.com, provided by {COMPANY.legalName}{" "}(&ldquo;Edwyz&rdquo;, &ldquo;we&rdquo;). By
           creating an account or using the service you agree to them for yourself and the business you represent.
         </p>
         <p>
-          {COMPANY.product} is software that lets a business connect its own WhatsApp Business number to the WhatsApp Business Platform through Meta&apos;s
+          {COMPANY.product}{" "}is software that lets a business connect its own WhatsApp Business number to the WhatsApp Business Platform through Meta&apos;s
           Embedded Signup, and manage conversations in a team inbox, message templates, contacts, broadcasts and automations. The WhatsApp Business Platform is
-          run by Meta, not by us. We are independent of Meta and not endorsed by it. See our <a href="/privacy">Privacy Policy</a> for how data is handled.
+          run by Meta, not by us. We are independent of Meta and not endorsed by it. See our <a href="/privacy">Privacy Policy</a>{" "}for how data is handled.
         </p>
       </Sec>
 
@@ -44,7 +44,7 @@ export default function TermsPage() {
       <Sec section={sec("accounts")}>
         <p>
           Give accurate information and keep it up to date. Keep your password and any two-factor codes or API keys secret, and tell us promptly at{" "}
-          <a href={`mailto:${COMPANY.email}`}>{COMPANY.email}</a> if you suspect unauthorised use. You are responsible for activity under your workspace,
+          <a href={`mailto:${COMPANY.email}`}>{COMPANY.email}</a>{" "}if you suspect unauthorised use. You are responsible for activity under your workspace,
           including by people you invite and integrations you create.
         </p>
       </Sec>
@@ -84,30 +84,30 @@ export default function TermsPage() {
       <Sec section={sec("meta-ads-ai")}>
         <ul>
           <li>
-            <strong>Facebook, Instagram and ads.</strong> If you connect Pages, Instagram accounts or ad accounts, you confirm you are allowed to manage them
+            <strong>Facebook, Instagram and ads.</strong>{" "}If you connect Pages, Instagram accounts or ad accounts, you confirm you are allowed to manage them
             and you must follow the <a href={META_LINKS.metaPlatformTerms}>Meta Platform Terms</a> and Meta&apos;s{" "}
             <a href={META_LINKS.metaAdsPolicies}>advertising standards</a>. Ad spend is charged by Meta to your own ad account payment method, not by us.
             Campaigns are created paused and nothing that spends money runs until an owner or admin confirms it, within the daily budget cap you set.
           </li>
           <li>
-            <strong>Lead ads.</strong> You are responsible for the consent text on your lead forms, for having a lawful basis to contact the people who
+            <strong>Lead ads.</strong>{" "}You are responsible for the consent text on your lead forms, for having a lawful basis to contact the people who
             submit them, and for the way you use their answers. Do not use lead data for anything the form did not tell people about.
           </li>
           <li>
-            <strong>AI features.</strong> They are optional. AI output can be wrong or unsuitable. You are responsible for reviewing AI-written replies,
+            <strong>AI features.</strong>{" "}They are optional. AI output can be wrong or unsuitable. You are responsible for reviewing AI-written replies,
             ad copy and images before relying on or publishing them, and for telling your customers when an AI assistant replies to them. AI features
             use Anthropic as a subprocessor, as described in the <a href="/privacy">Privacy Policy</a>, and use AI credits where your plan meters them.
           </li>
           <li>
-            <strong>Eddy.</strong> Eddy acts on your instructions and your confirmations. Check each preview before you confirm; you are responsible for
+            <strong>Eddy.</strong>{" "}Eddy acts on your instructions and your confirmations. Check each preview before you confirm; you are responsible for
             messages and changes you approve. Eddy&apos;s answers may be inaccurate.
           </li>
           <li>
-            <strong>Shopify.</strong> If you connect a Shopify store you must have the right to do so and a lawful basis to message your shoppers; abandoned
+            <strong>Shopify.</strong>{" "}If you connect a Shopify store you must have the right to do so and a lawful basis to message your shoppers; abandoned
             cart reminders go only to contacts who opted in.
           </li>
           <li>
-            <strong>Disconnecting.</strong> You can disconnect any connection in Settings. If the person who connected Facebook removes the app in Facebook,
+            <strong>Disconnecting.</strong>{" "}You can disconnect any connection in Settings. If the person who connected Facebook removes the app in Facebook,
             we erase the data that came only from that connection, as the Privacy Policy describes, and features that depend on it stop working.
           </li>
         </ul>
@@ -136,33 +136,33 @@ export default function TermsPage() {
       <Sec section={sec("plans-billing")}>
         <ul>
           <li>
-            <strong>Trial.</strong> New workspaces start with a free trial. Its length is set by us in the product and shown in the account. When it ends,
+            <strong>Trial.</strong>{" "}New workspaces start with a free trial. Its length is set by us in the product and shown in the account. When it ends,
             the workspace becomes read-only (you can view data and visit billing) until you subscribe.
           </li>
           <li>
-            <strong>Plans and price.</strong> Plan features, limits and prices are shown in the product before you subscribe. Prices are in Indian rupees
+            <strong>Plans and price.</strong>{" "}Plan features, limits and prices are shown in the product before you subscribe. Prices are in Indian rupees
             (INR) and include GST unless the page says otherwise; GST is shown on your invoice. Invoices are issued once we have a GST registration on file;
             until then they are marked as proforma and are not tax invoices.
           </li>
           <li>
-            <strong>Payment.</strong> Subscriptions are charged through Razorpay on a recurring basis using the payment method you authorise. Razorpay&apos;s
+            <strong>Payment.</strong>{" "}Subscriptions are charged through Razorpay on a recurring basis using the payment method you authorise. Razorpay&apos;s
             terms apply to the payment. We do not store your card or UPI details.
           </li>
           <li>
-            <strong>Failed payment.</strong> If a renewal fails, Razorpay retries. Access continues for a grace period shown in the product. If payment is
+            <strong>Failed payment.</strong>{" "}If a renewal fails, Razorpay retries. Access continues for a grace period shown in the product. If payment is
             not made by then, the workspace becomes read-only until payment succeeds.
           </li>
           <li>
-            <strong>Cancellation.</strong> You can cancel from the billing page. Cancellation takes effect at the end of the current billing period and you
+            <strong>Cancellation.</strong>{" "}You can cancel from the billing page. Cancellation takes effect at the end of the current billing period and you
             keep access until then. A cancelled subscription cannot be reactivated; you start a new one. To change plan, cancel at the end of the period and
             choose the new plan.
           </li>
           <li>
-            <strong>Mistakes and refunds.</strong> If you think you were billed incorrectly, email <a href={`mailto:${COMPANY.email}`}>{COMPANY.email}</a> and
+            <strong>Mistakes and refunds.</strong> If you think you were billed incorrectly, email <a href={`mailto:${COMPANY.email}`}>{COMPANY.email}</a>{" "}and
             we will review it and correct genuine errors. Any other refund is at our discretion unless the law requires otherwise.
           </li>
           <li>
-            <strong>Changes.</strong> We may change plans and prices. A change does not affect a billing period already paid, and we will give notice before
+            <strong>Changes.</strong>{" "}We may change plans and prices. A change does not affect a billing period already paid, and we will give notice before
             it applies to your next renewal.
           </li>
         </ul>
@@ -198,7 +198,7 @@ export default function TermsPage() {
         <p>
           To the extent the law allows, we are not liable for indirect, incidental, special or consequential loss, or for loss of profit, revenue, goodwill or
           data, or for loss caused by Meta, Razorpay or other third parties. Our total liability for all claims arising from the service is limited to the fees
-          you paid us in the {LEGAL.liabilityCapMonths} months before the claim arose. Nothing in these terms limits liability that cannot be limited by law.
+          you paid us in the {LEGAL.liabilityCapMonths}{" "}months before the claim arose. Nothing in these terms limits liability that cannot be limited by law.
         </p>
       </Sec>
 
@@ -212,7 +212,7 @@ export default function TermsPage() {
       <Sec section={sec("termination")}>
         <p>
           You can stop using the service at any time and cancel your plan as described above. We may end access for serious or repeated breach, or if the service
-          is discontinued, with notice where practical. On exit, you can ask us at <a href={`mailto:${COMPANY.email}`}>{COMPANY.email}</a> to export or delete your workspace data, and we will handle the request as
+          is discontinued, with notice where practical. On exit, you can ask us at <a href={`mailto:${COMPANY.email}`}>{COMPANY.email}</a>{" "}to export or delete your workspace data, and we will handle the request as
           described in the <a href="/privacy">Privacy Policy</a> and on the <a href="/data-deletion">data deletion page</a>, except records we must keep by
           law. Sections that by their nature should survive, such as liability, indemnity and governing law, continue after termination.
         </p>

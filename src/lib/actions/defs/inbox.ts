@@ -11,6 +11,7 @@
  * send_text_reply sends with origin `eddy` (Phase 0 4.9, B14) and sentByUserId = the member who tapped; it is never `human`.
  */
 import { customerLanguage as detectCustomerLanguage } from "@/lib/eddy/language";
+import { mayReceive } from "@/lib/contacts/opt-out";
 import { HttpError, type Actor } from "@/lib/tenancy";
 import type { AutomationEvent, UndoRecord } from "../types";
 import { fixForCode } from "./help";
@@ -56,7 +57,8 @@ const emit = () => import("@/lib/automation/v2/emit");
 
 export const AGENT_BOT_MESSAGE = "You can only stop a chatbot on your own chats or unassigned ones.";
 export const WINDOW_CLOSED_MESSAGE = "The 24-hour customer service window is closed. Send an approved template message instead.";
-export const OPTED_OUT_MESSAGE = "This contact opted out, so Eddy won't message them. Reply yourself only if they wrote to you again.";
+/** Refusal used if the opt-out rule ever blocks a reply (lib/contacts/opt-out.ts). Today an opt-out stops marketing only, so replies in the window go. */
+export const OPTED_OUT_MESSAGE = "This contact opted out of marketing messages, so Eddy won't send them offers. Replies to their own messages and order updates can still go.";
 export const RESTART_BOT_MESSAGE = "Restarting the bot sends the customer messages, so restart it yourself from the chat.";
 const WINDOW_MS = 24 * 60 * 60 * 1000;
 /** The window warning shows when it closes within this many minutes (6.5). */
@@ -821,7 +823,8 @@ async function sendGuards(actor: Actor, a: SendArgs, now: Date) {
   const { chat, contact } = await loadChat(actor, a.conversationId);
   if (chat.status === "blocked") throw new HttpError(409, "This chat is blocked. Unblock it before replying.");
   if (!windowOpen(chat.lastInboundAt, now)) throw new HttpError(409, WINDOW_CLOSED_MESSAGE);
-  if (contact?.optedOutAt) throw new HttpError(409, OPTED_OUT_MESSAGE);
+  // A reply in the open window: an opt-out stops marketing only (lib/contacts/opt-out.ts).
+  if (contact && !mayReceive(contact, "service")) throw new HttpError(409, OPTED_OUT_MESSAGE);
   return { chat, contact };
 }
 
@@ -832,7 +835,7 @@ const sendTextReply = define<SendArgs, { messageId: string; conversationId: stri
   surfaces: ["eddy"],
   titleKey: "status.send_text_reply",
   description:
-    "Prepares a text reply to a customer inside the 24-hour window. It shows a preview card with the exact text; nothing is sent until the member taps Send. Only when the member asked to send; otherwise use draft_reply. Write in the customer's language. Refused when the window is closed (use a template on the chat page) or the contact opted out.",
+    "Prepares a text reply to a customer inside the 24-hour window. It shows a preview card with the exact text; nothing is sent until the member taps Send. Only when the member asked to send; otherwise use draft_reply. Write in the customer's language. Refused when the window is closed (use a template on the chat page). A contact who opted out of marketing can still get replies to their own messages.",
   inputSchema: obj({ conversationId: id("The chat id."), text: str("The exact reply text.", 4096, 1) }, ["conversationId", "text"]),
   minRole: "agent",
   route: { method: "POST", path: "/api/inbox/conversations/[id]/messages" },

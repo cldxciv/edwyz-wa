@@ -3,7 +3,7 @@ import path from "node:path";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { formatMinor } from "@/lib/spend/money";
-import { addDays, compareDays, monthEndDay, startOfLocalDay, weekStartOfDay } from "@/lib/spend/periods";
+import { addDays, compareDays, dayKey, monthEndDay, startOfLocalDay, weekStartOfDay } from "@/lib/spend/periods";
 import {
   ceil175,
   ceil210,
@@ -15,10 +15,13 @@ import {
   maxDailyBudgetWithin,
   NO_SPEND,
   remainingMonth,
+  RUN_MAX_DAYS,
+  runWorstCase,
   weekCap,
   withBudgetChange,
   type CommitmentMath,
   type CommitmentSpend,
+  type RunWorstCaseInput,
 } from "@/lib/spend/worstcase";
 
 /** docs/SPEND-CONTROLS-SPEC.md 4.5 and 10.1 (spend-worstcase.test.ts). */
@@ -342,6 +345,168 @@ describe("fast-check adversary (1.75x a day, 7x a week)", () => {
         return true;
       }),
       { numRuns: 80 },
+    );
+  }, 120_000);
+});
+
+// =====================================================================================================================
+// runWorstCase: the cost card's run (docs/IG-PAGE-ADS-SPEC.md 6.2, request P0-5, PRM-01 acceptance 6)
+// =====================================================================================================================
+
+/** A wall-clock time in Asia/Kolkata ("2026-10-28T10:05"). */
+const ist = (local: string) => new Date(`${local}:00+05:30`);
+const RS = (rupees: number) => BigInt(rupees) * 100n;
+const months = (r: { byMonth: { month: string; minor: bigint }[] }) => Object.fromEntries(r.byMonth.map((m) => [m.month, formatMinor(m.minor, "INR")]));
+/** Started now: Wednesday 28 Oct 2026 at 10:05 in Kolkata. */
+const NOW_28_OCT = ist("2026-10-28T10:05");
+const run = (dailyRupees: number, endsLocal: string, over: Partial<RunWorstCaseInput> = {}) =>
+  runWorstCase({ dailyMinor: RS(dailyRupees), startsAt: NOW_28_OCT, endsAt: ist(endsLocal), tz: IST, now: NOW_28_OCT, ...over });
+const addRuns = (rs: ReturnType<typeof runWorstCase>[]) => ({
+  aboutMinor: rs.reduce((s, r) => s + r.aboutMinor, 0n),
+  totalMinor: rs.reduce((s, r) => s + r.totalMinor, 0n),
+  todayMinor: rs.reduce((s, r) => s + r.todayMinor, 0n),
+  byMonth: rs[0].byMonth.map((m, i) => ({ month: m.month, minor: rs.reduce((s, r) => s + r.byMonth[i].minor, 0n) })),
+});
+
+describe("runWorstCase: the pinned examples of 6.2", () => {
+  it("₹300 x 5 days: about ₹1,500; at most ₹2,625 (Oct ₹2,100, Nov ₹525); today ₹525", () => {
+    const r = run(300, "2026-11-01T23:59");
+    expect(formatMinor(r.aboutMinor, "INR")).toBe("₹1,500");
+    expect(formatMinor(r.totalMinor, "INR")).toBe("₹2,625");
+    expect(months(r)).toEqual({ "2026-10": "₹2,100", "2026-11": "₹525" });
+    expect(formatMinor(r.todayMinor, "INR")).toBe("₹525");
+    expect(r.byMonth.map((m) => m.month)).toEqual(["2026-10", "2026-11"]);
+  });
+
+  it("₹300 x 7 days: about ₹2,100; at most ₹3,675 (Oct ₹2,100, Nov ₹1,575); today ₹525", () => {
+    const r = run(300, "2026-11-03T23:59");
+    expect(r).toMatchObject({ aboutMinor: RS(2_100), totalMinor: RS(3_675), todayMinor: RS(525) });
+    expect(months(r)).toEqual({ "2026-10": "₹2,100", "2026-11": "₹1,575" });
+  });
+
+  it("₹1,000 a day, 1 to 31 Oct (from 1 Oct): about ₹31,000; at most ₹33,250 (all in Oct); today ₹1,750", () => {
+    const start = ist("2026-10-01T10:05");
+    const r = runWorstCase({ dailyMinor: RS(1_000), startsAt: start, endsAt: ist("2026-10-31T23:59"), tz: IST, now: start });
+    expect(r).toEqual({ aboutMinor: RS(31_000), totalMinor: RS(33_250), byMonth: [{ month: "2026-10", minor: RS(33_250) }], todayMinor: RS(1_750) });
+    // The third row is Phase 0's 4.5 table.
+    expect(r.byMonth[0].minor).toBe(remainingMonth(daily(RS(1_000), { endsAt: ist("2026-10-31T23:59") }), start, IST, NO_SPEND));
+  });
+
+  it("3 versions x ₹100 (₹300 in total) x 7 days: at most ₹3,675, the same as one ₹300 ad set (3.8)", () => {
+    const versions = [run(100, "2026-11-03T23:59"), run(100, "2026-11-03T23:59"), run(100, "2026-11-03T23:59")];
+    const sum = addRuns(versions);
+    expect(sum).toEqual({ aboutMinor: RS(2_100), totalMinor: RS(3_675), todayMinor: RS(525), byMonth: [{ month: "2026-10", minor: RS(2_100) }, { month: "2026-11", minor: RS(1_575) }] });
+    const single = run(300, "2026-11-03T23:59");
+    expect(sum.totalMinor).toBe(single.totalMinor);
+    expect(sum.byMonth).toEqual(single.byMonth);
+  });
+});
+
+describe("runWorstCase: Phase 0 parity and edges", () => {
+  it("a later start is counted from today until P0-10 (D32): only 'about' uses the start date", () => {
+    const fromToday = run(300, "2026-11-09T23:59");
+    const from5Nov = run(300, "2026-11-09T23:59", { startsAt: ist("2026-11-05T10:00") });
+    // 28-31 Oct ₹2,100; week of Sun 1 Nov: 7 x ₹525 capped at 7 x ₹300 = ₹2,100; 8-9 Nov ₹1,050.
+    expect(from5Nov.totalMinor).toBe(RS(5_250));
+    expect(from5Nov).toEqual({ ...fromToday, aboutMinor: RS(1_500) });
+    expect(fromToday.aboutMinor).toBe(RS(300 * 13));
+    expect(months(from5Nov)).toEqual({ "2026-10": "₹2,100", "2026-11": "₹3,150" });
+  });
+
+  it("this month's part is remainingMonth and today's is dayRisk, with peaks and spend already made", () => {
+    const now = ist("2026-10-28T15:00");
+    const endsAt = ist("2026-11-12T23:59");
+    const byDay = new Map<string, bigint>([["2026-10-25", RS(1_500)], ["2026-10-27", RS(2_000)], ["2026-10-28", RS(600)]]);
+    const r = runWorstCase({ dailyMinor: RS(1_000), startsAt: now, endsAt, tz: IST, now, peakTodayMinor: RS(1_500), weekPeakMinor: RS(2_000), spentByDay: byDay });
+    const c: CommitmentMath = { dailyBudgetMinor: RS(1_000), lifetimeBudgetMinor: null, peakToday: RS(1_500), weekPeak: RS(2_000), endsAt };
+    const s: CommitmentSpend = { byDay, lifetime: 0n, today: RS(600) };
+    expect(r.byMonth[0]).toEqual({ month: "2026-10", minor: remainingMonth(c, now, IST, s) });
+    expect(r.todayMinor).toBe(dayRisk(c, s, now));
+    expect(r.todayMinor).toBe(ceil175(RS(1_500)) - RS(600));
+  });
+
+  it("a week across a month boundary: each month shows its own maximum, and the total is one walk", () => {
+    // Sun 29 Nov to Sat 5 Dec 2026 at ₹1,000: one Sunday week, so Meta can spend at most 7 x ₹1,000 in all.
+    const now = ist("2026-11-29T09:00");
+    const r = runWorstCase({ dailyMinor: RS(1_000), startsAt: now, endsAt: ist("2026-12-05T23:59"), tz: IST, now });
+    expect(r.totalMinor).toBe(RS(7_000));
+    // November can take 2 x ₹1,750; if November spends nothing, December's rollover can set aside the whole week's ₹7,000.
+    expect(months(r)).toEqual({ "2026-11": "₹3,500", "2026-12": "₹7,000" });
+    // Spend already made this week lowers the December rollover too.
+    const mon = ist("2026-11-30T12:00");
+    const spent = new Map<string, bigint>([["2026-11-29", RS(1_750)], ["2026-11-30", RS(1_000)]]);
+    const r2 = runWorstCase({ dailyMinor: RS(1_000), startsAt: mon, endsAt: ist("2026-12-05T23:59"), tz: IST, now: mon, spentByDay: spent });
+    expect(r2.byMonth).toEqual([
+      { month: "2026-11", minor: RS(750) },
+      { month: "2026-12", minor: RS(4_250) },
+    ]);
+    expect(r2.totalMinor).toBe(RS(4_250));
+    expect(r2.todayMinor).toBe(RS(750));
+  });
+
+  it("an ended run adds nothing; a bad end date or a run past RUN_MAX_DAYS is refused", () => {
+    const now = ist("2026-10-28T10:05");
+    expect(runWorstCase({ dailyMinor: RS(300), startsAt: ist("2026-10-20T10:00"), endsAt: ist("2026-10-27T23:59"), tz: IST, now })).toEqual({ totalMinor: 0n, byMonth: [], todayMinor: 0n, aboutMinor: 0n });
+    expect(() => runWorstCase({ dailyMinor: RS(300), startsAt: now, endsAt: new Date(Number.NaN), tz: IST, now })).toThrow(RangeError);
+    expect(() => runWorstCase({ dailyMinor: RS(300), startsAt: now, endsAt: new Date(now.getTime() + (RUN_MAX_DAYS + 2) * 24 * HOUR), tz: IST, now })).toThrow(/at most/);
+    // 90 days, the longest promotion (to Tue 26 Jan 2027): four months of figures. 1 Dec and 1 Jan fall mid-week, so each of
+    // those months may take the whole of its first week's ₹2,100 if the month before spent nothing in that week.
+    const long = runWorstCase({ dailyMinor: RS(300), startsAt: now, endsAt: new Date(now.getTime() + 90 * 24 * HOUR), tz: IST, now });
+    expect(months(long)).toEqual({ "2026-10": "₹2,100", "2026-11": "₹9,450", "2026-12": "₹10,500", "2027-01": "₹8,925" });
+    // One walk: 28-31 Oct, 12 full weeks and Sun 24 to Tue 26 Jan.
+    expect(long.totalMinor).toBe(RS(2_100 + 12 * 2_100 + 3 * 525));
+    expect(long.aboutMinor).toBe(RS(300 * 91));
+  });
+
+  it("an unknown zone falls back to Asia/Kolkata, like remainingMonth", () => {
+    expect(run(300, "2026-11-01T23:59", { tz: "Mars/Olympus" })).toEqual(run(300, "2026-11-01T23:59"));
+  });
+});
+
+describe("runWorstCase: fast-check parity with remainingMonth and dayRisk (6.1 rule 16)", () => {
+  const caseArb = fc.record({
+    tz: fc.constantFrom(IST, NY, "UTC", "Asia/Tokyo", "Australia/Sydney"),
+    month: fc.constantFrom("2026-10", "2026-11", "2026-12", "2026-03", "2027-02"),
+    dayOfMonth: fc.integer({ min: 1, max: 28 }),
+    minuteOfDay: fc.integer({ min: 0, max: 24 * 60 - 1 }),
+    daily: fc.integer({ min: 1, max: 5_000_000 }).map(BigInt),
+    peakExtra: fc.option(fc.integer({ min: 0, max: 5_000_000 }).map(BigInt), { nil: undefined }),
+    weekExtra: fc.option(fc.integer({ min: 0, max: 5_000_000 }).map(BigInt), { nil: undefined }),
+    runMinutes: fc.integer({ min: -60, max: 100 * 24 * 60 }),
+    spent: fc.array(fc.integer({ min: 0, max: 9_000_000 }).map(BigInt), { minLength: 8, maxLength: 8 }),
+    startShiftMinutes: fc.integer({ min: 0, max: 30 * 24 * 60 }),
+  });
+
+  it("this month's part equals remainingMonth, today equals dayRisk, and a later startsAt never changes the walk", () => {
+    fc.assert(
+      fc.property(caseArb, (k) => {
+        const day = `${k.month}-${String(k.dayOfMonth).padStart(2, "0")}`;
+        const now = new Date(startOfLocalDay(day, k.tz).getTime() + k.minuteOfDay * 60_000);
+        const today = dayKey(now, k.tz);
+        const endsAt = new Date(now.getTime() + k.runMinutes * 60_000);
+        const peakTodayMinor = k.peakExtra === undefined ? undefined : k.daily + k.peakExtra;
+        const weekPeakMinor = k.weekExtra === undefined ? undefined : (peakTodayMinor ?? k.daily) + k.weekExtra;
+        // Spend on today and the 7 days before it (the current week, and days before it that must not count).
+        const spentByDay = new Map<string, bigint>(k.spent.map((v, i) => [addDays(today, -i), v]));
+        const input: RunWorstCaseInput = { dailyMinor: k.daily, startsAt: now, endsAt, tz: k.tz, now, peakTodayMinor, weekPeakMinor, spentByDay };
+        const r = runWorstCase(input);
+
+        const peakToday = peakTodayMinor ?? k.daily;
+        const c: CommitmentMath = { dailyBudgetMinor: k.daily, lifetimeBudgetMinor: null, peakToday, weekPeak: weekPeakMinor ?? peakToday, endsAt };
+        const s: CommitmentSpend = { byDay: spentByDay, lifetime: 0n, today: spentByDay.get(today) ?? 0n };
+        if (hasEnded(c, now)) return r.byMonth.length === 0 && r.totalMinor === 0n && r.todayMinor === 0n;
+        if (r.byMonth[0].month !== today.slice(0, 7)) return false;
+        if (r.byMonth[0].minor !== remainingMonth(c, now, k.tz, s)) return false;
+        if (r.todayMinor !== dayRisk(c, s, now)) return false;
+        // The walk covers this month's part, and no month's figure is more than the whole run can spend.
+        if (r.totalMinor < r.byMonth[0].minor) return false;
+        if (r.byMonth.some((m) => m.minor > r.totalMinor || m.minor < 0n)) return false;
+        if (r.byMonth.reduce((sum, m) => sum + m.minor, 0n) < r.totalMinor) return false;
+
+        const later = runWorstCase({ ...input, startsAt: new Date(now.getTime() + k.startShiftMinutes * 60_000) });
+        return later.totalMinor === r.totalMinor && later.todayMinor === r.todayMinor && JSON.stringify(later.byMonth, (_k, v) => (typeof v === "bigint" ? v.toString() : v)) === JSON.stringify(r.byMonth, (_k, v) => (typeof v === "bigint" ? v.toString() : v));
+      }),
+      { numRuns: 300 },
     );
   }, 120_000);
 });

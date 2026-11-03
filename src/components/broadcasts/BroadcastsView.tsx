@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, EmptyState, ErrorState, Input, ProgressBar, Select, StatusPill, Tabs, DataTable, type Column } from "@/components/ui";
 import { PageHeader } from "@/components/app/PageHeader";
 import { canManage, useApi, useRole } from "@/components/contacts/hooks";
-import { CampaignCalendar } from "./CampaignCalendar";
+import { CampaignCalendar, monthOfDateParam } from "./CampaignCalendar";
 import { LinkButton } from "./LinkButton";
 import { OverviewPanels } from "./OverviewPanels";
 import { type Counts, STATUS_FILTERS, broadcastStatusView, filterBroadcasts, formatWhen, friendlyError, progressPercent, progressText, totalOf } from "./helpers";
@@ -136,6 +136,10 @@ export function BroadcastsView() {
   const role = useRole();
   const admin = canManage(role);
   const [mode, setMode] = useState("list");
+  // Back from planning a broadcast on a calendar day (?date=): show the calendar, which opens on that month.
+  useEffect(() => {
+    if (monthOfDateParam(new URLSearchParams(window.location.search).get("date"))) setMode("calendar");
+  }, []);
 
   return (
     <div>

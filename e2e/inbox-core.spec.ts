@@ -106,12 +106,28 @@ test("conversation list: avatars, previews, status pills including Expired, sear
   await expect(convoButton(page, "Rahul Verma")).toBeVisible();
   await search.fill("zzzz-nothing");
   await expect(page.getByText("No conversations match")).toBeVisible();
+  // Under three characters message text is not searched, and the box says so instead of a bare "No conversations match".
+  await search.fill("zq");
+  await expect(page.getByText(/Type at least 3 characters to search messages/)).toBeVisible();
+  await expect(page.getByText(/Messages are searched from 3 characters/)).toBeVisible();
   await search.fill("");
   await expect(convoButton(page, "Priya Sharma")).toBeVisible();
   await search.fill("(+[*");
   await expect(page.getByText("Pick a conversation")).toBeVisible();
   await search.fill("");
   expect(errors, errors.join("\n")).toEqual([]);
+});
+
+test("a chat whose 24-hour window closed shows Expired beside its status, and the header and Details agree on the status", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 900 });
+  await openInbox(page);
+  await openChat(page, "Zed Oldman");
+  const header = page.locator("header").filter({ has: page.getByRole("heading", { level: 2, name: /Zed Oldman/ }) });
+  await expect(header.getByText("Expired", { exact: true })).toBeVisible();
+  const headerStatus = header.getByRole("combobox", { name: "Conversation status" });
+  await expect(headerStatus).toHaveValue("open");
+  expect(await headerStatus.locator("option").allInnerTexts()).not.toContain("Expired");
+  await expect(page.getByRole("complementary", { name: "Contact details" }).getByLabel("Status")).toHaveValue("open");
 });
 
 test("window bar, sending a reply ends in a clear failed state with Send again", async ({ page, request }) => {
@@ -291,6 +307,8 @@ test("suggest reply explains plainly that AI is not set up (503)", async ({ page
 });
 
 test("status changes and assign to me from the chat header and the side panel; a new message reopens a solved chat", async ({ page, request }) => {
+  // The header menus show when the chat column is wide; with the list and Details beside it that needs a wide screen.
+  await page.setViewportSize({ width: 1920, height: 900 });
   await openInbox(page);
   await openChat(page, "Rahul Verma");
   const header = page.locator("header").filter({ has: page.getByRole("heading", { level: 2, name: /Rahul Verma/ }) });

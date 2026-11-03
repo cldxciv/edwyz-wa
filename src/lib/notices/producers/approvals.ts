@@ -27,6 +27,16 @@ export function reviewPath(c: ApprovalCounts): string {
 export const producer: NoticeProducer = {
   name: "approvals",
   kinds: ["approvals_waiting"],
+  /** Workspaces with a pending spend approval, an optimizer proposal or a client change request waiting. */
+  async due(tenantIds, now) {
+    const tenantId = { in: [...tenantIds] };
+    const rows = (await Promise.all([
+      prisma.spendApproval.groupBy({ by: ["tenantId"], where: { tenantId, status: "pending", expiresAt: { gt: now } } }),
+      prisma.optimizerProposal.groupBy({ by: ["tenantId"], where: { tenantId, status: "proposed" } }),
+      prisma.approvalRequest.groupBy({ by: ["tenantId"], where: { tenantId, status: "changes_requested", decidedAt: { gte: new Date(now.getTime() - CLIENT_LOOKBACK_MS) } } }),
+    ])) as { tenantId: string }[][];
+    return rows.flat().map((r) => r.tenantId);
+  },
   async run(ctx) {
     const { tenantId, now } = ctx;
     const [members, control, spend, optimizer, client] = await Promise.all([

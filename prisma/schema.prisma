@@ -847,8 +847,21 @@ model Brand {
   specialAdCategory String   @default("none")
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
+  // (0015_studio_canva, docs/specs/ADS-MCP-CANVA-CREATIVE-SPEC.md 4.2) What the image maker needs.
+  // Library file key of the logo (content media). Set by POST /api/creative/brands/[id]/logo.
+  logoMediaKey      String?
+  // simple | festive | modern
+  fontStyle         String   @default("simple")
+  // en | hi | both: the language drawn on images by default
+  defaultLanguage   String   @default("en")
+  tagline           String?
+  // Short business contact shown on images, e.g. "Call or WhatsApp 98765 43210"
+  contactLine       String?
+  // At most one per workspace (partial unique index Brand_tenant_default_key in 0015, not expressible here)
+  isDefault         Boolean  @default(false)
 
-  briefs CreativeBrief[]
+  briefs      CreativeBrief[]
+  studioItems StudioItem[]
 
   @@index([tenantId])
 }
@@ -963,7 +976,30 @@ model AdCampaign {
   targetCostPerResultMinor BigInt?
   sandbox                  Boolean  @default(false)
 
+  // Instagram and Facebook Page ads (0012, docs/IG-PAGE-ADS-SPEC.md 5.1). SQL-only CHECKs (NOT VALID in 0012, validated in
+  // 0013): AdCampaign_surface_check, AdCampaign_sourceKind_check, AdCampaign_placementMode_check, AdCampaign_reviewState_check,
+  // AdCampaign_promote_end_check (a promote or eddy campaign needs endsAt or a lifetime budget), AdCampaign_runDays_check
+  // (2 to 90) and AdCampaign_startMode_check. runDays and startMode are written by promote/service only.
+  goal               String?
+  // wizard | promote | eddy | api
+  surface            String    @default("wizard")
+  // new | fb_post | ig_media
+  sourceKind         String?
+  sourceRef          String?
+  sourcePostTargetId String?
+  // auto | instagram | facebook | custom
+  placementMode      String    @default("auto")
+  // in_review | approved | partly_rejected | rejected | with_issues
+  reviewState        String?
+  reviewCheckedAt    DateTime?
+  advantageState     String?
+  discardedAt        DateTime?
+  runDays            Int?
+  // now | at
+  startMode          String?
+
   adSets AdSet[]
+  adTest AdTest?
 
   @@index([tenantId, status])
 }
@@ -982,6 +1018,20 @@ model AdSet {
   // Spend controls (0009)
   lifetimeBudgetMinor BigInt?
 
+  // Instagram and Facebook Page ads (0012). SQL-only CHECKs: AdSet_variantKey_check (A, B or C), AdSet_bidStrategy_check,
+  // AdSet_bidAmount_check (a capped bid strategy needs bidAmountMinor) and AdSet_schedule_check (dayparting needs a lifetime budget).
+  variantKey          String?
+  // AdAudience id
+  audienceId          String?
+  optimizationGoal    String?
+  destinationType     String?
+  bidStrategy         String?
+  bidAmountMinor      BigInt?
+  // [{days:[0..6], startMinute, endMinute}] in the ad account's time zone (PRM-18)
+  schedule            Json?
+  effectiveStatus     String?
+  effectivePlacements Json?
+
   campaign AdCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   ads      Ad[]
 
@@ -999,6 +1049,19 @@ model Ad {
   // { pageId, instagramId, message, headline, link, cta, leadFormId, whatsappNumberId }
   creative        Json
   createdAt       DateTime @default(now())
+
+  // Instagram and Facebook Page ads (0012). SQL-only CHECK Ad_format_check. Legacy boost_post ads keep 'single_image'
+  // and are read as existing_post from the template.
+  // single_image | single_video | carousel | existing_post
+  format          String    @default("single_image")
+  // AdMedia ids this ad uses (retention keeps them while a non-archived ad references them)
+  mediaIds        String[]  @default([])
+  variantLabel    String?
+  sourcePostRef   String?
+  effectiveStatus String?
+  // codes and placements only, never ad text
+  reviewFeedback  Json?
+  reviewCheckedAt DateTime?
 
   adSet AdSet @relation(fields: [adSetId], references: [id], onDelete: Cascade)
 
@@ -1020,6 +1083,15 @@ model InsightSnapshot {
   qualityRanking String?
   raw            Json?
   createdAt      DateTime @default(now())
+  // Extra metrics (0012), all nullable
+  reach           Int?
+  linkClicks      Int?
+  thruplays       Int?
+  videoP25        Int?
+  videoP50        Int?
+  videoP75        Int?
+  videoP100       Int?
+  messagingStarts Int?
 
   @@unique([tenantId, entityType, entityMetaId, date])
   @@index([tenantId, date])
@@ -1054,6 +1126,21 @@ model LeadForm {
   status      String   @default("active")
   createdAt   DateTime @default(now())
 
+  // Instagram and Facebook Page ads (0012). SQL-only CHECKs LeadForm_origin_check and LeadForm_formType_check.
+  // registered | created | imported
+  origin         String    @default("registered")
+  // more_volume | higher_intent
+  formType       String?
+  locale         String?
+  // What was sent to Meta: questions, privacy link, thank-you, disclaimer. No personal data.
+  spec           Json?
+  metaStatus     String?
+  syncedAt       DateTime?
+  copiedFromId   String?
+  lastBackfillAt DateTime?
+  testLeadUntil  DateTime?
+  hiddenAt       DateTime?
+
   leads Lead[]
 
   @@unique([tenantId, metaFormId])
@@ -1075,6 +1162,17 @@ model Lead {
   assignedToId    String?
   firstResponseAt DateTime?
   createdAt       DateTime  @default(now())
+
+  // Instagram and Facebook Page ads (0012). SQL-only CHECKs Lead_source_check and Lead_platform_check. Chat leads use the
+  // synthetic leadgenId 'ctwa:<wamid of the referral message>'.
+  // instant_form | ctwa | ctig | ctm | manual
+  source         String    @default("instant_form")
+  // facebook | instagram | messenger | whatsapp | audience_network | unknown
+  platform       String?
+  adsetMetaId    String?
+  isOrganic      Boolean?
+  isTest         Boolean   @default(false)
+  conversationId String?
 
   leadForm LeadForm?         @relation(fields: [leadFormId], references: [id], onDelete: SetNull)
   runs     LeadSequenceRun[]
@@ -1969,4 +2067,282 @@ model NoticeScanState {
   updatedAt DateTime @default(now()) @updatedAt
 
   @@id([tenantId, scanner])
+}
+
+// ---------------------------------------------------------------------------
+// Instagram and Facebook Page ads (migration 0012_ig_page_ads, docs/IG-PAGE-ADS-SPEC.md 5.1 and 5.3)
+// No FK relations to Tenant, like AuditLog and InsightSnapshot: erasure goes through PERSONAL_DATA (5.5).
+// SQL only: the CHECKs AdMedia_source_check, AdMedia_kind_check, AdMedia_ratio_check, AdMedia_status_check,
+// AdMedia_attempts_check, AdAudience_kind_check, AdAudience_status_check, AdAudience_consent_check, AdAudience_account_check,
+// AdAudienceUpload_mode_check, AdAudienceUpload_status_check, AdTest_kind_check, AdTest_mode_check, AdTest_status_check,
+// InsightBreakdown_entity_check and InsightBreakdown_dimension_check, and the partial unique index AdAudience_meta_key.
+// The 0013 indexes (Lead, AdCampaign, Ad) are SQL only too.
+// ---------------------------------------------------------------------------
+
+/// The ad media library: one row per file per ad account. Files count in the 500 MB content media quota.
+model AdMedia {
+  id               String    @id @default(cuid())
+  tenantId         String
+  adAccountAssetId String
+  // content | creative | ig_copy | crop
+  source           String
+  sourceKey        String
+  // image | video
+  kind             String
+  mime             String
+  bytes            BigInt
+  sha256           String    @db.Char(64)
+  width            Int?
+  height           Int?
+  durationMs       Int?
+  videoCodec       String?
+  rotation         Int?
+  // 1:1 | 4:5 | 9:16 | 1.91:1 | other
+  ratio            String?
+  fits             String[]  @default([])
+  problems         Json?
+  metaImageHash    String?
+  metaVideoId      String?
+  metaThumbHash    String?
+  // pending | uploading | processing | ready | invalid | error
+  status           String    @default("pending")
+  error            String?
+  attempts         Int       @default(0)
+  nextCheckAt      DateTime?
+  lastUsedAt       DateTime?
+  adOnly           Boolean   @default(false)
+  createdByUserId  String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @default(now()) @updatedAt
+
+  @@unique([tenantId, adAccountAssetId, sha256], map: "AdMedia_tenant_account_sha_key")
+  @@index([status, nextCheckAt], map: "AdMedia_status_next_idx")
+  @@index([tenantId, lastUsedAt], map: "AdMedia_tenant_lastUsed_idx")
+}
+
+/// Saved, customer-list, engagement, website and lookalike audiences. No personal data: the name, the spec and the lawful basis.
+model AdAudience {
+  id               String    @id @default(cuid())
+  tenantId         String
+  adAccountAssetId String?
+  // saved | customer_list | engagement_instagram | engagement_page | engagement_lead_form | website | lookalike
+  kind             String
+  name             String
+  metaAudienceId   String?
+  spec             Json      @default("{}")
+  // draft | creating | populating | ready | too_small | error | deleted
+  status           String    @default("draft")
+  sizeLower        BigInt?
+  sizeUpper        BigInt?
+  deliveryStatus   String?
+  // marketing_opt_in | customer_relationship (customer lists only)
+  consentBasis     String?
+  rowsUploaded     Int       @default(0)
+  lastSyncedAt     DateTime?
+  lastError        String?
+  createdByUserId  String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @default(now()) @updatedAt
+  deletedAt        DateTime?
+
+  uploads AdAudienceUpload[]
+
+  @@index([tenantId, kind], map: "AdAudience_tenant_kind_idx")
+}
+
+/// One customer-list upload session. Counts only: no hashes, no identifiers.
+model AdAudienceUpload {
+  id                String    @id @default(cuid())
+  tenantId          String
+  audienceId        String
+  sessionId         BigInt
+  // add | replace | remove
+  mode              String
+  totalRows         Int       @default(0)
+  sentRows          Int       @default(0)
+  batchSeq          Int       @default(0)
+  // queued | running | done | failed
+  status            String    @default("queued")
+  requestedByUserId String?
+  startedAt         DateTime?
+  finishedAt        DateTime?
+  error             String?
+  createdAt         DateTime  @default(now())
+
+  audience AdAudience @relation(fields: [audienceId], references: [id], onDelete: Cascade, map: "AdAudienceUpload_audience_fkey")
+
+  @@index([tenantId, audienceId, createdAt], map: "AdAudienceUpload_tenant_audience_idx")
+}
+
+/// Compare versions: at most one per campaign.
+model AdTest {
+  id              String    @id @default(cuid())
+  tenantId        String
+  campaignId      String
+  // creative | audience | placement
+  kind            String    @default("creative")
+  // fair_split | meta_study
+  mode            String    @default("fair_split")
+  metaStudyId     String?
+  metric          String    @default("cost_per_result")
+  minResults      Int       @default(15)
+  minDays         Int       @default(7)
+  // draft | running | decided | stopped
+  status          String    @default("draft")
+  winnerAdSetId   String?
+  // the numbers at decision time
+  verdict         Json?
+  decidedAt       DateTime?
+  decidedByUserId String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @default(now()) @updatedAt
+
+  campaign AdCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade, map: "AdTest_campaign_fkey")
+
+  @@unique([campaignId], map: "AdTest_campaign_key")
+}
+
+/// Results by placement, asset, age and gender, region and the run total. Aggregates only. spendMinor is written with
+/// decimalToMinorBig and the ad account currency's exponent (Phase 0 3.1).
+model InsightBreakdown {
+  id           String   @id @default(cuid())
+  tenantId     String
+  // campaign | adset | ad
+  entityType   String
+  entityMetaId String
+  date         DateTime @db.Date
+  // placement | asset_body | asset_title | asset_image | asset_video | asset_cta | age_gender | region | run_total
+  dimension    String
+  // e.g. 'instagram|reels', 'body:<sha1>', 'female|25-34', 'IN-MH'
+  dimKey       String
+  spendMinor   BigInt   @default(0)
+  impressions  Int      @default(0)
+  reach        Int?
+  clicks       Int      @default(0)
+  results      Int      @default(0)
+  thruplays    Int?
+  raw          Json?
+  syncedAt     DateTime @default(now())
+
+  @@unique([tenantId, entityType, entityMetaId, date, dimension, dimKey], map: "InsightBreakdown_key")
+  @@index([tenantId, date], map: "InsightBreakdown_tenant_date_idx")
+}
+
+// ---------------------------------------------------------------------------
+// Studio images and Canva (migration 0015_studio_canva, docs/specs/ADS-MCP-CANVA-CREATIVE-SPEC.md 4.1 and 4.2)
+// No FK relations to Tenant: erasure goes through PERSONAL_DATA (4.4). Behind STUDIO_ENABLED (default off).
+// SQL only: the CHECKs Brand_fontStyle_check, Brand_defaultLanguage_check, Brand_logoMediaKey_check, Brand_text_len_check,
+// StudioItem_kind_check, StudioItem_source_check, StudioItem_size_check, StudioItem_format_check, StudioItem_mediaKey_check,
+// StudioItem_canva_check, StudioItem_bytes_check, StudioJob_kind_check, StudioJob_state_check, StudioJob_attempts_check,
+// CanvaConnection_status_check, CanvaReturnState_id_check, CanvaReturnState_purpose_check and CanvaReturnState_path_check, and
+// the partial unique index Brand_tenant_default_key (one default brand per workspace).
+// ---------------------------------------------------------------------------
+
+/// Where a Library file made or imported by Studio came from. The file itself lives in the content media Library.
+model StudioItem {
+  id              String   @id @default(cuid())
+  tenantId        String
+  mediaKey        String
+  // image | video
+  kind            String
+  // render | canva | logo
+  source          String
+  title           String?
+  templateId      String?
+  templateVersion Int?
+  // square | feed | story | original
+  size            String?
+  // jpg | png | mp4
+  format          String
+  width           Int?
+  height          Int?
+  bytes           Int
+  sha256          String   @db.Char(64)
+  // StudioInputs (4.3). Never holds a customer's personal data.
+  inputs          Json?
+  brandId         String?
+  canvaDesignId   String?
+  canvaPage       Int?
+  canvaUserId     String?
+  // The item this one is a size variant or a newer Canva version of
+  parentItemId    String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
+
+  brand Brand? @relation(fields: [brandId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, mediaKey])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, canvaDesignId])
+}
+
+/// Canva imports, autofills and returns run by the worker (queue "studio").
+model StudioJob {
+  id            String    @id @default(cuid())
+  tenantId      String
+  userId        String
+  // canva_import | canva_autofill | canva_return
+  kind          String
+  // queued | uploading | filling | exporting | downloading | done | failed
+  state         String    @default("queued")
+  input         Json
+  progress      Json?
+  resultItemIds String[]  @default([])
+  error         String?
+  attempts      Int       @default(0)
+  nextPollAt    DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @default(now()) @updatedAt
+
+  @@index([tenantId, createdAt])
+  @@index([state, nextPollAt])
+}
+
+/// One Canva account per member per workspace.
+model CanvaConnection {
+  id              String    @id @default(cuid())
+  tenantId        String
+  userId          String
+  canvaUserId     String
+  canvaTeamId     String?
+  displayName     String?
+  scopes          String[]  @default([])
+  // Sealed with src/lib/crypto/secrets (sealSecret(tenantId, ...)). Never returned by any API, never logged.
+  accessTokenEnc  String?
+  refreshTokenEnc String?
+  accessExpiresAt DateTime?
+  // A refresh in progress (refresh tokens are single use): set with a conditional update
+  refreshingUntil DateTime?
+  // active | expired | revoked | error
+  status          String    @default("active")
+  lastError       String?
+  lastUsedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @default(now()) @updatedAt
+
+  @@unique([tenantId, userId])
+  @@index([tenantId, status])
+}
+
+/// Correlation ids for Canva's Return button.
+model CanvaReturnState {
+  // 22-character base64url id sent to Canva as correlation_state
+  id           String    @id
+  tenantId     String
+  userId       String
+  connectionId String
+  designId     String
+  // edit | new_design | autofill
+  purpose      String
+  itemId       String?
+  exportSpec   Json
+  returnPath   String?
+  createdAt    DateTime  @default(now())
+  expiresAt    DateTime
+  usedAt       DateTime?
+
+  @@index([tenantId, userId])
+  @@index([expiresAt])
 }

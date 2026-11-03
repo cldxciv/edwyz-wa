@@ -35,6 +35,12 @@ export type BrandMinAggregateOutputType = {
   specialAdCategory: string | null
   createdAt: Date | null
   updatedAt: Date | null
+  logoMediaKey: string | null
+  fontStyle: string | null
+  defaultLanguage: string | null
+  tagline: string | null
+  contactLine: string | null
+  isDefault: boolean | null
 }
 
 export type BrandMaxAggregateOutputType = {
@@ -48,6 +54,12 @@ export type BrandMaxAggregateOutputType = {
   specialAdCategory: string | null
   createdAt: Date | null
   updatedAt: Date | null
+  logoMediaKey: string | null
+  fontStyle: string | null
+  defaultLanguage: string | null
+  tagline: string | null
+  contactLine: string | null
+  isDefault: boolean | null
 }
 
 export type BrandCountAggregateOutputType = {
@@ -64,6 +76,12 @@ export type BrandCountAggregateOutputType = {
   specialAdCategory: number
   createdAt: number
   updatedAt: number
+  logoMediaKey: number
+  fontStyle: number
+  defaultLanguage: number
+  tagline: number
+  contactLine: number
+  isDefault: number
   _all: number
 }
 
@@ -79,6 +97,12 @@ export type BrandMinAggregateInputType = {
   specialAdCategory?: true
   createdAt?: true
   updatedAt?: true
+  logoMediaKey?: true
+  fontStyle?: true
+  defaultLanguage?: true
+  tagline?: true
+  contactLine?: true
+  isDefault?: true
 }
 
 export type BrandMaxAggregateInputType = {
@@ -92,6 +116,12 @@ export type BrandMaxAggregateInputType = {
   specialAdCategory?: true
   createdAt?: true
   updatedAt?: true
+  logoMediaKey?: true
+  fontStyle?: true
+  defaultLanguage?: true
+  tagline?: true
+  contactLine?: true
+  isDefault?: true
 }
 
 export type BrandCountAggregateInputType = {
@@ -108,6 +138,12 @@ export type BrandCountAggregateInputType = {
   specialAdCategory?: true
   createdAt?: true
   updatedAt?: true
+  logoMediaKey?: true
+  fontStyle?: true
+  defaultLanguage?: true
+  tagline?: true
+  contactLine?: true
+  isDefault?: true
   _all?: true
 }
 
@@ -197,6 +233,12 @@ export type BrandGroupByOutputType = {
   specialAdCategory: string
   createdAt: Date
   updatedAt: Date
+  logoMediaKey: string | null
+  fontStyle: string
+  defaultLanguage: string
+  tagline: string | null
+  contactLine: string | null
+  isDefault: boolean
   _count: BrandCountAggregateOutputType | null
   _min: BrandMinAggregateOutputType | null
   _max: BrandMaxAggregateOutputType | null
@@ -234,7 +276,14 @@ export type BrandWhereInput = {
   specialAdCategory?: Prisma.StringFilter<"Brand"> | string
   createdAt?: Prisma.DateTimeFilter<"Brand"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"Brand"> | Date | string
+  logoMediaKey?: Prisma.StringNullableFilter<"Brand"> | string | null
+  fontStyle?: Prisma.StringFilter<"Brand"> | string
+  defaultLanguage?: Prisma.StringFilter<"Brand"> | string
+  tagline?: Prisma.StringNullableFilter<"Brand"> | string | null
+  contactLine?: Prisma.StringNullableFilter<"Brand"> | string | null
+  isDefault?: Prisma.BoolFilter<"Brand"> | boolean
   briefs?: Prisma.CreativeBriefListRelationFilter
+  studioItems?: Prisma.StudioItemListRelationFilter
 }
 
 export type BrandOrderByWithRelationInput = {
@@ -251,7 +300,14 @@ export type BrandOrderByWithRelationInput = {
   specialAdCategory?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
+  logoMediaKey?: Prisma.SortOrderInput | Prisma.SortOrder
+  fontStyle?: Prisma.SortOrder
+  defaultLanguage?: Prisma.SortOrder
+  tagline?: Prisma.SortOrderInput | Prisma.SortOrder
+  contactLine?: Prisma.SortOrderInput | Prisma.SortOrder
+  isDefault?: Prisma.SortOrder
   briefs?: Prisma.CreativeBriefOrderByRelationAggregateInput
+  studioItems?: Prisma.StudioItemOrderByRelationAggregateInput
 }
 
 export type BrandWhereUniqueInput = Prisma.AtLeast<{
@@ -271,7 +327,14 @@ export type BrandWhereUniqueInput = Prisma.AtLeast<{
   specialAdCategory?: Prisma.StringFilter<"Brand"> | string
   createdAt?: Prisma.DateTimeFilter<"Brand"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"Brand"> | Date | string
+  logoMediaKey?: Prisma.StringNullableFilter<"Brand"> | string | null
+  fontStyle?: Prisma.StringFilter<"Brand"> | string
+  defaultLanguage?: Prisma.StringFilter<"Brand"> | string
+  tagline?: Prisma.StringNullableFilter<"Brand"> | string | null
+  contactLine?: Prisma.StringNullableFilter<"Brand"> | string | null
+  isDefault?: Prisma.BoolFilter<"Brand"> | boolean
   briefs?: Prisma.CreativeBriefListRelationFilter
+  studioItems?: Prisma.StudioItemListRelationFilter
 }, "id">
 
 export type BrandOrderByWithAggregationInput = {
@@ -288,6 +351,12 @@ export type BrandOrderByWithAggregationInput = {
   specialAdCategory?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
+  logoMediaKey?: Prisma.SortOrderInput | Prisma.SortOrder
+  fontStyle?: Prisma.SortOrder
+  defaultLanguage?: Prisma.SortOrder
+  tagline?: Prisma.SortOrderInput | Prisma.SortOrder
+  contactLine?: Prisma.SortOrderInput | Prisma.SortOrder
+  isDefault?: Prisma.SortOrder
   _count?: Prisma.BrandCountOrderByAggregateInput
   _max?: Prisma.BrandMaxOrderByAggregateInput
   _min?: Prisma.BrandMinOrderByAggregateInput
@@ -310,6 +379,12 @@ export type BrandScalarWhereWithAggregatesInput = {
   specialAdCategory?: Prisma.StringWithAggregatesFilter<"Brand"> | string
   createdAt?: Prisma.DateTimeWithAggregatesFilter<"Brand"> | Date | string
   updatedAt?: Prisma.DateTimeWithAggregatesFilter<"Brand"> | Date | string
+  logoMediaKey?: Prisma.StringNullableWithAggregatesFilter<"Brand"> | string | null
+  fontStyle?: Prisma.StringWithAggregatesFilter<"Brand"> | string
+  defaultLanguage?: Prisma.StringWithAggregatesFilter<"Brand"> | string
+  tagline?: Prisma.StringNullableWithAggregatesFilter<"Brand"> | string | null
+  contactLine?: Prisma.StringNullableWithAggregatesFilter<"Brand"> | string | null
+  isDefault?: Prisma.BoolWithAggregatesFilter<"Brand"> | boolean
 }
 
 export type BrandCreateInput = {
@@ -326,7 +401,14 @@ export type BrandCreateInput = {
   specialAdCategory?: string
   createdAt?: Date | string
   updatedAt?: Date | string
+  logoMediaKey?: string | null
+  fontStyle?: string
+  defaultLanguage?: string
+  tagline?: string | null
+  contactLine?: string | null
+  isDefault?: boolean
   briefs?: Prisma.CreativeBriefCreateNestedManyWithoutBrandInput
+  studioItems?: Prisma.StudioItemCreateNestedManyWithoutBrandInput
 }
 
 export type BrandUncheckedCreateInput = {
@@ -343,7 +425,14 @@ export type BrandUncheckedCreateInput = {
   specialAdCategory?: string
   createdAt?: Date | string
   updatedAt?: Date | string
+  logoMediaKey?: string | null
+  fontStyle?: string
+  defaultLanguage?: string
+  tagline?: string | null
+  contactLine?: string | null
+  isDefault?: boolean
   briefs?: Prisma.CreativeBriefUncheckedCreateNestedManyWithoutBrandInput
+  studioItems?: Prisma.StudioItemUncheckedCreateNestedManyWithoutBrandInput
 }
 
 export type BrandUpdateInput = {
@@ -360,7 +449,14 @@ export type BrandUpdateInput = {
   specialAdCategory?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  logoMediaKey?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  fontStyle?: Prisma.StringFieldUpdateOperationsInput | string
+  defaultLanguage?: Prisma.StringFieldUpdateOperationsInput | string
+  tagline?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  contactLine?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  isDefault?: Prisma.BoolFieldUpdateOperationsInput | boolean
   briefs?: Prisma.CreativeBriefUpdateManyWithoutBrandNestedInput
+  studioItems?: Prisma.StudioItemUpdateManyWithoutBrandNestedInput
 }
 
 export type BrandUncheckedUpdateInput = {
@@ -377,7 +473,14 @@ export type BrandUncheckedUpdateInput = {
   specialAdCategory?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  logoMediaKey?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  fontStyle?: Prisma.StringFieldUpdateOperationsInput | string
+  defaultLanguage?: Prisma.StringFieldUpdateOperationsInput | string
+  tagline?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  contactLine?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  isDefault?: Prisma.BoolFieldUpdateOperationsInput | boolean
   briefs?: Prisma.CreativeBriefUncheckedUpdateManyWithoutBrandNestedInput
+  studioItems?: Prisma.StudioItemUncheckedUpdateManyWithoutBrandNestedInput
 }
 
 export type BrandCreateManyInput = {
@@ -394,6 +497,12 @@ export type BrandCreateManyInput = {
   specialAdCategory?: string
   createdAt?: Date | string
   updatedAt?: Date | string
+  logoMediaKey?: string | null
+  fontStyle?: string
+  defaultLanguage?: string
+  tagline?: string | null
+  contactLine?: string | null
+  isDefault?: boolean
 }
 
 export type BrandUpdateManyMutationInput = {
@@ -410,6 +519,12 @@ export type BrandUpdateManyMutationInput = {
   specialAdCategory?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  logoMediaKey?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  fontStyle?: Prisma.StringFieldUpdateOperationsInput | string
+  defaultLanguage?: Prisma.StringFieldUpdateOperationsInput | string
+  tagline?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  contactLine?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  isDefault?: Prisma.BoolFieldUpdateOperationsInput | boolean
 }
 
 export type BrandUncheckedUpdateManyInput = {
@@ -426,6 +541,12 @@ export type BrandUncheckedUpdateManyInput = {
   specialAdCategory?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  logoMediaKey?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  fontStyle?: Prisma.StringFieldUpdateOperationsInput | string
+  defaultLanguage?: Prisma.StringFieldUpdateOperationsInput | string
+  tagline?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  contactLine?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  isDefault?: Prisma.BoolFieldUpdateOperationsInput | boolean
 }
 
 export type BrandCountOrderByAggregateInput = {
@@ -442,6 +563,12 @@ export type BrandCountOrderByAggregateInput = {
   specialAdCategory?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
+  logoMediaKey?: Prisma.SortOrder
+  fontStyle?: Prisma.SortOrder
+  defaultLanguage?: Prisma.SortOrder
+  tagline?: Prisma.SortOrder
+  contactLine?: Prisma.SortOrder
+  isDefault?: Prisma.SortOrder
 }
 
 export type BrandMaxOrderByAggregateInput = {
@@ -455,6 +582,12 @@ export type BrandMaxOrderByAggregateInput = {
   specialAdCategory?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
+  logoMediaKey?: Prisma.SortOrder
+  fontStyle?: Prisma.SortOrder
+  defaultLanguage?: Prisma.SortOrder
+  tagline?: Prisma.SortOrder
+  contactLine?: Prisma.SortOrder
+  isDefault?: Prisma.SortOrder
 }
 
 export type BrandMinOrderByAggregateInput = {
@@ -468,11 +601,22 @@ export type BrandMinOrderByAggregateInput = {
   specialAdCategory?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
+  logoMediaKey?: Prisma.SortOrder
+  fontStyle?: Prisma.SortOrder
+  defaultLanguage?: Prisma.SortOrder
+  tagline?: Prisma.SortOrder
+  contactLine?: Prisma.SortOrder
+  isDefault?: Prisma.SortOrder
 }
 
 export type BrandScalarRelationFilter = {
   is?: Prisma.BrandWhereInput
   isNot?: Prisma.BrandWhereInput
+}
+
+export type BrandNullableScalarRelationFilter = {
+  is?: Prisma.BrandWhereInput | null
+  isNot?: Prisma.BrandWhereInput | null
 }
 
 export type BrandCreatecolorsInput = {
@@ -516,6 +660,22 @@ export type BrandUpdateOneRequiredWithoutBriefsNestedInput = {
   update?: Prisma.XOR<Prisma.XOR<Prisma.BrandUpdateToOneWithWhereWithoutBriefsInput, Prisma.BrandUpdateWithoutBriefsInput>, Prisma.BrandUncheckedUpdateWithoutBriefsInput>
 }
 
+export type BrandCreateNestedOneWithoutStudioItemsInput = {
+  create?: Prisma.XOR<Prisma.BrandCreateWithoutStudioItemsInput, Prisma.BrandUncheckedCreateWithoutStudioItemsInput>
+  connectOrCreate?: Prisma.BrandCreateOrConnectWithoutStudioItemsInput
+  connect?: Prisma.BrandWhereUniqueInput
+}
+
+export type BrandUpdateOneWithoutStudioItemsNestedInput = {
+  create?: Prisma.XOR<Prisma.BrandCreateWithoutStudioItemsInput, Prisma.BrandUncheckedCreateWithoutStudioItemsInput>
+  connectOrCreate?: Prisma.BrandCreateOrConnectWithoutStudioItemsInput
+  upsert?: Prisma.BrandUpsertWithoutStudioItemsInput
+  disconnect?: Prisma.BrandWhereInput | boolean
+  delete?: Prisma.BrandWhereInput | boolean
+  connect?: Prisma.BrandWhereUniqueInput
+  update?: Prisma.XOR<Prisma.XOR<Prisma.BrandUpdateToOneWithWhereWithoutStudioItemsInput, Prisma.BrandUpdateWithoutStudioItemsInput>, Prisma.BrandUncheckedUpdateWithoutStudioItemsInput>
+}
+
 export type BrandCreateWithoutBriefsInput = {
   id?: string
   tenantId: string
@@ -530,6 +690,13 @@ export type BrandCreateWithoutBriefsInput = {
   specialAdCategory?: string
   createdAt?: Date | string
   updatedAt?: Date | string
+  logoMediaKey?: string | null
+  fontStyle?: string
+  defaultLanguage?: string
+  tagline?: string | null
+  contactLine?: string | null
+  isDefault?: boolean
+  studioItems?: Prisma.StudioItemCreateNestedManyWithoutBrandInput
 }
 
 export type BrandUncheckedCreateWithoutBriefsInput = {
@@ -546,6 +713,13 @@ export type BrandUncheckedCreateWithoutBriefsInput = {
   specialAdCategory?: string
   createdAt?: Date | string
   updatedAt?: Date | string
+  logoMediaKey?: string | null
+  fontStyle?: string
+  defaultLanguage?: string
+  tagline?: string | null
+  contactLine?: string | null
+  isDefault?: boolean
+  studioItems?: Prisma.StudioItemUncheckedCreateNestedManyWithoutBrandInput
 }
 
 export type BrandCreateOrConnectWithoutBriefsInput = {
@@ -578,6 +752,13 @@ export type BrandUpdateWithoutBriefsInput = {
   specialAdCategory?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  logoMediaKey?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  fontStyle?: Prisma.StringFieldUpdateOperationsInput | string
+  defaultLanguage?: Prisma.StringFieldUpdateOperationsInput | string
+  tagline?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  contactLine?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  isDefault?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  studioItems?: Prisma.StudioItemUpdateManyWithoutBrandNestedInput
 }
 
 export type BrandUncheckedUpdateWithoutBriefsInput = {
@@ -594,6 +775,121 @@ export type BrandUncheckedUpdateWithoutBriefsInput = {
   specialAdCategory?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  logoMediaKey?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  fontStyle?: Prisma.StringFieldUpdateOperationsInput | string
+  defaultLanguage?: Prisma.StringFieldUpdateOperationsInput | string
+  tagline?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  contactLine?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  isDefault?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  studioItems?: Prisma.StudioItemUncheckedUpdateManyWithoutBrandNestedInput
+}
+
+export type BrandCreateWithoutStudioItemsInput = {
+  id?: string
+  tenantId: string
+  name: string
+  websiteUrl?: string | null
+  logoUrl?: string | null
+  colors?: Prisma.BrandCreatecolorsInput | string[]
+  fonts?: Prisma.BrandCreatefontsInput | string[]
+  tone?: string | null
+  bannedWords?: Prisma.BrandCreatebannedWordsInput | string[]
+  industry?: string | null
+  specialAdCategory?: string
+  createdAt?: Date | string
+  updatedAt?: Date | string
+  logoMediaKey?: string | null
+  fontStyle?: string
+  defaultLanguage?: string
+  tagline?: string | null
+  contactLine?: string | null
+  isDefault?: boolean
+  briefs?: Prisma.CreativeBriefCreateNestedManyWithoutBrandInput
+}
+
+export type BrandUncheckedCreateWithoutStudioItemsInput = {
+  id?: string
+  tenantId: string
+  name: string
+  websiteUrl?: string | null
+  logoUrl?: string | null
+  colors?: Prisma.BrandCreatecolorsInput | string[]
+  fonts?: Prisma.BrandCreatefontsInput | string[]
+  tone?: string | null
+  bannedWords?: Prisma.BrandCreatebannedWordsInput | string[]
+  industry?: string | null
+  specialAdCategory?: string
+  createdAt?: Date | string
+  updatedAt?: Date | string
+  logoMediaKey?: string | null
+  fontStyle?: string
+  defaultLanguage?: string
+  tagline?: string | null
+  contactLine?: string | null
+  isDefault?: boolean
+  briefs?: Prisma.CreativeBriefUncheckedCreateNestedManyWithoutBrandInput
+}
+
+export type BrandCreateOrConnectWithoutStudioItemsInput = {
+  where: Prisma.BrandWhereUniqueInput
+  create: Prisma.XOR<Prisma.BrandCreateWithoutStudioItemsInput, Prisma.BrandUncheckedCreateWithoutStudioItemsInput>
+}
+
+export type BrandUpsertWithoutStudioItemsInput = {
+  update: Prisma.XOR<Prisma.BrandUpdateWithoutStudioItemsInput, Prisma.BrandUncheckedUpdateWithoutStudioItemsInput>
+  create: Prisma.XOR<Prisma.BrandCreateWithoutStudioItemsInput, Prisma.BrandUncheckedCreateWithoutStudioItemsInput>
+  where?: Prisma.BrandWhereInput
+}
+
+export type BrandUpdateToOneWithWhereWithoutStudioItemsInput = {
+  where?: Prisma.BrandWhereInput
+  data: Prisma.XOR<Prisma.BrandUpdateWithoutStudioItemsInput, Prisma.BrandUncheckedUpdateWithoutStudioItemsInput>
+}
+
+export type BrandUpdateWithoutStudioItemsInput = {
+  id?: Prisma.StringFieldUpdateOperationsInput | string
+  tenantId?: Prisma.StringFieldUpdateOperationsInput | string
+  name?: Prisma.StringFieldUpdateOperationsInput | string
+  websiteUrl?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  logoUrl?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  colors?: Prisma.BrandUpdatecolorsInput | string[]
+  fonts?: Prisma.BrandUpdatefontsInput | string[]
+  tone?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  bannedWords?: Prisma.BrandUpdatebannedWordsInput | string[]
+  industry?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  specialAdCategory?: Prisma.StringFieldUpdateOperationsInput | string
+  createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  logoMediaKey?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  fontStyle?: Prisma.StringFieldUpdateOperationsInput | string
+  defaultLanguage?: Prisma.StringFieldUpdateOperationsInput | string
+  tagline?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  contactLine?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  isDefault?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  briefs?: Prisma.CreativeBriefUpdateManyWithoutBrandNestedInput
+}
+
+export type BrandUncheckedUpdateWithoutStudioItemsInput = {
+  id?: Prisma.StringFieldUpdateOperationsInput | string
+  tenantId?: Prisma.StringFieldUpdateOperationsInput | string
+  name?: Prisma.StringFieldUpdateOperationsInput | string
+  websiteUrl?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  logoUrl?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  colors?: Prisma.BrandUpdatecolorsInput | string[]
+  fonts?: Prisma.BrandUpdatefontsInput | string[]
+  tone?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  bannedWords?: Prisma.BrandUpdatebannedWordsInput | string[]
+  industry?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  specialAdCategory?: Prisma.StringFieldUpdateOperationsInput | string
+  createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  logoMediaKey?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  fontStyle?: Prisma.StringFieldUpdateOperationsInput | string
+  defaultLanguage?: Prisma.StringFieldUpdateOperationsInput | string
+  tagline?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  contactLine?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  isDefault?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  briefs?: Prisma.CreativeBriefUncheckedUpdateManyWithoutBrandNestedInput
 }
 
 
@@ -603,10 +899,12 @@ export type BrandUncheckedUpdateWithoutBriefsInput = {
 
 export type BrandCountOutputType = {
   briefs: number
+  studioItems: number
 }
 
 export type BrandCountOutputTypeSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   briefs?: boolean | BrandCountOutputTypeCountBriefsArgs
+  studioItems?: boolean | BrandCountOutputTypeCountStudioItemsArgs
 }
 
 /**
@@ -626,6 +924,13 @@ export type BrandCountOutputTypeCountBriefsArgs<ExtArgs extends runtime.Types.Ex
   where?: Prisma.CreativeBriefWhereInput
 }
 
+/**
+ * BrandCountOutputType without action
+ */
+export type BrandCountOutputTypeCountStudioItemsArgs<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
+  where?: Prisma.StudioItemWhereInput
+}
+
 
 export type BrandSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
   id?: boolean
@@ -641,7 +946,14 @@ export type BrandSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
   specialAdCategory?: boolean
   createdAt?: boolean
   updatedAt?: boolean
+  logoMediaKey?: boolean
+  fontStyle?: boolean
+  defaultLanguage?: boolean
+  tagline?: boolean
+  contactLine?: boolean
+  isDefault?: boolean
   briefs?: boolean | Prisma.Brand$briefsArgs<ExtArgs>
+  studioItems?: boolean | Prisma.Brand$studioItemsArgs<ExtArgs>
   _count?: boolean | Prisma.BrandCountOutputTypeDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["brand"]>
 
@@ -659,6 +971,12 @@ export type BrandSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extensi
   specialAdCategory?: boolean
   createdAt?: boolean
   updatedAt?: boolean
+  logoMediaKey?: boolean
+  fontStyle?: boolean
+  defaultLanguage?: boolean
+  tagline?: boolean
+  contactLine?: boolean
+  isDefault?: boolean
 }, ExtArgs["result"]["brand"]>
 
 export type BrandSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
@@ -675,6 +993,12 @@ export type BrandSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensi
   specialAdCategory?: boolean
   createdAt?: boolean
   updatedAt?: boolean
+  logoMediaKey?: boolean
+  fontStyle?: boolean
+  defaultLanguage?: boolean
+  tagline?: boolean
+  contactLine?: boolean
+  isDefault?: boolean
 }, ExtArgs["result"]["brand"]>
 
 export type BrandSelectScalar = {
@@ -691,11 +1015,18 @@ export type BrandSelectScalar = {
   specialAdCategory?: boolean
   createdAt?: boolean
   updatedAt?: boolean
+  logoMediaKey?: boolean
+  fontStyle?: boolean
+  defaultLanguage?: boolean
+  tagline?: boolean
+  contactLine?: boolean
+  isDefault?: boolean
 }
 
-export type BrandOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "tenantId" | "name" | "websiteUrl" | "logoUrl" | "colors" | "fonts" | "tone" | "bannedWords" | "industry" | "specialAdCategory" | "createdAt" | "updatedAt", ExtArgs["result"]["brand"]>
+export type BrandOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "tenantId" | "name" | "websiteUrl" | "logoUrl" | "colors" | "fonts" | "tone" | "bannedWords" | "industry" | "specialAdCategory" | "createdAt" | "updatedAt" | "logoMediaKey" | "fontStyle" | "defaultLanguage" | "tagline" | "contactLine" | "isDefault", ExtArgs["result"]["brand"]>
 export type BrandInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   briefs?: boolean | Prisma.Brand$briefsArgs<ExtArgs>
+  studioItems?: boolean | Prisma.Brand$studioItemsArgs<ExtArgs>
   _count?: boolean | Prisma.BrandCountOutputTypeDefaultArgs<ExtArgs>
 }
 export type BrandIncludeCreateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {}
@@ -705,6 +1036,7 @@ export type $BrandPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs 
   name: "Brand"
   objects: {
     briefs: Prisma.$CreativeBriefPayload<ExtArgs>[]
+    studioItems: Prisma.$StudioItemPayload<ExtArgs>[]
   }
   scalars: runtime.Types.Extensions.GetPayloadResult<{
     id: string
@@ -720,6 +1052,12 @@ export type $BrandPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs 
     specialAdCategory: string
     createdAt: Date
     updatedAt: Date
+    logoMediaKey: string | null
+    fontStyle: string
+    defaultLanguage: string
+    tagline: string | null
+    contactLine: string | null
+    isDefault: boolean
   }, ExtArgs["result"]["brand"]>
   composites: {}
 }
@@ -1115,6 +1453,7 @@ readonly fields: BrandFieldRefs;
 export interface Prisma__BrandClient<T, Null = never, ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs, GlobalOmitOptions = {}> extends Prisma.PrismaPromise<T> {
   readonly [Symbol.toStringTag]: "PrismaPromise"
   briefs<T extends Prisma.Brand$briefsArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.Brand$briefsArgs<ExtArgs>>): Prisma.PrismaPromise<runtime.Types.Result.GetResult<Prisma.$CreativeBriefPayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
+  studioItems<T extends Prisma.Brand$studioItemsArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.Brand$studioItemsArgs<ExtArgs>>): Prisma.PrismaPromise<runtime.Types.Result.GetResult<Prisma.$StudioItemPayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
   /**
    * Attaches callbacks for the resolution and/or rejection of the Promise.
    * @param onfulfilled The callback to execute when the Promise is resolved.
@@ -1157,6 +1496,12 @@ export interface BrandFieldRefs {
   readonly specialAdCategory: Prisma.FieldRef<"Brand", 'String'>
   readonly createdAt: Prisma.FieldRef<"Brand", 'DateTime'>
   readonly updatedAt: Prisma.FieldRef<"Brand", 'DateTime'>
+  readonly logoMediaKey: Prisma.FieldRef<"Brand", 'String'>
+  readonly fontStyle: Prisma.FieldRef<"Brand", 'String'>
+  readonly defaultLanguage: Prisma.FieldRef<"Brand", 'String'>
+  readonly tagline: Prisma.FieldRef<"Brand", 'String'>
+  readonly contactLine: Prisma.FieldRef<"Brand", 'String'>
+  readonly isDefault: Prisma.FieldRef<"Brand", 'Boolean'>
 }
     
 
@@ -1571,6 +1916,30 @@ export type Brand$briefsArgs<ExtArgs extends runtime.Types.Extensions.InternalAr
   take?: number
   skip?: number
   distinct?: Prisma.CreativeBriefScalarFieldEnum | Prisma.CreativeBriefScalarFieldEnum[]
+}
+
+/**
+ * Brand.studioItems
+ */
+export type Brand$studioItemsArgs<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
+  /**
+   * Select specific fields to fetch from the StudioItem
+   */
+  select?: Prisma.StudioItemSelect<ExtArgs> | null
+  /**
+   * Omit specific fields from the StudioItem
+   */
+  omit?: Prisma.StudioItemOmit<ExtArgs> | null
+  /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.StudioItemInclude<ExtArgs> | null
+  where?: Prisma.StudioItemWhereInput
+  orderBy?: Prisma.StudioItemOrderByWithRelationInput | Prisma.StudioItemOrderByWithRelationInput[]
+  cursor?: Prisma.StudioItemWhereUniqueInput
+  take?: number
+  skip?: number
+  distinct?: Prisma.StudioItemScalarFieldEnum | Prisma.StudioItemScalarFieldEnum[]
 }
 
 /**

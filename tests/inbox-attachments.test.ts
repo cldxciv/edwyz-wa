@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const db = vi.hoisted(() => ({ conversation: { findFirst: vi.fn() } }));
 const graph = vi.hoisted(() => ({ graphUpload: vi.fn() }));
@@ -21,10 +24,19 @@ import {
   safeFileName,
   stickerLimit,
 } from "@/lib/inbox/attachments";
-import { uploadAttachmentToMeta } from "@/lib/inbox/upload";
+import { pendingUploadPath } from "@/lib/inbox/media";
+import { UPLOAD_MEMORY_BUDGET, uploadAttachmentToMeta } from "@/lib/inbox/upload";
 import { buildSendBody } from "@/lib/inbox/send";
 
 const MB = 1048576;
+
+// The upload keeps a preview copy on disk (lib/inbox/media.ts): it goes to a throwaway folder, never the app's data folder.
+let dataDir: string;
+beforeAll(() => {
+  dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "inbox-upload-"));
+  process.env.DATA_DIR = dataDir;
+});
+afterAll(() => fs.rmSync(dataDir, { recursive: true, force: true }));
 const bytes = (...head: number[]) => new Uint8Array([...head, ...new Array(Math.max(16 - head.length, 0)).fill(0)]);
 
 describe("WhatsApp attachment rules", () => {
@@ -87,6 +99,11 @@ describe("outbound document, audio and sticker bodies", () => {
       type: "document",
       document: { id: "55", caption: "the invoice", filename: "invoice.pdf" },
     });
+  });
+
+  it("sends photos and videos uploaded from the inbox by their Meta media id, with the caption", () => {
+    expect(buildSendBody("+919876543210", row("image", "meta-media:77", "the shop"), {})).toMatchObject({ type: "image", image: { id: "77", caption: "the shop" } });
+    expect(buildSendBody("+919876543210", row("video", "meta-media:78"), {})).toMatchObject({ type: "video", video: { id: "78" } });
   });
 
   it("never sends a caption with audio or stickers", () => {
@@ -153,5 +170,40 @@ describe("uploadAttachmentToMeta", () => {
     await expect(uploadAttachmentToMeta("t1", "c1", req(pdf, { "content-type": "application/pdf" }))).rejects.toMatchObject({ status: 502 });
     graph.graphUpload.mockResolvedValueOnce({});
     await expect(uploadAttachmentToMeta("t1", "c1", req(pdf, { "content-type": "application/pdf" }))).rejects.toMatchObject({ status: 502 });
+  });
+
+  it("sends photos and videos straight to WhatsApp too, keeping only a preview copy that waits for the message", async () => {
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...new Array(60).fill(7)]);
+    graph.graphUpload.mockResolvedValueOnce({ id: "photo_1" });
+    const out = await uploadAttachmentToMeta("t1", "c1", req(jpeg, { "content-type": "image/jpeg", "content-length": String(jpeg.length), "x-file-name": "shop.jpg" }));
+    expect(out).toEqual({ mediaId: "photo_1", kind: "image", mime: "image/jpeg", bytes: jpeg.length, filename: "shop.jpg" });
+    expect(graph.graphUpload).toHaveBeenCalledWith(expect.objectContaining({ fields: { messaging_product: "whatsapp", type: "image/jpeg" } }));
+    expect(fs.readFileSync(pendingUploadPath("t1", "photo_1")!)).toEqual(Buffer.from(jpeg));
+
+    const mp4 = new Uint8Array([0, 0, 0, 0x18, ...new TextEncoder().encode("ftypmp42"), ...new Array(40).fill(1)]);
+    graph.graphUpload.mockResolvedValueOnce({ id: "video_1" });
+    expect(await uploadAttachmentToMeta("t1", "c1", req(mp4, { "content-type": "video/mp4" }))).toMatchObject({ mediaId: "video_1", kind: "video" });
+    expect(fs.existsSync(pendingUploadPath("t1", "video_1")!)).toBe(true);
+  });
+
+  it("shares a memory budget: many photos may upload together, but not past three of the largest files", async () => {
+    expect(UPLOAD_MEMORY_BUDGET).toBe(3 * ATTACHMENT_LIMITS.document);
+    const releases: (() => void)[] = [];
+    let seq = 0;
+    graph.graphUpload.mockImplementation(() => new Promise((resolve) => releases.push(() => resolve({ id: `m${++seq}` }))));
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...new Array(20).fill(7)]);
+    const photos = Array.from({ length: 10 }, () => uploadAttachmentToMeta("t1", "c1", req(jpeg, { "content-type": "image/jpeg" })));
+    await vi.waitFor(() => expect(releases).toHaveLength(10));
+    releases.splice(0).forEach((release) => release());
+    expect((await Promise.all(photos)).every((p) => p.kind === "image")).toBe(true);
+
+    const docs = Array.from({ length: 3 }, () => uploadAttachmentToMeta("t1", "c1", req(pdf, { "content-type": "application/pdf" })));
+    await vi.waitFor(() => expect(releases).toHaveLength(3));
+    await expect(uploadAttachmentToMeta("t1", "c1", req(jpeg, { "content-type": "image/jpeg" }))).rejects.toMatchObject({ status: 429 });
+    releases.splice(0).forEach((release) => release());
+    await Promise.all(docs);
+    graph.graphUpload.mockResolvedValue({ id: "after" });
+    // The budget is given back when each upload ends.
+    expect(await uploadAttachmentToMeta("t1", "c1", req(jpeg, { "content-type": "image/jpeg" }))).toMatchObject({ mediaId: "after" });
   });
 });

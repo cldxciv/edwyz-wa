@@ -1,3 +1,4 @@
+import { LONG_WAIT_MESSAGE, LONG_WAIT_MINUTES, longWaitProblems } from "@/lib/chatbots/long-wait";
 import { NODE_META, handlesOf } from "./catalog";
 import { reachable } from "./flow";
 import { LIMITS, type FlowDefinition, type FlowNode, type TriggerType } from "./types";
@@ -9,6 +10,8 @@ const VAR = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 const ATTRIBUTE = /^[A-Za-z0-9_ -]{1,64}$/;
 const CONDITION_VAR = /^[A-Za-z_][A-Za-z0-9_.\- ]{0,127}$/;
 const BLOCKED_HOSTS = [/^localhost$/, /\.localhost$/, /\.local$/, /\.internal$/, /\.localdomain$/, /^metadata(\.|$)/];
+/** The server's own long-wait rule (lib/chatbots/long-wait): after a wait this long, the bot's next message must be a template. */
+export { LONG_WAIT_MINUTES };
 
 export const isVariableName = (v: string) => VAR.test(v);
 
@@ -134,10 +137,12 @@ export function validateFlowIssues(flow: FlowDefinition): Issue[] {
   const ids = new Set(flow.nodes.map((n) => n.id));
   if (!flow.start || !ids.has(flow.start)) add("error", "There is no start step. Open a step and choose \"Make this the first step\".");
 
+  const longWaits = new Set(longWaitProblems(flow.nodes, flow.edges).map((n) => n.id));
   for (const node of flow.nodes) {
     const name = NODE_META[node.type].label;
     for (const m of validateNode(node)) add("error", `${name}: ${m}`, node.id);
     const out = flow.edges.filter((e) => e.from === node.id);
+    if (longWaits.has(node.id)) add("error", `${name}: ${LONG_WAIT_MESSAGE.charAt(0).toLowerCase()}${LONG_WAIT_MESSAGE.slice(1)}`, node.id);
     for (const h of handlesOf(node)) {
       if (!h.optional && !out.some((e) => e.label === h.label)) {
         const terminalish = h.label === undefined;

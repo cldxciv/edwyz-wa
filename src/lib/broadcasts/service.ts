@@ -28,6 +28,7 @@ import {
 } from "./cost";
 import { type MissingValuePolicy, type VariableMap, countMissing, parsePolicy, parseVariableMap } from "./mapping";
 import { BROADCAST_QUEUE, enqueueBroadcastRun } from "./jobs";
+import { assertMediaReady, assertUploadsFit, mediaWakeAt } from "./media";
 import { clearPauseReason, pauseReasonKey, readPauseReason } from "./pause";
 import { portfolioUsage } from "./portfolio";
 import { assertValidSchedule, parseRetryDays } from "./schedule";
@@ -94,6 +95,7 @@ export async function createBroadcast(actor: Actor, input: CreateBroadcastInput)
   const retryDays = parseRetryDays(input.retryDays);
   const policy = parsePolicy(input.missingValuePolicy);
   const variableMap = parseVariableMap(input.variableMap, template.components, policy);
+  assertUploadsFit(variableMap, phone.id);
   const audienceFilter = input.fixedFrom ? ({ fixed: true, sourceBroadcastId: input.fixedFrom, ...(input.fixedOutcome ? { outcome: input.fixedOutcome } : {}) } as Prisma.InputJsonObject) : audienceJson(input.audience);
   if (audienceFilter && !input.fixedFrom) await resolveFilters(actor.tenantId, specFromJson(audienceFilter));
 
@@ -227,7 +229,9 @@ export async function startBroadcast(actor: Actor, id: string) {
   if (!froze) {
     total = await existing();
   } else {
-    await assertWithinLimit(tenantId, "broadcastContacts", await countAudience(tenantId, broadcast.segmentTags, spec));
+    // The whole audience is what this start adds, so the broadcast's own waiting messages (frozen when it was scheduled) are left
+    // out of the month's use: "Send now" on a scheduled broadcast must not count them twice.
+    await assertWithinLimit(tenantId, "broadcastContacts", await countAudience(tenantId, broadcast.segmentTags, spec), { excludeBroadcastId: broadcast.id });
     total = await freezeAudience(tenantId, broadcast.id, broadcast.segmentTags, spec);
   }
   if (total === 0) throw new HttpError(400, "No opted-in contacts match this audience.");
@@ -235,6 +239,14 @@ export async function startBroadcast(actor: Actor, id: string) {
   const unfreeze = async () => {
     if (froze) await prisma.broadcastRecipient.deleteMany({ where: { tenantId, broadcastId: broadcast.id, status: "pending" } });
   };
+
+  // An uploaded header file must still be alive at WhatsApp (it is uploaded again here when it is getting old).
+  try {
+    await assertMediaReady(broadcast);
+  } catch (error) {
+    await unfreeze();
+    throw error;
+  }
 
   // Checked on every start, resumes included: a broadcast that paused for a missing value must not restart until the data is fixed.
   if (policyOf(broadcast.missingValuePolicy) === "fail") {
@@ -300,8 +312,23 @@ export async function startBroadcast(actor: Actor, id: string) {
     throw error;
   }
   if (resuming) await clearPauseReason(broadcast.id);
-  await enqueueBroadcastRun(broadcast.id, runAt);
+  // A scheduled broadcast with an uploaded file wakes before it is due to keep the file alive at WhatsApp (process.ts).
+  const wake = later ? mediaWakeAt(broadcast.variableMap, new Date()) : null;
+  await enqueueBroadcastRun(broadcast.id, wake && wake < runAt ? wake : runAt);
   return { ...updated, spendWarning };
+}
+
+/**
+ * Removes a draft that never started (no recipients), for example the one the wizard made before the person went back and changed
+ * a step, so it does not stay in the list as canceled. Anything that started is canceled instead, to keep its report.
+ */
+export async function deleteDraftBroadcast(actor: Actor, id: string): Promise<void> {
+  const broadcast = await ownedBroadcast(actor, id);
+  if (broadcast.status !== "draft") throw new HttpError(409, `A ${broadcast.status} broadcast cannot be deleted. Cancel it instead.`);
+  const recipients = await prisma.broadcastRecipient.count({ where: { tenantId: actor.tenantId, broadcastId: broadcast.id } });
+  if (recipients > 0) throw new HttpError(409, "This broadcast already has people in it. Cancel it instead.");
+  const { count } = await prisma.broadcast.deleteMany({ where: { id: broadcast.id, tenantId: actor.tenantId, status: "draft" } });
+  if (count === 0) throw new HttpError(409, "This broadcast was just changed. Refresh the page to see where it is now.");
 }
 
 export async function pauseBroadcast(actor: Actor, id: string) {

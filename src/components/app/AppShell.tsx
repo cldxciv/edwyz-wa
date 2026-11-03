@@ -3,12 +3,13 @@
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Role } from "@/generated/prisma/client";
-import { apiFetch } from "@/components/ui";
+import { apiFetch, cn } from "@/components/ui";
 import { EddyRoot, type EddyRequest } from "@/components/eddy/EddyRoot";
 import { EDDY_EVENTS, onEddyEvent, type EddyOpenDetail } from "@/components/eddy/events";
 import { CommandPalette } from "./CommandPalette";
 import { MobileDrawer } from "./MobileDrawer";
 import { MobileTabBar } from "./MobileTabBar";
+import { isActive } from "./nav";
 import { ShellProvider } from "./shell-context";
 import { ShortcutsDialog } from "./ShortcutsDialog";
 import { IDLE, isTypingTarget, resolveShortcut, type ShortcutState } from "./shortcuts";
@@ -38,6 +39,9 @@ export function AppShell({ role, workspaceName, userName, email, banner, childre
   const [eddyRequest, setEddyRequest] = useState<EddyRequest | null>(null);
   const chord = useRef<ShortcutState>(IDLE);
   const modalOpen = useRef(false);
+  // A page that fills the screen (the inbox, whose panes scroll on their own) gets a column exactly one screen tall and a flex
+  // main, so it takes what is left under the banners and the top bar, whatever their height, and the page never scrolls twice.
+  const fill = isActive(pathname, "/app/inbox");
 
   useEffect(() => {
     modalOpen.current = palette || shortcuts || drawer;
@@ -110,15 +114,19 @@ export function AppShell({ role, workspaceName, userName, email, banner, childre
       >
         Skip to main content
       </a>
-      <div className="flex min-h-screen">
+      {/* h-dvh on both for a full-screen page: a 100vh row is taller than the screen while a phone shows its address bar. */}
+      <div className={cn("flex", fill ? "h-dvh" : "min-h-screen")}>
         <Sidebar role={role} />
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className={cn("flex min-w-0 flex-1 flex-col", fill && "h-dvh")}>
           {banner}
           <TopBar workspaceName={workspaceName} userName={userName} email={email} role={role} />
           <main
             id="main-content"
             tabIndex={-1}
-            className="flex-1 px-4 py-6 outline-none pb-[calc(5.5rem+env(safe-area-inset-bottom))] md:px-8 md:pb-8 2xl:px-12"
+            className={cn(
+              "flex-1 px-4 outline-none md:px-8 2xl:px-12",
+              fill ? "flex min-h-0 flex-col pt-3 pb-[calc(4.25rem+env(safe-area-inset-bottom))] md:py-4" : "py-6 pb-[calc(5.5rem+env(safe-area-inset-bottom))] md:pb-8",
+            )}
           >
             {children}
           </main>

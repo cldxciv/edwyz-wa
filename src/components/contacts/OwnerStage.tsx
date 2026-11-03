@@ -51,7 +51,7 @@ export function OwnerStageFields({
           ))}
         </Select>
       </FormField>
-      <FormField label="Lead stage" optional hint="Where this customer is in your sales process.">
+      <FormField label="Lead stage" optional hint="Where this customer is in your sales process. The list is set in Chat routing settings. It is separate from the stages on the Leads page.">
         <Select value={stage} onChange={(e) => onStage(e.target.value)}>
           <option value="">Not set</option>
           {stageChoices.map((s) => (

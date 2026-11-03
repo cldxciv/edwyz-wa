@@ -28,7 +28,7 @@ vi.mock("@/lib/spend/notify", async (orig) => (await import("./helpers/fake-ai-g
 // @/lib/lifecycle/state stays real here: the usage alert tests below drive claimOnce through prisma.platformSetting.
 
 import {
-  adAccountsBlockedByPlan, assertAdAccountAllowed, assertChannelsAllowed, assertWithinLimit, limitFor, percentUsed, reserveCredits, usageLines,
+  adAccountsBlockedByPlan, assertAdAccountAllowed, assertChannelsAllowed, assertWithinLimit, limitFor, percentUsed, reserveCredits, resolveLimits, usageLines,
 } from "@/lib/billing/limits";
 import { alertLevel, alertsFrom, runUsageAlerts, sendUsageAlerts } from "@/lib/billing/usage-alerts";
 import { registerAiAgentSeams, resetAiAgentSeams } from "@/lib/ai-agent/seams";
@@ -256,6 +256,34 @@ describe("limitFor", () => {
     expect(await limitFor("t1", "channels")).toBe(5);
     db.tenant.findUnique.mockResolvedValue({ status: "active", suspendedReason: null, billingExempt: true, trialEndsAt: null, subscription: null });
     expect(await limitFor("t1", "adAccounts")).toBeNull();
+  });
+
+  it("resolveLimits says where the limits come from, for the meter and enforcement alike", async () => {
+    subscribed({ contactLimit: 500 });
+    db.plan.findUnique.mockResolvedValue({ ...NO_LIMITS, contactLimit: 500, name: "Pro" });
+    expect(await resolveLimits("t1")).toMatchObject({ from: "plan", planName: "Pro", limits: { contactLimit: 500 } });
+    expect((await resolveLimits("t1")).limits).not.toHaveProperty("name");
+    db.tenant.findUnique.mockResolvedValue({ status: "active", suspendedReason: null, billingExempt: false, trialEndsAt: new Date(Date.now() + DAY), subscription: null });
+    db.plan.findUnique.mockResolvedValue({ ...NO_LIMITS, contactLimit: 50, name: "Free trial" });
+    expect(await resolveLimits("t1")).toMatchObject({ from: "trial", planName: "Free trial", limits: { contactLimit: 50 }, status: { state: "trialing" } });
+    expect(db.plan.findUnique).toHaveBeenLastCalledWith(expect.objectContaining({ where: { code: "trial" } }));
+    db.plan.findUnique.mockResolvedValue(null);
+    expect(await resolveLimits("t1")).toMatchObject({ from: null, planName: null, limits: null });
+    db.tenant.findUnique.mockResolvedValue({ status: "active", suspendedReason: null, billingExempt: true, trialEndsAt: null, subscription: null });
+    expect(await resolveLimits("t1")).toMatchObject({ from: null, limits: null, status: { state: "exempt" } });
+  });
+
+  it("a trial whose checkout was opened but never paid keeps the trial allowance, not the chosen plan's", async () => {
+    // startSubscription writes the row (status expired, no period, the chosen plan) before the payment window opens.
+    db.tenant.findUnique.mockResolvedValue({
+      status: "active", suspendedReason: null, billingExempt: false, trialEndsAt: new Date(Date.now() + DAY),
+      subscription: { status: "expired", currentPeriodEnd: null, pastDueSince: null, planId: "p_agency", razorpaySubscriptionId: "sub_1", plan: { name: "Agency" } },
+    });
+    db.plan.findUnique.mockImplementation(async ({ where }: { where: { id?: string; code?: string } }) =>
+      where.code === "trial" ? { ...NO_LIMITS, contactLimit: 50, name: "Free trial" } : { ...NO_LIMITS, contactLimit: null, name: "Agency" },
+    );
+    expect(await resolveLimits("t1")).toMatchObject({ from: "trial", planName: "Free trial", limits: { contactLimit: 50 }, status: { state: "trialing" } });
+    expect(db.plan.findUnique).not.toHaveBeenCalledWith(expect.objectContaining({ where: { id: "p_agency" } }));
   });
 });
 

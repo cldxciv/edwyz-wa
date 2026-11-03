@@ -10,6 +10,7 @@ import {
   indexAtX,
   labelIndexes,
   moveCursor,
+  plural,
   presetLabel,
   rangeProblem,
   rangeText,
@@ -18,6 +19,15 @@ import {
   usageNote,
   usageSummary,
 } from "@/components/reports/helpers";
+
+describe("plural", () => {
+  it("matches the noun to the count", () => {
+    expect(plural(1, "conversation")).toBe("1 conversation");
+    expect(plural(0, "conversation")).toBe("0 conversations");
+    expect(plural(1200, "new customer")).toBe(`${(1200).toLocaleString()} new customers`);
+    expect(plural(2, "reply", "replies")).toBe("2 replies");
+  });
+});
 
 describe("date range helpers", () => {
   it("counts both end days", () => {

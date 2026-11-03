@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { apiFetch, Button, Dialog, FormField, Skeleton, Textarea, toast } from "@/components/ui";
+import { StopWordsEditor } from "@/components/contacts/StopWordsEditor";
 import type { InboxSettings } from "./types";
 
 /** Workspace-wide inbox options. Admins only. */
@@ -55,10 +56,14 @@ export function InboxSettingsDialog({ onClose }: { onClose: () => void }) {
               <span className="block text-muted">Customers see who is writing: the name appears in bold above each text message your team sends.</span>
             </span>
           </label>
-          <FormField label="When a customer replies STOP" hint="We send this once and stop all marketing messages to them. Leave empty to send nothing.">
+          <StopWordsEditor words={settings.stopWords ?? []} onChange={(stopWords) => setSettings({ ...settings, stopWords })} />
+          <FormField
+            label="When a customer sends a STOP word"
+            hint="We send this once. Say that they get no marketing messages, that order updates and replies to their own messages can still arrive, and that START brings offers back. Leave empty to send nothing."
+          >
             <Textarea rows={3} maxLength={500} value={settings.optOutReply} onChange={(e) => setSettings({ ...settings, optOutReply: e.target.value })} />
           </FormField>
-          <FormField label="When they reply START to subscribe again" hint="Only sent to people who had unsubscribed. Leave empty to send nothing.">
+          <FormField label="When they send START to get offers again" hint="Only sent to people who had opted out. Leave empty to send nothing.">
             <Textarea rows={3} maxLength={500} value={settings.optInReply} onChange={(e) => setSettings({ ...settings, optInReply: e.target.value })} />
           </FormField>
         </div>

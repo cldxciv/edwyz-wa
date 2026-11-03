@@ -1,13 +1,20 @@
 import type { Prisma } from "@/generated/prisma/client";
+import { receivableWhere, type SendKind } from "@/lib/contacts/opt-out";
 import { prisma } from "@/lib/db";
-import { type AudienceSpec, countMatching, matchingContactIds, resolveFilters, specFromJson } from "@/lib/segments/service";
+import { type AudienceSpec, NOT_BLOCKED, countMatching, matchingContactIds, resolveFilters, specFromJson } from "@/lib/segments/service";
 
-/** Opted-in, not opted-out, and (when tags are given) carrying ANY of the tags. */
-export function audienceWhere(tenantId: string, segmentTags: string[]): Prisma.ContactWhereInput {
+/**
+ * Opted-in, not opted-out, not blocked, and (when tags are given) carrying ANY of the tags. Counting, previews, cost estimates and
+ * the frozen audience all start from this, so a blocked contact is never counted or messaged; one blocked after the audience was
+ * frozen is skipped at send time with the code "blocked" (process.ts). The opt-out filter is the marketing one (lib/contacts/opt-out.ts)
+ * unless a caller passes the template's kind; a broadcast needs a recorded opt-in for every template anyway, and an opt-out clears it.
+ */
+export function audienceWhere(tenantId: string, segmentTags: string[], kind: SendKind = "marketing"): Prisma.ContactWhereInput {
   return {
     tenantId,
     optIn: true,
-    optedOutAt: null,
+    ...receivableWhere(kind),
+    ...NOT_BLOCKED,
     ...(segmentTags.length ? { tags: { hasSome: segmentTags } } : {}),
   };
 }

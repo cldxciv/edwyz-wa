@@ -38,6 +38,12 @@ export const SITEMAP_ENTRIES = [
   { path: "/pricing", changeFrequency: "weekly", priority: 0.9 },
   { path: "/signup", changeFrequency: "monthly", priority: 0.8 },
   { path: "/docs", changeFrequency: "monthly", priority: 0.6 },
+  // The docs subpages (DOC_LINKS in src/app/(site)/docs/parts.tsx, minus the OpenAPI file); each sets its own canonical.
+  { path: "/docs/authentication", changeFrequency: "monthly", priority: 0.5 },
+  { path: "/docs/endpoints", changeFrequency: "monthly", priority: 0.5 },
+  { path: "/docs/webhooks", changeFrequency: "monthly", priority: 0.5 },
+  { path: "/docs/rate-limits", changeFrequency: "monthly", priority: 0.5 },
+  { path: "/docs/errors", changeFrequency: "monthly", priority: 0.5 },
   { path: "/login", changeFrequency: "yearly", priority: 0.3 },
   { path: "/privacy", changeFrequency: "yearly", priority: 0.3 },
   { path: "/terms", changeFrequency: "yearly", priority: 0.3 },

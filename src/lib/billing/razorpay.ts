@@ -13,7 +13,27 @@ export type RzSubscription = {
   current_end?: number | null;
   paid_count?: number;
   notes?: Record<string, unknown> | unknown[];
+  /** "card", "emandate", "upi"...: how the customer pays. UPI and e-mandate subscriptions cannot be updated. */
+  payment_method?: string | null;
+  start_at?: number | null;
+  has_scheduled_changes?: boolean;
+  change_scheduled_at?: number | null;
 };
+
+/**
+ * A request Razorpay answered with an error. Still an HttpError(502) for every caller that only shows the message; the plan
+ * change reads the provider's own status and reason to tell "this payment method cannot be changed" apart.
+ */
+export class RazorpayRequestError extends HttpError {
+  constructor(
+    message: string,
+    public providerStatus: number,
+    public providerCode: string | null,
+    public providerDescription: string | null,
+  ) {
+    super(502, message);
+  }
+}
 export type RzPayment = { id: string; amount: number; currency: string; status: string };
 /** One invoice Razorpay raised for a subscription charge (the paid ones carry the payment id). */
 export type RzInvoice = {
@@ -36,7 +56,7 @@ export function razorpayConfigured(): boolean {
   return Boolean(process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET);
 }
 
-async function rz<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+async function rz<T>(method: "GET" | "POST" | "PATCH", path: string, body?: unknown): Promise<T> {
   const id = process.env.RAZORPAY_KEY_ID;
   const secret = process.env.RAZORPAY_KEY_SECRET;
   if (!id || !secret) throw new HttpError(503, "Payments are not configured yet. Please contact support.");
@@ -54,10 +74,11 @@ async function rz<T>(method: "GET" | "POST", path: string, body?: unknown): Prom
   } catch {
     throw new HttpError(502, "The payment provider did not respond. Please try again.");
   }
-  const json = (await res.json().catch(() => ({}))) as { error?: { description?: string } };
+  const json = (await res.json().catch(() => ({}))) as { error?: { description?: string; code?: string } };
   if (!res.ok) {
     console.warn("[billing] razorpay request failed", method, path.replace(/[A-Za-z0-9]{8,}/g, ":id"), res.status);
-    throw new HttpError(502, `The payment provider rejected the request${json.error?.description ? `: ${json.error.description}` : "."}`);
+    const description = typeof json.error?.description === "string" ? json.error.description.slice(0, 300) : null;
+    throw new RazorpayRequestError(`The payment provider rejected the request${description ? `: ${description}` : "."}`, res.status, typeof json.error?.code === "string" ? json.error.code : null, description);
   }
   return json as T;
 }
@@ -78,14 +99,32 @@ export function totalCountFor(intervalMonths: number): number {
   return Math.max(1, Math.ceil(120 / Math.max(1, intervalMonths)));
 }
 
-export function createSubscription(input: { razorpayPlanId: string; intervalMonths: number; notes: Record<string, string> }) {
+/** `startAt` (unix seconds): the first charge waits until then; the customer only authorises the payment method now. */
+export function createSubscription(input: { razorpayPlanId: string; intervalMonths: number; notes: Record<string, string>; startAt?: number }) {
   return rz<RzSubscription>("POST", "/subscriptions", {
     plan_id: input.razorpayPlanId,
     total_count: totalCountFor(input.intervalMonths),
     customer_notify: true,
     notes: input.notes,
+    ...(input.startAt ? { start_at: input.startAt } : {}),
   });
 }
+
+/**
+ * Moves a subscription to another plan (PATCH /subscriptions/:id). `now` applies at once and Razorpay charges or credits the
+ * prorated difference (an upgrade whose charge fails is not applied); `cycle_end` applies when the current cycle ends, with no
+ * charge now. Razorpay refuses it for UPI and e-mandate subscriptions, and for domestic cards only the offer can change.
+ */
+export function updateSubscription(id: string, input: { razorpayPlanId: string; scheduleChangeAt: "now" | "cycle_end" }) {
+  return rz<RzSubscription>("PATCH", `/subscriptions/${encodeURIComponent(id)}`, {
+    plan_id: input.razorpayPlanId,
+    schedule_change_at: input.scheduleChangeAt,
+    customer_notify: true,
+  });
+}
+
+/** Drops a change scheduled for the end of the cycle (the live plan stays as it is). */
+export const cancelScheduledChanges = (id: string) => rz<RzSubscription>("POST", `/subscriptions/${encodeURIComponent(id)}/cancel_scheduled_changes`, {});
 
 export const cancelSubscription = (id: string, atCycleEnd = true) =>
   rz<RzSubscription>("POST", `/subscriptions/${encodeURIComponent(id)}/cancel`, { cancel_at_cycle_end: atCycleEnd });

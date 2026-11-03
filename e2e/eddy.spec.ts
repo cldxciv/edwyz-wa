@@ -135,8 +135,11 @@ test.describe("Eddy panel states", () => {
     await expect(hinglish.locator("li")).toHaveCount(2);
     // The announcement is in the reply's language (a11y.eddy_replied in the catalogue; 5.7: the chrome follows the turn).
     await expect(panel.locator("[data-eddy-announce]")).toContainText("Eddy ka jawab: Aapke 3 templates approved hain");
-    await box.fill("मेरे टेम्पलेट दिखाइए");
-    await box.press("Enter");
+    // The composer is chrome too, so its label is now in Hinglish (panel.composer.label).
+    await expect(box).toHaveCount(0);
+    const hinglishBox = panel.getByRole("textbox", { name: "Eddy ke liye message" });
+    await hinglishBox.fill("मेरे टेम्पलेट दिखाइए");
+    await hinglishBox.press("Enter");
     await expect(panel.locator('[data-eddy-item="eddy"] [lang="hi"]').last()).toContainText("आपके तीन टेम्पलेट अप्रूव हैं।");
     await expect(panel.locator('[data-eddy-item="member"] [lang="hi"]').last()).toContainText("मेरे टेम्पलेट दिखाइए");
   });

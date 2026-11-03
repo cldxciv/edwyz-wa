@@ -67,19 +67,19 @@ describe("segment builder helpers", () => {
 describe("value mapping form", () => {
   const slots = templateSlots(components);
 
-  it("offers only links for a media header", () => {
-    expect(choicesFor(slots[0])).toEqual(["attribute", "static"]);
+  it("offers a file upload or a link for a media header", () => {
+    expect(choicesFor(slots[0])).toEqual(["upload", "static", "attribute"]);
     expect(choicesFor(slots[1])).toContain("field:first_name");
   });
   it("starts with the name for the first placeholder and everything else open", () => {
     const map = defaultMap(slots);
     expect(map["1"]).toEqual({ source: "field", key: "name" });
-    expect(map.header).toEqual({ source: "static", value: "" });
+    expect(map.header).toEqual({ source: "upload", value: "" });
     expect(map["2"]).toEqual({ source: "attribute", key: "" });
     expect(Object.keys(mappingProblems(slots, map, "skip")).sort()).toEqual(["2", "button:0", "header"]);
   });
   it("tells the person what to fix first", () => {
-    expect(firstMappingProblem(slots, defaultMap(slots), "skip")).toBe("Header image link: Paste the link to the file.");
+    expect(firstMappingProblem(slots, defaultMap(slots), "skip")).toBe("Header image: Upload the file to send.");
     const map = {
       ...defaultMap(slots),
       header: { source: "static" as const, value: "http://insecure.example/a.png" },

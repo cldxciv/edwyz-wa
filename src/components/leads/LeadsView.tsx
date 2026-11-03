@@ -4,11 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Card, DataTable, EmptyState, ErrorState, FormField, PageHeader, Select, Skeleton, Stat, StatusPill, Tabs, apiFetch, buttonSizes, buttonVariants, cn, tabIds, toast, type Column } from "@/components/ui";
 import { canManage, useRole } from "@/components/contacts/hooks";
 import { dispatchEddyEvent } from "@/components/eddy/events";
-import { LeadDrawer } from "./LeadDrawer";
+import { LeadDrawer, leadOrigin } from "./LeadDrawer";
 import { LeadsNav } from "./LeadsNav";
 import { ConsentBadge, ResponseBadge } from "./LeadParts";
 import { PipelineBoard } from "./PipelineBoard";
-import { STATUSES, formatResponse, friendlyError, leadDisplayName, leadStatusLabel, summarizeLeads } from "./helpers";
+import { STATUSES, connectedPageCount, formatResponse, friendlyError, leadDisplayName, leadStatusLabel, summarizeLeads } from "./helpers";
 import { useNow } from "./useNow";
 import type { Agent, LeadDetail, LeadItem } from "./types";
 
@@ -51,6 +51,8 @@ export function LeadsView() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [loadedStatus, setLoadedStatus] = useState("");
   const [focusId, setFocusId] = useState<string | null>(null);
+  // null until known; the empty state only offers "Connect" when no Page is connected.
+  const [pages, setPages] = useState<number | null>(null);
   const request = useRef(0);
   const loadedRef = useRef("");
 
@@ -104,6 +106,12 @@ export function LeadsView() {
   useEffect(() => {
     void load(null, effectiveStatus);
   }, [effectiveStatus, load]);
+
+  useEffect(() => {
+    apiFetch<{ connections: Parameters<typeof connectedPageCount>[0] }>("/api/meta-connect/connections")
+      .then((r) => setPages(connectedPageCount(r.connections)))
+      .catch(() => setPages(null));
+  }, []);
 
   useEffect(() => {
     apiFetch<{ agents: Agent[] }>("/api/routing/agents")
@@ -190,7 +198,8 @@ export function LeadsView() {
       },
       { key: "status", header: "Stage", cell: (r) => <StatusPill status={r.status} label={leadStatusLabel(r.status)} /> },
       { key: "reply", header: "First reply", cell: (r) => <ResponseBadge lead={r} now={now} /> },
-      { key: "form", header: "Form", accessor: (r) => r.form?.name ?? "Lead form" },
+      // A lead from a click-to-WhatsApp ad has no form: it says so instead of a form name.
+      { key: "form", header: "Came from", accessor: (r) => leadOrigin(r) },
       { key: "assigned", header: "Assigned to", accessor: (r) => assigneeName(r.assignedToId) },
     ],
     [now, assigneeName],
@@ -252,6 +261,7 @@ export function LeadsView() {
             </FormField>
           </div>
         )}
+        <p className="w-full text-xs text-muted">These stages belong to each lead. Moving a lead does not change the lead stage on its contact.</p>
       </div>
 
       <div role="tabpanel" id={panel.panel} aria-labelledby={panel.tab} aria-busy={loading || undefined}>
@@ -266,7 +276,7 @@ export function LeadsView() {
               </Button>
             }
           >
-            {error} You are still seeing the earlier results.
+            {error}{" "}You are still seeing the earlier results.
           </Alert>
         )}
         {error && rows.length === 0 ? (
@@ -293,11 +303,21 @@ export function LeadsView() {
           ) : (
             <EmptyState
               title="No leads yet"
-              body="When someone submits one of your Facebook or Instagram lead forms, they show up here within seconds, ready for a quick reply."
+              body={
+                pages
+                  ? "Your Facebook Pages are connected. When someone submits one of your Facebook or Instagram lead forms, they show up here within seconds, ready for a quick reply."
+                  : "When someone submits one of your Facebook or Instagram lead forms, they show up here within seconds, ready for a quick reply."
+              }
               action={
-                <a className={linkButton("primary")} href="/app/settings/connections">
-                  Connect your Facebook page
-                </a>
+                pages ? (
+                  <a className={linkButton("secondary")} href="/app/leads/forms">
+                    See your lead forms
+                  </a>
+                ) : (
+                  <a className={linkButton("primary")} href="/app/settings/connections">
+                    Connect your Facebook page
+                  </a>
+                )
               }
             />
           )

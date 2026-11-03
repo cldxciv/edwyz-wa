@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DecidedNotice, DecisionForm, Intro, InvalidLink, SummaryCard } from "@/components/approvals/ApprovalPage";
 import { decidedCopy, noticeCopy, plainKind, plainRow, plainRows, plainTitle, reviewIntro } from "@/components/approvals/present";
+import { ApprovalList } from "@/components/approvals/ApprovalsPanel";
+import { approvalDates, approvalStatusView, approvalsPath, isOpenApproval, resendBody, resendProblem, TEMPLATE_MISSING } from "@/components/approvals/panel-helpers";
+import { readFileSync } from "node:fs";
 
 const html = (node: React.ReactNode) => renderToStaticMarkup(node as React.ReactElement);
 
@@ -141,5 +144,44 @@ describe("approval page wording for an offer", () => {
     expect(plainTitle("Ad creative", "Spring sale")).toBe("Spring sale");
     const out = html(SummaryCard({ summary: { kindLabel: "Creative brief", title: "Creative brief", rows: [{ label: "Goal", value: "leads" }], text: "Free class" } }));
     expect(out).not.toMatch(/brief/i);
+  });
+});
+
+describe("client approvals panel", () => {
+  const row = (status: string, extra: Record<string, unknown> = {}) => ({ id: `ap-${status}`, status, comment: null, expiresAt: "2026-11-06T00:00:00Z", decidedAt: null, createdAt: "2026-10-30T00:00:00Z", ...extra });
+
+  it("lists by subject and names every status plainly", () => {
+    expect(approvalsPath("ad_campaign", "c 1")).toBe("/api/approvals?subjectType=ad_campaign&subjectId=c%201");
+    expect(approvalStatusView("pending")).toEqual({ label: "Waiting for your client", tone: "info" });
+    expect(approvalStatusView("changes_requested").label).toBe("Changes asked for");
+    expect(approvalStatusView("rejected").tone).toBe("bad");
+    expect(approvalStatusView("odd").label).toBe("Unknown");
+    expect(["pending", "approved", "expired"].filter(isOpenApproval)).toEqual(["pending"]);
+    expect(approvalDates(row("pending"), "en-GB")).toBe("Sent 30 Oct 2026, link works until 6 Nov 2026");
+    expect(approvalDates(row("approved", { decidedAt: "2026-10-31T00:00:00Z" }), "en-GB")).toBe("Sent 30 Oct 2026, answered 31 Oct 2026");
+  });
+
+  it("checks the WhatsApp send before it goes", () => {
+    expect(resendProblem({ phone: "", mode: "text", templateId: "" })).toMatch(/WhatsApp number/);
+    expect(resendProblem({ phone: "12345", mode: "text", templateId: "" })).toMatch(/country code/);
+    expect(resendProblem({ phone: "+91 98765 43210", mode: "template", templateId: "" })).toBe(TEMPLATE_MISSING);
+    expect(resendProblem({ phone: "+91 98765 43210", mode: "text", templateId: "" })).toBeNull();
+    expect(resendBody({ phone: " +91 98765 43210 ", mode: "text", templateId: "t1" })).toEqual({ mode: "text", phone: "+91 98765 43210" });
+    expect(resendBody({ phone: "+919876543210", mode: "template", templateId: "t1" })).toEqual({ mode: "template", phone: "+919876543210", templateId: "t1" });
+  });
+
+  it("offers Send on WhatsApp and Withdraw only for a link the client has not answered, and shows their comment", () => {
+    const out = html(ApprovalList({ approvals: [row("pending"), row("changes_requested", { comment: "Use a brighter picture", decidedAt: "2026-10-31T00:00:00Z" })], busy: null, onSend: () => undefined, onRevoke: () => undefined }));
+    expect(out.match(/Send on WhatsApp/g)).toHaveLength(1);
+    expect(out.match(/Withdraw link/g)).toHaveLength(1);
+    expect(out).toContain("Your client wrote: </span>Use a brighter picture");
+    expect(html(ApprovalList({ approvals: [], busy: null, onSend: () => undefined, onRevoke: () => undefined }))).toContain("Nothing sent for approval yet.");
+  });
+
+  it("is wired to the approvals API and shown on campaigns and optimiser suggestions", () => {
+    const panel = readFileSync("src/components/approvals/ApprovalsPanel.tsx", "utf8");
+    for (const part of ['"/api/approvals", { method: "POST"', "/resend`", "/revoke`", "/api/templates?status=approved"]) expect(panel).toContain(part);
+    expect(readFileSync("src/components/optimizer/OptimizerView.tsx", "utf8")).toContain('subjectType="optimizer_proposal"');
+    expect(readFileSync("src/components/ads/CampaignDetail.tsx", "utf8")).toContain('subjectType="ad_campaign"');
   });
 });

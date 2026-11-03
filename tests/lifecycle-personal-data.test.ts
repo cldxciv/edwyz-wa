@@ -3,12 +3,16 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   appendOnlyPurgeTables,
+  batchedTables,
   deletableTables,
+  erasureTransactionTables,
   FIXED_RETENTION_DAYS,
   PERSONAL_DATA,
+  PROMOTE_RETENTION_DAYS,
   RETENTION_DEFAULTS,
   RETENTION_LIMITS,
   RETENTION_SUMMARY,
+  STUDIO_RETENTION,
 } from "@/lib/lifecycle/personal-data";
 
 const schema = readFileSync(path.resolve(__dirname, "../prisma/schema.prisma"), "utf8");
@@ -80,7 +84,7 @@ describe("personal data registry", () => {
 
   it("names the columns that are overwritten before secret rows are deleted", () => {
     const secrets = deletableTables().filter((e) => e.erase.method === "secrets-then-delete");
-    expect(secrets.map((e) => e.id).sort()).toEqual(["AccessToken", "McpConnection", "MetaAsset", "MetaConnection", "ShopifyStore", "WebhookEndpoint"]);
+    expect(secrets.map((e) => e.id).sort()).toEqual(["AccessToken", "CanvaConnection", "McpConnection", "MetaAsset", "MetaConnection", "ShopifyStore", "WebhookEndpoint"]);
     for (const e of secrets) {
       if (e.erase.method !== "secrets-then-delete") continue;
       for (const column of Object.keys(e.erase.overwrite)) expect(models.get(e.id), `${e.id}.${column}`).toContain(column);
@@ -98,6 +102,7 @@ describe("personal data registry", () => {
     before("AdSet", "AdCampaign");
     before("CreativeAsset", "CreativeBrief");
     before("CreativeBrief", "Brand");
+    before("StudioItem", "Brand");
     before("MetaAsset", "MetaConnection");
     before("ChatbotSession", "Chatbot");
     before("AiKnowledgeSource", "AiAgent");
@@ -206,5 +211,117 @@ describe("retention settings", () => {
   it("points every retentionKey at a real setting and summarises each one", () => {
     for (const e of PERSONAL_DATA) if (e.retentionKey) expect(RETENTION_DEFAULTS).toHaveProperty(e.retentionKey);
     expect(RETENTION_SUMMARY.length).toBeGreaterThanOrEqual(13);
+  });
+});
+
+describe("Instagram and Facebook Page ads registration (docs/IG-PAGE-ADS-SPEC.md 5.5)", () => {
+  const PROMOTE = ["InsightBreakdown", "AdTest", "AdMedia", "AdAudienceUpload", "AdAudience"];
+
+  it("lists the five new tables with the purposes of the 5.5 table", () => {
+    expect(Object.fromEntries(PROMOTE.map((id) => [id, listed.get(id)?.category]))).toEqual({
+      AdMedia: "user_content",
+      AdAudience: "no_personal_data",
+      AdAudienceUpload: "counts_only",
+      AdTest: "no_personal_data",
+      InsightBreakdown: "aggregates",
+    });
+    for (const id of PROMOTE) {
+      expect(models.get(id), id).toContain("tenantId");
+      expect(listed.get(id)?.store, id).toBe("table");
+      expect(listed.get(id)?.erase, id).toEqual({ method: "delete" });
+    }
+    expect(listed.get("AdAudience")?.holds).toContain("consentBasis");
+    expect(listed.get("AdAudienceUpload")?.holds).toMatch(/no hashes, no identifiers/);
+  });
+
+  it("deletes exactly those tables in the erasure's final transaction, children first, and nothing else there", () => {
+    expect(erasureTransactionTables().map((e) => e.id)).toEqual(PROMOTE);
+    for (const id of PROMOTE) expect(batchedTables().map((e) => e.id), id).not.toContain(id);
+    expect([...batchedTables(), ...erasureTransactionTables()].map((e) => e.id).sort()).toEqual(deletableTables().map((e) => e.id).sort());
+    for (const e of erasureTransactionTables()) expect(e.how).toContain("final transaction");
+    const order = PERSONAL_DATA.map((e) => e.id);
+    expect(order.indexOf("AdAudienceUpload")).toBeLessThan(order.indexOf("AdAudience"));
+    expect(order.indexOf("AdTest")).toBeLessThan(order.indexOf("AdCampaign"));
+  });
+
+  it("registers the new Lead columns under the Lead rules and LeadForm.spec as no personal data, each a real column", () => {
+    const lead = listed.get("Lead")!;
+    expect(Object.keys(lead.columns ?? {}).sort()).toEqual(["adsetMetaId", "conversationId", "isOrganic", "isTest", "platform", "source"]);
+    for (const [column, rule] of Object.entries(lead.columns!)) {
+      expect(models.get("Lead"), column).toContain(column);
+      expect(rule).toBe("The same rules as the rest of the lead.");
+    }
+    const form = listed.get("LeadForm")!;
+    expect(form.columns?.spec).toMatch(/^No personal data/);
+    for (const column of Object.keys(form.columns ?? {})) expect(models.get("LeadForm"), column).toContain(column);
+    expect(Object.keys(form.columns ?? {})).toHaveLength(10);
+    // Every column any entry registers exists on its model.
+    for (const e of PERSONAL_DATA) for (const column of Object.keys(e.columns ?? {})) expect(models.get(e.id), `${e.id}.${column}`).toContain(column);
+  });
+
+  it("states the fixed retention periods of 5.5 and quotes them in the registry", () => {
+    expect(PROMOTE_RETENTION_DAYS).toEqual({ insightBreakdowns: 400, audienceUploads: 180, adOnlyMedia: 30, processedVideoOriginals: 30, testLeads: 30, discardedDrafts: 30 });
+    expect(listed.get("InsightBreakdown")?.retention).toBe("400 days after the day they describe, or the ad performance period if that is shorter (configurable).");
+    expect(listed.get("AdAudienceUpload")?.retention).toBe("180 days after the upload.");
+    expect(listed.get("AdMedia")?.retention).toContain("30 days after their last use");
+    expect(listed.get("AdMedia")?.retention).toContain("lose their local file 30 days after they were ready");
+    expect(listed.get("Lead")?.retention).toContain("Test leads are removed after 30 days.");
+    expect(listed.get("AdCampaign")?.retention).toContain("Discarded drafts are removed 30 days after they were discarded.");
+  });
+
+  it("results by placement follow the ad performance period, and the privacy summary names them with it", () => {
+    expect(listed.get("InsightBreakdown")?.retentionKey).toBe("insightSnapshotDays");
+    expect(listed.get("InsightSnapshot")?.retentionKey).toBe("insightSnapshotDays");
+    const line = RETENTION_SUMMARY.find((r) => r.label.startsWith("Ad performance data"))!;
+    expect(line.label).toContain("results by placement, version, age and gender, and region");
+    expect(line.period).toBe(`${RETENTION_DEFAULTS.insightSnapshotDays} days`);
+  });
+
+  it("marks all five tables as data of the Meta connection, as InsightSnapshot and the campaigns are", () => {
+    for (const id of [...PROMOTE, "InsightSnapshot", "AdCampaign", "AdSet", "Ad"]) expect(listed.get(id)?.metaDerived, id).toBe(true);
+    expect(listed.get("AdAudience")?.retention).toContain("Meta connection of their ad account");
+  });
+});
+
+describe("Studio images and Canva registration (docs/specs/ADS-MCP-CANVA-CREATIVE-SPEC.md 4.4, MCC-00)", () => {
+  const STUDIO = ["StudioItem", "StudioJob", "CanvaReturnState", "CanvaConnection"];
+
+  it("lists the four new tables, each with a tenantId, in the batched erasure and none as data of the Meta connection", () => {
+    for (const id of STUDIO) {
+      expect(models.get(id), id).toContain("tenantId");
+      expect(listed.get(id)?.store, id).toBe("table");
+      expect(listed.get(id)?.metaDerived, id).toBeUndefined();
+      expect(listed.get(id)?.retentionKey, id).toBeUndefined();
+      expect(batchedTables().map((e) => e.id), id).toContain(id);
+      expect(erasureTransactionTables().map((e) => e.id), id).not.toContain(id);
+    }
+  });
+
+  it("deletes StudioItem, StudioJob and CanvaReturnState by workspace id, and overwrites both Canva tokens before CanvaConnection rows go", () => {
+    for (const id of ["StudioItem", "StudioJob", "CanvaReturnState"]) expect(listed.get(id)?.erase, id).toEqual({ method: "delete" });
+    expect(listed.get("CanvaConnection")?.erase).toEqual({ method: "secrets-then-delete", overwrite: { accessTokenEnc: null, refreshTokenEnc: null } });
+    expect(listed.get("CanvaConnection")?.how).toMatch(/revoked at Canva \(best effort\), then overwritten, then rows deleted by workspace id/);
+    expect(listed.get("StudioItem")?.how).toContain("files:content");
+    // StudioItem.brandId points at Brand (ON DELETE SET NULL): the child still goes first.
+    const order = PERSONAL_DATA.map((e) => e.id);
+    for (const id of STUDIO) expect(order.indexOf(id), id).toBeLessThan(order.indexOf("Brand"));
+  });
+
+  it("says what each holds and keeps the periods of 4.4", () => {
+    expect(STUDIO_RETENTION).toEqual({ sweepHours: 6, finishedJobDays: 7, unfinishedJobDays: 1, usedReturnStateDays: 2, returnStateDays: 30 });
+    expect(listed.get("StudioItem")?.holds).toMatch(/file key.*template inputs.*business contact line.*Canva design id.*creating user id/);
+    expect(listed.get("StudioItem")?.retention).toBe("While its Library file exists. A row whose file is gone is removed by the sweep within 6 hours.");
+    expect(listed.get("StudioJob")?.holds).toMatch(/design or template id.*pages and format.*error text.*user id/);
+    expect(listed.get("StudioJob")?.retention).toBe("7 days after it finishes (done or failed). Unfinished jobs older than 1 day are failed, then removed.");
+    expect(listed.get("CanvaReturnState")?.holds).toMatch(/design id.*user id.*export settings/);
+    expect(listed.get("CanvaReturnState")?.retention).toBe("Until used plus 2 days, or its expiry (30 days, the life of a Canva edit link).");
+    expect(listed.get("CanvaConnection")?.holds).toMatch(/Canva user id, team id and display name.*sealed Canva access and refresh tokens/);
+    expect(listed.get("CanvaConnection")?.retention).toContain("leaves the workspace (removed by the sweep within 6 hours)");
+  });
+
+  it("the Brand entry names the new columns' data: the logo file key, the tagline and the contact line", () => {
+    const brand = listed.get("Brand")!.holds;
+    for (const words of ["logo file key", "tagline", "contact line"]) expect(brand, words).toContain(words);
+    for (const column of ["logoMediaKey", "fontStyle", "defaultLanguage", "tagline", "contactLine", "isDefault"]) expect(models.get("Brand"), column).toContain(column);
   });
 });

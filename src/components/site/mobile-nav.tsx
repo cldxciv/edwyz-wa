@@ -1,12 +1,12 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Icon } from "./icons";
+import { NavLink } from "./nav-link";
 
-type NavLink = { href: string; label: string };
+type NavItem = { href: string; label: string };
 
-export function MobileNav({ links }: { links: readonly NavLink[] }) {
+export function MobileNav({ links }: { links: readonly NavItem[] }) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -33,9 +33,14 @@ export function MobileNav({ links }: { links: readonly NavLink[] }) {
           <ul className="mx-auto flex max-w-6xl flex-col">
             {links.map((l) => (
               <li key={l.href}>
-                <Link href={l.href} onClick={() => setOpen(false)} className="block rounded-lg px-3 py-3 text-base font-medium hover:bg-surface">
+                <NavLink
+                  href={l.href}
+                  onClick={() => setOpen(false)}
+                  className="block rounded-lg px-3 py-3 text-base font-medium hover:bg-surface"
+                  currentClassName="bg-surface text-accent-ink"
+                >
                   {l.label}
-                </Link>
+                </NavLink>
               </li>
             ))}
           </ul>

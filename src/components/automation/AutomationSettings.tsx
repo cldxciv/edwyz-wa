@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Card, FormField, ProgressBar, Select, Skeleton, Textarea, Input, apiFetch, toast } from "@/components/ui";
 import { LIMITS } from "@/lib/automation/v2/model";
 import { PLACEHOLDER_HELP } from "@/lib/automation/v2/variables";
+import { OPT_OUT_RULES } from "@/lib/contacts/opt-out";
 import { browserTimezone, humanError, timezoneOptions } from "./helpers";
 import { Toggle } from "./Toggle";
 
@@ -20,7 +21,7 @@ export function UsageMeter({ usage }: { usage: SettingsResponse["usage"] }) {
   if (usage.limit === null) {
     return (
       <p className="text-sm text-muted">
-        <span className="font-semibold text-foreground">{number.format(usage.used)}</span> rule runs this month. Your plan has no limit on rule runs.
+        <span className="font-semibold text-foreground">{number.format(usage.used)}</span>{" "}rule runs this month. Your plan has no limit on rule runs.
       </p>
     );
   }
@@ -93,7 +94,7 @@ export function AutomationSettings({ data, loading, editable, reload }: Props) {
             onChange={(enabled) => void save("holiday", { holiday: { enabled, message: message.trim(), endsOn: endsOn || null, timezone } }, enabled ? "Holiday mode is on." : "Holiday mode is off.")}
           />
           <FormField label="Holiday message" hint={`${message.length}/${LIMITS.text}. Sent once per chat every 12 hours. You can use ${PLACEHOLDER_HELP[0].token}.`}>
-            <Textarea rows={3} value={message} maxLength={LIMITS.text} disabled={!editable} onChange={(e) => setMessage(e.target.value)} placeholder="We are on holiday until Monday. We will reply as soon as we are back." />
+            <Textarea rows={3} value={message} maxLength={LIMITS.text} disabled={!editable} onChange={(e) => setMessage(e.target.value)} placeholder="e.g. We are on holiday until Monday. We will reply as soon as we are back." />
           </FormField>
           <div className="grid gap-3 sm:grid-cols-2">
             <FormField label="Last day" optional hint="Leave empty to keep it on until you switch it off.">
@@ -127,7 +128,7 @@ export function AutomationSettings({ data, loading, editable, reload }: Props) {
             </Select>
           </FormField>
           <p className="text-sm text-muted">
-            Rules run from top to bottom. Rules that only tag, assign or notify never block the ones below. A rule set to &quot;Stop here&quot; always ends the run. Customers never get automatic replies while a chatbot is talking with them or after they opt out.
+            Rules run from top to bottom. Rules that only tag, assign or notify never block the ones below. A rule set to &quot;Stop here&quot; always ends the run. Customers never get automatic replies while a chatbot is talking with them. {OPT_OUT_RULES}
           </p>
           <UsageMeter usage={data.usage} />
         </div>

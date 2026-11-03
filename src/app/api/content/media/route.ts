@@ -13,11 +13,14 @@ export async function GET(request: Request) {
   }
 }
 
-/** Raw body upload: Content-Type is the file type (image/jpeg, image/png, video/mp4, video/quicktime). */
+/**
+ * Raw body upload: Content-Type is the file type (image/jpeg, image/png, video/mp4, video/quicktime). `?purpose=ad_crop` marks a
+ * crop the browser made for an ad (JPG or PNG only; docs/IG-PAGE-ADS-SPEC.md 5.5): only such a key can become ad-only media.
+ */
 export async function POST(request: Request) {
   try {
     const actor = await writeActor(request);
-    const saved = await saveUpload(actor.tenantId, request);
+    const saved = await saveUpload(actor.tenantId, request, { adCrop: new URL(request.url).searchParams.get("purpose") === "ad_crop" });
     await audit({ tenantId: actor.tenantId, userId: actor.userId, action: "content.media.upload", target: saved.key });
     return Response.json(saved, { status: 201 });
   } catch (e) {

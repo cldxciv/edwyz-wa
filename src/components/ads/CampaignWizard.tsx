@@ -10,6 +10,9 @@ import { formatMinor as formatMoney } from "@/lib/spend/money";
 import { dayKey } from "@/lib/spend/periods";
 import { ceil175, NO_SPEND, remainingMonth } from "@/lib/spend/worstcase";
 import { LinkButton } from "./LinkButton";
+import { draftToForm, type DraftForm } from "./campaign-edit";
+import { SPECIAL_MIN_RADIUS_KM, cityRadiusKm, creativePictureText, type ChosenCity } from "./picker-helpers";
+import { CityPicker, InterestPicker, LeadFormPicker, PicturePicker, PostPicker } from "./pickers-ui";
 import { BudgetSummary, CategoryGuidance, Stepper, SummaryRow, TermsAckBox, checkboxClass, optionRowClass } from "./wizard-parts";
 import {
   CATEGORY_LABELS,
@@ -22,15 +25,16 @@ import {
   TEMPLATE_LABELS,
   categoryName,
   checkBudget,
+  draftBlockedText,
+  draftNotesText,
   formatMinor,
   friendlyAdsError,
   isCategoryTermsMismatch,
   META_LOGIN_FIX,
+  minorToText,
   parseCountries,
   pictureCovered,
-  pictureLinkError,
   pictureReady,
-  parseInterests,
   toMinor,
   typedTotalMatches,
 } from "./helpers";
@@ -41,7 +45,7 @@ type Options = {
   pages: Asset[];
   instagram: Asset[];
   phoneNumbers: { id: string; displayPhone: string; verifiedName: string | null }[];
-  creativeAssets: { id: string; kind: string; headline: string | null; body: string | null; status?: string; hasImage?: boolean; blocked?: boolean }[];
+  creativeAssets: { id: string; kind: string; headline: string | null; body: string | null; status?: string; hasImage?: boolean; imageProblem?: string | null; blocked?: boolean }[];
   suggestedSpecialAdCategory: string;
   caps: { maxDailyBudgetMinor: number | null; currency: string | null };
 };
@@ -171,7 +175,9 @@ export function CampaignWizard() {
   const [ageMin, setAgeMin] = useState("18");
   const [ageMax, setAgeMax] = useState("65");
   const [gender, setGender] = useState("all");
-  const [interests, setInterests] = useState("");
+  const [interests, setInterests] = useState<{ id: string; name: string }[]>([]);
+  const [where, setWhere] = useState<"countries" | "cities">("countries");
+  const [cities, setCities] = useState<ChosenCity[]>([]);
   const [placements, setPlacements] = useState<string[]>([]);
   const [pageId, setPageId] = useState("");
   const [instagramId, setInstagramId] = useState("");
@@ -180,11 +186,19 @@ export function CampaignWizard() {
   const [headline, setHeadline] = useState("");
   const [link, setLink] = useState("");
   const [imageUrl, setImageUrl] = useState("");
+  const [mediaKey, setMediaKey] = useState("");
   const [leadFormId, setLeadFormId] = useState("");
   const [whatsappNumberId, setWhatsappNumberId] = useState("");
   const [welcomeMessage, setWelcomeMessage] = useState("");
   const [postId, setPostId] = useState("");
+  const [instagramMediaId, setInstagramMediaId] = useState("");
   const [campaignId, setCampaignId] = useState<string | null>(null);
+  /** Opened from "Edit draft" (?draft=<id>): the draft is loaded, and saving updates it instead of making a new one. */
+  const [editingDraft, setEditingDraft] = useState(false);
+  const [draftProblem, setDraftProblem] = useState("");
+  /** What changed while the draft reopened (a dropped Messenger placement). */
+  const [draftNotes, setDraftNotes] = useState<string[]>([]);
+  const [loadingDraft, setLoadingDraft] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [adjustments, setAdjustments] = useState<string[]>([]);
   const [typedTotal, setTypedTotal] = useState("");
@@ -194,7 +208,7 @@ export function CampaignWizard() {
   const firstStep = useRef(true);
   const leaving = useRef(false);
   const hasDraft = useRef(false);
-  const dirty = !!(template || name.trim() || budgetText.trim() || message.trim() || postId.trim() || campaignId);
+  const dirty = !!(template || name.trim() || budgetText.trim() || message.trim() || postId.trim() || instagramMediaId || mediaKey || campaignId);
 
   useEffect(() => {
     if (!dirty) return;
@@ -255,6 +269,70 @@ export function CampaignWizard() {
     }
   }, [opts]);
 
+  // "Edit draft" on a campaign links here with ?draft=<id>: its answers are loaded, and the review step saves over it.
+  const draftRequested = useRef(false);
+  useEffect(() => {
+    if (!opts || draftRequested.current) return;
+    draftRequested.current = true;
+    let id: string | null = null;
+    try {
+      id = new URLSearchParams(window.location.search).get("draft");
+    } catch {
+      id = null;
+    }
+    if (!id) return;
+    setLoadingDraft(true);
+    apiFetch<{ campaign: Parameters<typeof draftToForm>[0] }>(`/api/ads/campaigns/${encodeURIComponent(id)}`)
+      .then(({ campaign }) => {
+        const form = draftToForm(campaign);
+        if (!form) return setDraftProblem(draftBlockedText(campaign));
+        applyDraft(form, opts);
+        setCampaignId(campaign.id);
+        setEditingDraft(true);
+        hasDraft.current = true;
+      })
+      .catch((e: Error) => setDraftProblem(friendlyAdsError(e.message)))
+      .finally(() => setLoadingDraft(false));
+    // applyDraft only calls state setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opts]);
+
+  function applyDraft(form: DraftForm, o: Options) {
+    const draftCurrency = o.adAccounts.find((a) => a.id === form.accountId)?.currency ?? o.caps.currency ?? "INR";
+    setTemplate(form.template);
+    setName(form.name);
+    setAccountId(form.accountId);
+    setBudgetText(form.budgetMinor > 0 ? minorToText(form.budgetMinor, draftCurrency) : "");
+    setStartsAt(form.startsAt);
+    setEndsAt(form.endsAt || monthEndInput(new Date()));
+    setNoEnd(form.noEnd);
+    setCategory(form.category);
+    setNoneConfirmed(form.category === "none");
+    setCountries(form.countries || "IN");
+    setWhere(form.cities.length > 0 ? "cities" : "countries");
+    // An older draft may hold a radius Meta does not take (like 10 km); it opens at the nearest one it does.
+    setCities(form.cities.map((c) => ({ ...c, radiusKm: cityRadiusKm(c.radiusKm) })));
+    setAgeMin(form.ageMin);
+    setAgeMax(form.ageMax);
+    setGender(form.gender);
+    setInterests(form.interests);
+    setPlacements(form.placements);
+    setDraftNotes(form.notes);
+    setCreativeIds(form.creativeIds.filter((cid) => o.creativeAssets.some((a) => a.id === cid)).slice(0, MAX_ADS));
+    setPageId(form.pageId);
+    setInstagramId(form.instagramId);
+    setMessage(form.message);
+    setHeadline(form.headline);
+    setLink(form.link);
+    setImageUrl(form.imageUrl);
+    setMediaKey(form.mediaKey);
+    setLeadFormId(form.leadFormId);
+    setWhatsappNumberId(form.whatsappNumberId);
+    setWelcomeMessage(form.welcomeMessage);
+    setPostId(form.postId);
+    setInstagramMediaId(form.instagramMediaId);
+  }
+
   const account = opts?.adAccounts.find((a) => a.id === accountId);
   const capCurrency = opts?.caps.currency ?? null;
   const currency = account?.currency ?? capCurrency ?? "INR";
@@ -275,6 +353,7 @@ export function CampaignWizard() {
   const max = Number(ageMax);
   const ageError = restricted ? null : ageMin === "" || ageMax === "" || !Number.isInteger(min) || !Number.isInteger(max) ? "Enter whole numbers for both ages." : min < 13 || max > 65 ? "Ages must be between 13 and 65." : min > max ? "The minimum age cannot be higher than the maximum." : null;
   const countriesError = parsedCountries.invalid.length ? `These are not country codes: ${parsedCountries.invalid.join(", ")}. Use two letters, like IN.` : parsedCountries.codes.length === 0 ? "Add at least one country, like IN." : null;
+  const placeError = where === "countries" ? countriesError : cities.length === 0 ? "Add at least one city." : null;
 
   if (role !== null && !canManage(role)) {
     return (
@@ -284,7 +363,7 @@ export function CampaignWizard() {
       </div>
     );
   }
-  if (options.loading && !opts) {
+  if ((options.loading && !opts) || loadingDraft) {
     return (
       <div aria-busy="true">
         <span className="sr-only" role="status">Loading</span>
@@ -324,21 +403,26 @@ export function CampaignWizard() {
 
   const step1Ready = !!template && !!name.trim() && !!accountId;
   const step2Ready = budgetCheck.state === "ok" && budgetMinor !== null && categoryReady && !datesError;
-  const step3Ready = !countriesError && !ageError;
-  const step4Ready = !!pageId && (template === "boost_post" ? !!postId.trim() : adTextReady(message, pickedAssets) && pictureReady(imageUrl, pickedAssets)) && (template !== "lead_generation" || !!leadFormId.trim()) && (template !== "click_to_whatsapp" || !!whatsappNumberId) && (template !== "traffic" || !!link.trim());
+  const step3Ready = !placeError && !ageError;
+  const pageAsset = opts.pages.find((p) => p.externalId === pageId);
+  const instagramAsset = opts.instagram.find((p) => p.externalId === instagramId);
+  const postChosen = !!postId.trim() || (!!instagramMediaId && !!instagramId);
+  const pictureChosen = !!mediaKey || pictureReady(imageUrl, pickedAssets);
+  const step4Ready = !!pageId && (template === "boost_post" ? postChosen : adTextReady(message, pickedAssets) && pictureChosen) && (template !== "lead_generation" || !!leadFormId.trim()) && (template !== "click_to_whatsapp" || !!whatsappNumberId) && (template !== "traffic" || !!link.trim());
   const reviewUsed = preview && existing.data ? activeBudgetElsewhere(existing.data.campaigns, preview.currency) : null;
   const reviewCapApplies = !!preview && preview.caps.maxDailyBudgetMinor !== null && (!preview.caps.currency || preview.caps.currency === preview.currency);
   const reviewRoom = preview && reviewCapApplies ? budgetRoom(preview.totalDailyBudgetMinor, preview.caps.maxDailyBudgetMinor, reviewUsed) : null;
   const typedOk = preview ? typedTotalMatches(typedTotal, preview.totalDailyBudgetMinor, preview.currency) : false;
 
+  const boostInstagram = template === "boost_post" && !!instagramMediaId;
   const adList = () =>
     buildAdList({
       campaignName: name.trim(),
       picked: pickedAssets,
-      shared: { pageId, instagramId, link, imageUrl: imageUrl.trim(), leadFormId, whatsappNumberId, welcomeMessage, postId },
+      shared: { pageId, instagramId, link, imageUrl: mediaKey ? "" : imageUrl.trim(), leadFormId, whatsappNumberId, welcomeMessage, postId: boostInstagram ? "" : postId },
       message,
       headline,
-    });
+    }).map((a) => ({ ...a, creative: { ...a.creative, ...(mediaKey && template !== "boost_post" ? { mediaKey } : {}), ...(boostInstagram ? { instagramMediaId } : {}) } }));
 
   function toggleCreative(id: string) {
     const next = creativeIds.includes(id) ? creativeIds.filter((x) => x !== id) : creativeIds.length < MAX_ADS ? [...creativeIds, id] : creativeIds;
@@ -360,11 +444,11 @@ export function CampaignWizard() {
       confirmNoSpecialCategory: category === "none" && noneConfirmed,
       acknowledgeSpecialCategoryTerms: category === "none" && termsAck,
       targeting: {
-        geo: { countries: parsedCountries.codes, cities: [] },
+        geo: where === "cities" ? { countries: [], cities: cities.map((c) => ({ key: c.key, name: c.name, radiusKm: cityRadiusKm(c.radiusKm, restricted ? SPECIAL_MIN_RADIUS_KM : undefined) })) } : { countries: parsedCountries.codes, cities: [] },
         ageMin: restricted ? 18 : min,
         ageMax: restricted ? 65 : max,
         genders: gender === "all" ? [] : [gender],
-        interests: parseInterests(interests),
+        interests: restricted ? [] : interests,
         placements,
       },
       ads: adList(),
@@ -376,8 +460,10 @@ export function CampaignWizard() {
     setProblem("");
     setTermsMismatch(false);
     try {
-      const draft = await apiFetch<{ campaignId: string; adjustments: string[] }>("/api/ads/campaigns", { method: "POST", body: body() });
-      if (campaignId && campaignId !== draft.campaignId) void apiFetch(`/api/ads/campaigns/${campaignId}/archive`, { method: "POST" }).catch(() => undefined);
+      // The first review makes the draft; going back and reviewing again saves over the same draft.
+      const draft = campaignId
+        ? await apiFetch<{ campaignId: string; adjustments: string[] }>(`/api/ads/campaigns/${campaignId}`, { method: "PATCH", body: body() })
+        : await apiFetch<{ campaignId: string; adjustments: string[] }>("/api/ads/campaigns", { method: "POST", body: body() });
       hasDraft.current = true;
       setCampaignId(draft.campaignId);
       setAdjustments(draft.adjustments);
@@ -435,10 +521,20 @@ export function CampaignWizard() {
   return (
     <div>
       <PageHeader
-        title="New campaign"
-        breadcrumbs={[{ label: "Ad campaigns", href: "/app/ads" }, { label: "New campaign" }]}
+        title={editingDraft ? "Edit campaign draft" : "New campaign"}
+        breadcrumbs={[{ label: "Ad campaigns", href: "/app/ads" }, { label: editingDraft ? "Edit draft" : "New campaign" }]}
         description="Answer a few questions. The campaign is created paused, and nothing is spent until you activate it yourself."
       />
+      {draftProblem && (
+        <Alert tone="warn" title="We could not open the draft" className="mb-4">
+          {draftProblem} You can start a new campaign below instead.
+        </Alert>
+      )}
+      {draftNotes.length > 0 && (
+        <Alert tone="info" title="Check where your ad appears" className="mb-4">
+          {draftNotesText(draftNotes)}
+        </Alert>
+      )}
       <Stepper steps={STEPS} current={step} />
 
       <Card className="max-w-3xl">
@@ -498,12 +594,12 @@ export function CampaignWizard() {
               )}
               {currencyMismatch && (
                 <Alert tone="warn" title="Your limit is in a different currency">
-                  Your daily limit is set in {capCurrency}, but this ad account uses {currency}. Ask an owner to set the limit in {currency} before you create the campaign.
+                  Your daily limit is set in {capCurrency}, but this ad account uses {currency}. Ask an owner to set the limit in {currency}{" "}before you create the campaign.
                 </Alert>
               )}
               {room && !room.fits && budgetCheck.state === "ok" && (
                 <Alert tone="warn" title="This may not fit your daily limit">
-                  Your other active campaigns already use {formatMinor(usedMinor!, currency)} of your {formatMinor(capMinor!, currency)} limit, so {formatMinor(room.leftMinor, currency)} is left. You can still create this campaign, but it cannot be activated until you lower the budget, pause another campaign, or an owner raises the limit.
+                  Your other active campaigns already use {formatMinor(usedMinor!, currency)} of your {formatMinor(capMinor!, currency)} limit, so {formatMinor(room.leftMinor, currency)}{" "}is left. You can still create this campaign, but it cannot be activated until you lower the budget, pause another campaign, or an owner raises the limit.
                 </Alert>
               )}
               <FormField
@@ -569,12 +665,37 @@ export function CampaignWizard() {
             <div className="space-y-5">
               {restricted && (
                 <Alert tone="info" title="Some choices are fixed for this category">
-                  Age, gender and interests are not available for {categoryName(category).toLowerCase()} ads. Meta sets them for you.
+                  Age, gender and interests are not available for {categoryName(category).toLowerCase()}{" "}ads. Meta sets them for you.
                 </Alert>
               )}
-              <FormField label="Countries" required hint="Use two-letter country codes separated by commas, like IN for India or AE for the United Arab Emirates." error={countriesError}>
-                <Input value={countries} onChange={(e) => setCountries(e.target.value)} autoComplete="off" />
-              </FormField>
+              <fieldset className="space-y-2">
+                <legend className="text-sm font-medium">
+                  Where should people be?<span aria-hidden className="ml-0.5 text-bad-fg">*</span>
+                </legend>
+                <div className="-mx-2">
+                  <label className={optionRow}>
+                    <input type="radio" name="where" className={checkbox} checked={where === "countries"} onChange={() => setWhere("countries")} />
+                    Whole country
+                  </label>
+                  <label className={optionRow}>
+                    <input type="radio" name="where" className={checkbox} checked={where === "cities"} onChange={() => setWhere("cities")} />
+                    Cities and the area around them
+                  </label>
+                </div>
+              </fieldset>
+              {where === "countries" ? (
+                <FormField label="Countries" required hint="Use two-letter country codes separated by commas, like IN for India or AE for the United Arab Emirates." error={countriesError}>
+                  <Input value={countries} onChange={(e) => setCountries(e.target.value)} autoComplete="off" />
+                </FormField>
+              ) : (
+                <div className="space-y-3">
+                  <FormField label="Search in country" optional hint="Two letters, like IN. Leave empty to search every country.">
+                    <Input value={countries} onChange={(e) => setCountries(e.target.value)} autoComplete="off" className="max-w-32" />
+                  </FormField>
+                  <CityPicker accountId={accountId} country={parsedCountries.codes.length === 1 ? parsedCountries.codes[0] : ""} value={cities} onChange={setCities} minRadiusKm={restricted ? SPECIAL_MIN_RADIUS_KM : undefined} />
+                  {cities.length === 0 && <p className="text-sm text-muted">Search for a city, then add it.</p>}
+                </div>
+              )}
               <div className="grid gap-4 sm:grid-cols-3">
                 <FormField label="Youngest age" error={ageError}>
                   <Input type="number" inputMode="numeric" min={13} max={65} value={ageMin} disabled={restricted} onChange={(e) => setAgeMin(e.target.value)} />
@@ -605,9 +726,11 @@ export function CampaignWizard() {
                       ))}
                     </div>
                   </fieldset>
-                  <FormField label="Interests" optional hint="Advanced. One per line: the interest ID from Meta, a comma, then a name. Leave empty to let Meta find the right people.">
-                    <Textarea rows={3} value={interests} disabled={restricted} onChange={(e) => setInterests(e.target.value)} />
-                  </FormField>
+                  {restricted ? (
+                    <p className="text-sm text-muted">Interests are not available for {categoryName(category).toLowerCase()}{" "}ads.</p>
+                  ) : (
+                    <InterestPicker accountId={accountId} value={interests} onChange={setInterests} />
+                  )}
                 </div>
               </details>
             </div>
@@ -647,9 +770,16 @@ export function CampaignWizard() {
                 </FormField>
               )}
               {template === "boost_post" ? (
-                <FormField label="Post to boost" required hint="Paste the ID of the post on your Facebook Page. It looks like 1234567890_9876543210.">
-                  <Input value={postId} onChange={(e) => setPostId(e.target.value)} autoComplete="off" />
-                </FormField>
+                <PostPicker
+                  pageAssetId={pageAsset?.id ?? ""}
+                  instagramAssetId={instagramAsset?.id ?? ""}
+                  postId={postId}
+                  instagramMediaId={instagramMediaId}
+                  onPick={(pick) => {
+                    setPostId(pick.postId);
+                    setInstagramMediaId(pick.instagramMediaId);
+                  }}
+                />
               ) : (
                 <>
                   {opts.creativeAssets.length > 0 && (
@@ -666,7 +796,7 @@ export function CampaignWizard() {
                               <span className="min-w-0 flex-1">
                                 <span className="block truncate text-sm">{(a.headline ?? a.body ?? "Saved creative").slice(0, 60)}</span>
                                 <span className="block text-xs text-muted">
-                                  {a.kind === "image" ? (a.hasImage ? "Picture" : "Picture preview (add a picture link below)") : "Text"}
+                                  {creativePictureText(a)}
                                   {a.status === "approved" ? ", approved" : ""}
                                   {a.blocked ? ", must be fixed first" : ""}
                                 </span>
@@ -677,7 +807,7 @@ export function CampaignWizard() {
                       </ul>
                       {abTest && (
                         <p className="mt-2 text-sm" role="status">
-                          {pickedAssets.length} ads will be created to compare. The main text and headline below are only used for creatives that have none of their own.
+                          {pickedAssets.length}{" "}ads will be created to compare. The main text and headline below are only used for creatives that have none of their own.
                         </p>
                       )}
                     </fieldset>
@@ -688,9 +818,7 @@ export function CampaignWizard() {
                   <FormField label="Headline" optional hint="A short line under the picture.">
                     <Input maxLength={100} value={headline} onChange={(e) => setHeadline(e.target.value)} />
                   </FormField>
-                  <FormField label="Picture link" required={!pictureCovered(pickedAssets)} optional={pictureCovered(pickedAssets)} error={pictureLinkError(imageUrl)} hint="A public web address that starts with https and points to your image. Meta must be able to open it.">
-                    <Input type="url" inputMode="url" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} autoComplete="off" />
-                  </FormField>
+                  <PicturePicker mediaKey={mediaKey} imageUrl={imageUrl} onMediaKey={setMediaKey} onImageUrl={setImageUrl} required={!pictureCovered(pickedAssets)} />
                 </>
               )}
               {template === "traffic" && (
@@ -698,11 +826,7 @@ export function CampaignWizard() {
                   <Input type="url" inputMode="url" value={link} onChange={(e) => setLink(e.target.value)} autoComplete="off" placeholder="https://" />
                 </FormField>
               )}
-              {template === "lead_generation" && (
-                <FormField label="Lead form ID" required hint="The ID of a lead form you made on your Facebook Page.">
-                  <Input value={leadFormId} onChange={(e) => setLeadFormId(e.target.value)} autoComplete="off" />
-                </FormField>
-              )}
+              {template === "lead_generation" && <LeadFormPicker pageAssetId={pageAsset?.id ?? ""} value={leadFormId} onChange={setLeadFormId} />}
               {template === "click_to_whatsapp" && (
                 <>
                   {opts.phoneNumbers.length === 0 ? (
@@ -773,7 +897,7 @@ export function CampaignWizard() {
 
             {reviewRoom && !reviewRoom.fits && (
               <Alert tone="warn" title="This may not fit your daily limit">
-                Your other active campaigns already use {formatMinor(reviewUsed!, preview.currency)}, so {formatMinor(reviewRoom.leftMinor, preview.currency)} is left of your limit. The campaign can be created paused, but it cannot be activated until you lower the budget, pause another campaign, or an owner raises the limit.
+                Your other active campaigns already use {formatMinor(reviewUsed!, preview.currency)}, so {formatMinor(reviewRoom.leftMinor, preview.currency)}{" "}is left of your limit. The campaign can be created paused, but it cannot be activated until you lower the budget, pause another campaign, or an owner raises the limit.
               </Alert>
             )}
 
@@ -803,7 +927,7 @@ export function CampaignWizard() {
               <SummaryRow label="Ad account">{accountLabel}</SummaryRow>
               <SummaryRow label="Special category">{category === "none" ? "None" : categoryName(category)}</SummaryRow>
               <SummaryRow label="Audience">
-                {parsedCountries.codes.join(", ")}
+                {where === "cities" ? cities.map((c) => `${c.name} (${cityRadiusKm(c.radiusKm, restricted ? SPECIAL_MIN_RADIUS_KM : undefined)} km around)`).join("; ") : parsedCountries.codes.join(", ")}
                 {restricted ? "" : `, ages ${min} to ${max}${gender === "all" ? "" : gender === "female" ? ", women" : ", men"}`}
               </SummaryRow>
               <SummaryRow label="Schedule">

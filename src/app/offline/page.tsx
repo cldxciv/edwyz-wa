@@ -19,7 +19,7 @@ export default function OfflinePage() {
       <div className="mx-auto max-w-sm text-center">
         {/* A plain img: the image optimizer is a server route and is not stored for offline use. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={PWA_ICONS.any192} alt="" width={72} height={72} className="mx-auto rounded-2xl border border-border" />
+        <img src={PWA_ICONS.any192} alt="" width={72} height={72} className="mx-auto" />
         <p className="mt-6 text-sm font-semibold uppercase tracking-widest text-muted">Edwyz WA</p>
         <h1 className="mt-2 text-2xl font-semibold tracking-tight">You are offline.</h1>
         <p className="mt-3 text-base leading-relaxed text-muted">Edwyz WA needs the internet to show your chats.</p>

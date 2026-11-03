@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { checkEnv, decodedSecretBytes } from "@/lib/env-rules.mjs";
 
@@ -46,5 +48,17 @@ describe("instance count warning", () => {
     const warns = (v: string): string[] => checkEnv({ ...base, WEB_INSTANCES: v }).warnings;
     expect(warns("2").some((w) => w.includes("exactly one"))).toBe(true);
     expect(warns("1").some((w) => w.includes("exactly one"))).toBe(false);
+  });
+
+  it("names the state that is still per process, not the rate limits, which are shared through Postgres now", () => {
+    const [warning] = checkEnv({ ...base, WEB_CONCURRENCY: "3" }).warnings.filter((w: string) => w.includes("exactly one"));
+    expect(warning).toContain("replay guards, the live inbox connection count and the AI reply guard");
+    expect(warning).not.toMatch(/rate limit/i);
+  });
+
+  it("check-env's pm2 instance warning no longer waits for a shared rate limiter that already exists", () => {
+    const script = readFileSync(path.join(__dirname, "..", "scripts/check-env.mjs"), "utf8");
+    expect(script).not.toContain("until the shared rate limiter exists");
+    expect(script).toContain("run the web app as a single instance");
   });
 });

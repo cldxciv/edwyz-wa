@@ -37,6 +37,8 @@ const ROUTES: readonly (readonly [RegExp, string, IdField?])[] = [
   [/^broadcasts\/([^/]+)$/, "broadcasts.detail", "broadcastId"],
   [/^leads$/, "leads"],
   [/^leads\/forms$/, "leads.forms"],
+  // E-R4 (docs/IG-PAGE-ADS-SPEC.md 6.3): the lead form builder.
+  [/^leads\/forms\/new$/, "leads.forms_new"],
   [/^leads\/sequences$/, "leads.sequences"],
   [/^automation$/, "automation"],
   [/^automation\/ai-agent$/, "automation.ai_agent"],
@@ -57,6 +59,11 @@ const ROUTES: readonly (readonly [RegExp, string, IdField?])[] = [
   [/^ads\/new$/, "ads.new"],
   [/^ads\/insights$/, "ads.insights"],
   [/^ads\/optimizer$/, "ads.optimizer"],
+  // E-R4 (docs/IG-PAGE-ADS-SPEC.md 6.3): Boost a post, New ad and Audiences come before the campaign-id pattern, so
+  // /app/ads/boost is never read as a campaign called "boost".
+  [/^ads\/boost$/, "ads.boost"],
+  [/^ads\/create$/, "ads.create"],
+  [/^ads\/audiences$/, "ads.audiences"],
   [/^ads\/[^/]+$/, "ads.detail"],
   [/^commerce$/, "commerce"],
   [/^content$/, "content"],

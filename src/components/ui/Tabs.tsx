@@ -78,11 +78,12 @@ export function Tabs({ tabs, label, value, defaultValue, onChange, variant = "un
               tabIndex={active ? 0 : -1}
               disabled={t.disabled}
               onClick={() => select(t.id)}
+              // A selected pill's fill is nearly the track colour in dark mode, so its accent border carries the 3:1 "selected" cue.
               className={cn(
                 "inline-flex shrink-0 items-center gap-2 whitespace-nowrap text-sm font-medium transition-colors duration-(--dur-fast) disabled:cursor-not-allowed disabled:opacity-50",
                 variant === "underline"
                   ? cn("-mb-px border-b-2 px-3 py-2.5", active ? "border-accent text-foreground" : "border-transparent text-muted hover:text-foreground")
-                  : cn("rounded-full px-3.5 py-1.5", active ? "bg-raised text-foreground shadow-raised" : "text-muted hover:text-foreground"),
+                  : cn("rounded-full border px-3.5 py-1.5", active ? "border-accent-ink bg-raised text-foreground shadow-raised" : "border-transparent text-muted hover:text-foreground"),
               )}
             >
               {t.label}

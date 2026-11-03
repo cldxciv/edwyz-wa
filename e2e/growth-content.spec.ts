@@ -139,8 +139,10 @@ test.describe("Content calendar", () => {
     await expect(page.getByText(/Post scheduled for/)).toBeVisible();
     await expect(page.getByRole("heading", { level: 1, name: "Content calendar" })).toBeVisible();
 
-    // Month view: tomorrow's cell lists it; the day agenda shows it.
+    // Month view: the calendar opens on the post's month (even on the last day of a month, when tomorrow is in the next one),
+    // tomorrow's cell lists it and the day agenda shows it.
     const tomorrow = new Date(Date.now() + 86_400_000);
+    await expect(page.getByText(tomorrow.toLocaleString("en-US", { month: "long", year: "numeric" })).first()).toBeVisible();
     const cell = page.getByRole("button", { name: new RegExp(`${tomorrow.toLocaleDateString("en-US", { month: "long" })} ${tomorrow.getDate()}.*1 post`) });
     if (await cell.count()) await cell.first().click();
     await expect(page.getByText(/Diwali offer/).first()).toBeVisible();

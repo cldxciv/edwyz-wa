@@ -141,6 +141,7 @@ export async function deliverConversion(tenantId: string, conversionEventId: str
     phone: contact?.phone,
     ctwaClid,
     wabaId,
+    leadgenId: lead?.leadgenId ?? null,
   });
   if (!hasIdentifiers(payload)) return markSkipped(event.id, "no_identifiers", dataset.externalId);
 

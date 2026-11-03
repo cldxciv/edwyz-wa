@@ -54,4 +54,5 @@ export type ConversationContext = {
 export type SavedView = { id: string; name: string; query: { tab: string; tag?: string; q?: string }; shared: boolean; mine: boolean };
 export type Mention = { conversationId: string; contactName: string | null; phone: string | null; bsuid?: string | null; username?: string | null; mentionedAt: string };
 export type BusinessNumber = { id: string; displayPhone: string; verifiedName: string | null };
-export type InboxSettings = { agentSignature: boolean; optOutReply: string; optInReply: string };
+/** stopWords: the workspace's own STOP words, on top of the defaults (lib/webhooks/payload.ts DEFAULT_STOP_WORDS). */
+export type InboxSettings = { agentSignature: boolean; optOutReply: string; optInReply: string; stopWords?: string[] };

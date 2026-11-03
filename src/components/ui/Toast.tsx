@@ -154,7 +154,8 @@ function ToastViewport() {
   const list = "flex flex-col gap-2";
 
   return (
-    <section aria-label="Notifications" className="pointer-events-none fixed inset-x-4 bottom-4 z-(--z-toast) flex flex-col gap-2 sm:left-auto sm:right-4 sm:w-96">
+    // On phones the app's bottom tab bar (4.25rem) would sit under the toasts and could not be tapped, so they rise above it there.
+    <section aria-label="Notifications" className="pointer-events-none fixed inset-x-4 bottom-4 z-(--z-toast) flex flex-col gap-2 sm:left-auto sm:right-4 sm:w-96 max-md:[body:has([data-mobile-tabbar])_&]:bottom-[calc(5.25rem+env(safe-area-inset-bottom))]">
       <div role="status" aria-live="polite" aria-relevant="additions text" className="empty:hidden">
         <ul className={list}>
           {polite.map((t) => (

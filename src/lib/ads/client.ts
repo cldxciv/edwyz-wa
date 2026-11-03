@@ -19,6 +19,8 @@ import { actId } from "./builders";
  * - Pausing or archiving never needs a permit and is never blocked (I2). With the lowering permit recordLowering gives, the
  *   call is ledgered; without one the tripwire records it as an unledgered lowering.
  * - A budget cut needs recordLowering's `cut_budget` permit: the book decides the direction, never this client.
+ * - An ad set end date (end_time): a later one needs reserveAds' `extend_end` permit, an earlier one recordLowering's
+ *   `end_earlier` permit, each up to the end it was minted for.
  * - Meta's spending limit is not written here (only src/lib/spend/metacap/client.ts writes it).
  * - SPEND_DRY_RUN=1 (never in production), or a sandbox ad account with SPEND_SIM=1, answers with fake ids and success and
  *   calls nothing (staging and e2e). The permit checks still run.
@@ -43,6 +45,8 @@ export type AdsClient = {
   setStatus(metaId: string, status: "ACTIVE", permit: AdsPermit): Promise<void>;
   /** A raise needs reserveAds' permit covering this amount; a cut needs recordLowering's cut_budget permit. */
   setDailyBudget(metaAdSetId: string, dailyBudgetMinor: number | bigint, permit: AdsPermit | LoweringPermit): Promise<void>;
+  /** A later end needs reserveAds' extend_end permit covering this end; an earlier one recordLowering's end_earlier permit. */
+  setEndTime(metaAdSetId: string, endsAt: Date, permit: AdsPermit | LoweringPermit): Promise<void>;
   /** Read only. */
   getObject<T = Record<string, unknown>>(metaId: string, fields: string | readonly string[]): Promise<T>;
   /** Read only: the ad account itself. */
@@ -204,6 +208,22 @@ export function adsClient(token: string, accountExternalId: string, guard: AdsGu
         throw new SpendGuardBypassError("budget_without_permit");
       }
       await write(metaAdSetId, { daily_budget: budgetValue(minor) }, permit);
+    },
+    async setEndTime(metaAdSetId, endsAt, permit) {
+      if (!(endsAt instanceof Date) || Number.isNaN(endsAt.getTime())) throw new RangeError("An end date must be a valid date.");
+      if (!permit || typeof permit !== "object") throw new SpendGuardBypassError("end_without_permit");
+      if (permit.type === "ads") {
+        const max = permit.objects[metaAdSetId]?.endsAt;
+        if (!(max instanceof Date) || endsAt.getTime() > max.getTime()) throw new SpendGuardBypassError("end_over_permit");
+        await assertPermitValid(permit, metaAdSetId);
+      } else if (permit.type === "lowering") {
+        if (permit.kind !== "end_earlier" || !permit.metaObjectIds.includes(metaAdSetId)) throw new SpendGuardBypassError("end_wrong_lowering_permit");
+        // An end_earlier permit covers the end it was minted for, never a later one (that would extend spending).
+        if (!(permit.endsAt instanceof Date) || endsAt.getTime() > permit.endsAt.getTime()) throw new SpendGuardBypassError("end_over_permit");
+      } else {
+        throw new SpendGuardBypassError("end_without_permit");
+      }
+      await write(metaAdSetId, { end_time: endsAt.toISOString() }, permit);
     },
     getObject: (metaId, fields) => read(metaId, fields),
     getAccount: (fields) => read(account, fields),

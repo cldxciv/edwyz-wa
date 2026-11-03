@@ -119,7 +119,7 @@ function Chart({ kind, title, description, days, series }: ChartProps) {
             {title}
           </span>
           <span id={`${uid}-help`} className="sr-only">
-            {summary} Press the left and right arrow keys to read each day, or Home and End to jump to the first and last day. The same numbers are in the table below the chart.
+            {summary}{" "}Press the left and right arrow keys to read each day, or Home and End to jump to the first and last day. The same numbers are in the table below the chart.
           </span>
           <svg width={width} height={H} viewBox={`0 0 ${width} ${H}`} aria-hidden className="block touch-pan-y" onPointerDown={onPointer} onPointerMove={onPointer} onPointerLeave={(e) => e.pointerType !== "touch" && setCursor(null)}>
             {ticks.map((t) => (

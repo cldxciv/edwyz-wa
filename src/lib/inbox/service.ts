@@ -2,8 +2,9 @@ import { emitTagChanges } from "@/lib/automation/v2/emit";
 import { prisma } from "@/lib/db";
 import { enqueue } from "@/lib/queue";
 import { stopBotsOnHumanReply } from "@/lib/chatbots/human-reply";
-import { onConversationAssigned } from "@/lib/routing";
+import { applyAssignment } from "@/lib/routing";
 import { templateBlockedFor } from "@/lib/contacts/identity";
+import { mayReceive, OPTED_OUT_OF_MARKETING, sendKindForCategory } from "@/lib/contacts/opt-out";
 import { categoryForSend, DEFAULT_ORIGIN, FREE_FORM_CATEGORY, type OriginField, type PricingCategory } from "@/lib/spend/messaging/origin";
 import { HttpError } from "@/lib/tenancy";
 import { clearReadMarks, notifyMentions } from "./marks";
@@ -28,7 +29,8 @@ async function requireConversation(tenantId: string, id: string) {
 export async function getConversation(tenantId: string, id: string, opts: { cursor?: string; limit?: number } = {}) {
   const conversation = await prisma.conversation.findFirst({
     where: { id, tenantId },
-    include: { contact: true, phoneNumber: { select: { id: true, displayPhone: true, verifiedName: true } } },
+    // wabaRefId lets the inbox offer only templates this number's WhatsApp Business Account can send.
+    include: { contact: true, phoneNumber: { select: { id: true, displayPhone: true, verifiedName: true, wabaRefId: true } } },
   });
   if (!conversation) throw new HttpError(404, "Conversation not found.");
   const limit = clampLimit(opts.limit, 50);
@@ -138,8 +140,8 @@ export type SendTemplateInput = {
 
 /**
  * Allowed at any time (inside or outside the 24-hour window). Creates the conversation when needed and queues the send job.
- * Consent is enforced here for every caller: a contact who sent STOP never receives a template, and a template whose category
- * is MARKETING needs a recorded opt-in. A template the workspace has no row for might be marketing, so it also needs the opt-in.
+ * Consent is enforced here for every caller: a contact who opted out never receives a marketing template (lib/contacts/opt-out.ts),
+ * and a template whose category is MARKETING needs a recorded opt-in. A template the workspace has no row for might be marketing, so it also needs the opt-in.
  * The job and the Message carry the origin, the pricing category (by the number's WABA) and a bulk send's reservation (4.9).
  */
 export async function sendTemplateMessage(input: SendTemplateInput) {
@@ -173,7 +175,8 @@ export async function sendTemplateMessage(input: SendTemplateInput) {
 /**
  * The one place that decides whether a template may go to a contact. Fails closed: a template this workspace has no row for (not
  * synced yet, or synced only under another WhatsApp Business Account) is treated as marketing, so it needs the contact's opt-in.
- * Only a template known to be utility or authentication reaches a contact who has not opted in. STOP always wins.
+ * Only a template known to be utility or authentication reaches a contact who has not opted in, or who opted out (an opt-out stops
+ * marketing only, and an unknown template counts as marketing).
  * Returns the category the send is priced at (docs/SPEND-CONTROLS-SPEC.md 4.9): the template's row under the sending number's
  * own WABA, or null when that WABA has no row (priced as MARKETING). A row found only under another WABA of the workspace still
  * decides consent, the stricter way, but never prices the send.
@@ -185,9 +188,9 @@ async function assertMayReceiveTemplate(
   name: string,
   language: string,
 ): Promise<string | null> {
-  if (contact.optedOutAt) throw new HttpError(422, "This contact has opted out of messages.");
   const own = await prisma.template.findFirst({ where: { tenantId, name, language, ...(wabaRefId ? { wabaRefId } : {}) }, select: { category: true } });
   const template = own ?? (wabaRefId ? await prisma.template.findFirst({ where: { tenantId, name, language }, select: { category: true } }) : null);
+  if (!mayReceive(contact, sendKindForCategory(template?.category))) throw new HttpError(422, OPTED_OUT_OF_MARKETING);
   const blocked = templateBlockedFor(template?.category, contact);
   if (blocked) throw new HttpError(422, blocked);
   const category = template?.category?.toUpperCase();
@@ -209,14 +212,16 @@ export async function markRead(tenantId: string, id: string, userId?: string) {
   if (userId) await clearReadMarks(tenantId, userId, id);
 }
 
+/**
+ * Assignment for callers that act for the workspace rather than a member (the API and the workspace MCP server). It goes through
+ * the same checks and write as every manual assignment (lib/routing applyAssignment): a member whose account is not disabled,
+ * inside the chat's team, recorded for round-robin and in the audit log.
+ */
 export async function assign(tenantId: string, id: string, userId: string | null) {
-  if (userId) {
-    const member = await prisma.membership.findFirst({ where: { tenantId, userId }, select: { id: true } });
-    if (!member) throw new HttpError(400, "That user is not a member of this workspace.");
-  }
-  const updated = await updateConversation(tenantId, id, { assignedToId: userId, assignedAt: userId ? new Date() : null });
-  await onConversationAssigned(tenantId, id, userId);
-  return updated;
+  const chat = await prisma.conversation.findFirst({ where: { id, tenantId }, select: { id: true, assignedToId: true, teamId: true } });
+  if (!chat) throw new HttpError(404, "Conversation not found.");
+  await applyAssignment({ tenantId }, chat, userId);
+  return prisma.conversation.findFirst({ where: { id, tenantId } });
 }
 
 export async function setTags(tenantId: string, id: string, tags: string[]) {

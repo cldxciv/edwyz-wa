@@ -162,6 +162,63 @@ export async function onConversationAssigned(tenantId: string, conversationId: s
   }
 }
 
+export const NOT_A_MEMBER = "That person is not a member of this workspace.";
+export const ACCOUNT_DISABLED = "That person's account is disabled.";
+export const CHANGED_MEANWHILE = "This chat was just changed by someone else. Reload and try again.";
+
+/** Someone who can be given chats: a member of this workspace whose account is not disabled. */
+export async function assertAssignable(tenantId: string, userId: string): Promise<void> {
+  const member = await prisma.membership.findFirst({ where: { tenantId, userId }, select: { user: { select: { disabledAt: true } } } });
+  if (!member) throw new HttpError(400, NOT_A_MEMBER);
+  if (member.user?.disabledAt) throw new HttpError(400, ACCOUNT_DISABLED);
+}
+
+/** lastAssignedAt keeps round-robin fair after manual assignments too. A failure here never undoes the assignment. */
+async function touchLastAssigned(tenantId: string, userId: string, at: Date): Promise<void> {
+  try {
+    await prisma.agentAvailability.upsert({ where: { tenantId_userId: { tenantId, userId } }, create: { tenantId, userId, lastAssignedAt: at }, update: { lastAssignedAt: at } });
+  } catch {
+    console.error("[routing] could not record when the person was last given a chat");
+  }
+}
+
+/**
+ * The chat as the caller read it: the write only applies while it is still assigned to assignedToId. teamId is required (null
+ * for a chat outside any team) so a caller that forgets to select it fails to compile instead of skipping the team-pool check.
+ */
+export type AssignableChat = { id: string; assignedToId: string | null; teamId: string | null };
+
+/**
+ * The one write behind every manual assignment: POST /api/routing/assign, the inbox (one chat or many), Eddy, the API and
+ * the workspace MCP server. The caller has already decided the person may do it (role, visibility). Here the assignee must be a
+ * member whose account is not disabled (skipped with memberChecked when a batch checked it once) and inside the chat's team.
+ * The write only replaces the assignee that was read, so a change made meanwhile is a 409 instead of being lost. Then the
+ * assignee's lastAssignedAt moves (round-robin fairness), the contact owner follows when that setting is on, and a
+ * routing.assign or routing.unassign row is written, which also tells the auto-reassign sweep a person chose this assignee.
+ */
+export async function applyAssignment(
+  who: { tenantId: string; userId?: string | null },
+  chat: AssignableChat,
+  userId: string | null,
+  options: { memberChecked?: boolean } = {},
+): Promise<AssignResult> {
+  const { tenantId } = who;
+  if (userId !== null) {
+    if (!options.memberChecked) await assertAssignable(tenantId, userId);
+    await assertInTeamPool(tenantId, chat.teamId, userId);
+  }
+  const now = new Date();
+  const res = await prisma.conversation.updateMany({
+    where: { id: chat.id, tenantId, assignedToId: chat.assignedToId },
+    data: { assignedToId: userId, assignedAt: userId ? now : null },
+  });
+  if (res.count === 0) throw new HttpError(409, CHANGED_MEANWHILE);
+  if (userId) await touchLastAssigned(tenantId, userId, now);
+  await onConversationAssigned(tenantId, chat.id, userId);
+  await audit({ tenantId, userId: who.userId ?? null, action: userId ? "routing.assign" : "routing.unassign", target: chat.id, meta: { assignedToId: userId, previousId: chat.assignedToId } });
+  return { assignedToId: userId, reason: userId ? "manual" : "unassigned" };
+}
+
 /** Manual assignment. userId null unassigns. Agents may only take a chat for themselves or release their own; admins and owners may do anything. */
 export async function assignManually(actor: Actor, conversationId: string, userId: string | null): Promise<AssignResult> {
   const manager = hasRole(actor, "admin");
@@ -172,21 +229,7 @@ export async function assignManually(actor: Actor, conversationId: string, userI
     const takeOwn = userId === actor.userId && (conversation.assignedToId === null || conversation.assignedToId === actor.userId);
     if (!ownRelease && !takeOwn) throw new HttpError(403, "You do not have permission to do this.");
   }
-  if (userId !== null) {
-    const member = await prisma.membership.findFirst({ where: { tenantId: actor.tenantId, userId }, select: { user: { select: { disabledAt: true } } } });
-    if (!member) throw new HttpError(400, "That person is not a member of this workspace.");
-    if (member.user.disabledAt) throw new HttpError(400, "That person's account is disabled.");
-    await assertInTeamPool(actor.tenantId, conversation.teamId, userId);
-  }
-  const res = await prisma.conversation.updateMany({
-    where: { id: conversationId, tenantId: actor.tenantId, assignedToId: conversation.assignedToId },
-    data: { assignedToId: userId, assignedAt: userId ? new Date() : null },
-  });
-  if (res.count === 0) throw new HttpError(409, "This chat was just changed by someone else. Reload and try again.");
-  if (userId) await prisma.agentAvailability.upsert({ where: { tenantId_userId: { tenantId: actor.tenantId, userId } }, create: { tenantId: actor.tenantId, userId, lastAssignedAt: new Date() }, update: { lastAssignedAt: new Date() } });
-  await onConversationAssigned(actor.tenantId, conversationId, userId);
-  await audit({ tenantId: actor.tenantId, userId: actor.userId, action: userId ? "routing.assign" : "routing.unassign", target: conversationId, meta: { assignedToId: userId, previousId: conversation.assignedToId } });
-  return { assignedToId: userId, reason: userId ? "manual" : "unassigned" };
+  return applyAssignment(actor, conversation, userId);
 }
 
 export async function setAvailability(tenantId: string, userId: string, patch: { available?: boolean; maxOpen?: number | null }) {

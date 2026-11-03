@@ -24,6 +24,7 @@ const db = vi.hoisted(() => {
     lead: model(),
     phoneNumber: model(),
     plan: model(),
+    auditLog: model(),
   };
 });
 const svc = vi.hoisted(() => ({ sendText: vi.fn(), sendMedia: vi.fn(), sendTemplateMessage: vi.fn() }));
@@ -137,11 +138,33 @@ describe("matching and running", () => {
     expect((await fireRules(event(), [r])).fired).toBe(0);
   });
 
-  it("never runs for opted-out contacts, blocked chats or suspended workspaces", async () => {
+  it("still runs for a contact who opted out: a reply in the open window is not marketing (owner default 1)", async () => {
+    contactRow.optedOutAt = new Date("2026-02-01");
+    try {
+      expect((await fireRules(event(), [rule({ actions: [text("x")] })])).fired).toBe(1);
+      expect(svc.sendText).toHaveBeenCalledTimes(1);
+    } finally {
+      contactRow.optedOutAt = null;
+    }
+  });
+
+  it("skips a marketing template step for a contact who opted out, and still sends a utility one", async () => {
+    contactRow.optedOutAt = new Date("2026-02-01");
+    try {
+      db.template.findFirst.mockResolvedValue({ id: "tp1", name: "promo", language: "en", category: "MARKETING", status: "approved", components: [{ type: "BODY", text: "Hi" }] });
+      expect((await fireRules(event(), [rule({ actions: [{ type: "send_template", templateId: "tp1", variables: [] }] })])).fired).toBe(0);
+      expect(svc.sendTemplateMessage).not.toHaveBeenCalled();
+      expect(logged()[0].detail).toContain("opted out of marketing");
+      db.template.findFirst.mockResolvedValue({ id: "tp2", name: "order_update", language: "en", category: "UTILITY", status: "approved", components: [{ type: "BODY", text: "Your order shipped" }] });
+      await fireRules(event(), [rule({ actions: [{ type: "send_template", templateId: "tp2", variables: [] }] })]);
+      expect(svc.sendTemplateMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      contactRow.optedOutAt = null;
+    }
+  });
+
+  it("never runs for blocked chats or suspended workspaces", async () => {
     const r = rule({ actions: [text("x")] });
-    contactRow.optedOutAt = new Date();
-    expect((await fireRules(event(), [r])).fired).toBe(0);
-    contactRow.optedOutAt = null;
     conversationRow.status = "blocked";
     expect((await fireRules(event(), [r])).fired).toBe(0);
     conversationRow.status = "open";
@@ -467,6 +490,8 @@ describe("actions", () => {
     const result = await fireRules(event(), [rule({ actions: [{ type: "start_ai_agent" }] })]);
     expect(result.replied).toBe(true);
     expect(db.conversation.updateMany).toHaveBeenCalledWith({ where: { id: "cv1", tenantId: "t1" }, data: { tags: ["x"] } });
+    // The lift is dated, so a later pause in this chat is judged from its own start.
+    expect(db.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ tenantId: "t1", action: "ai_agent.pause_lifted", target: "cv1" }) });
     expect(hooks.handleInboundForAiAgent).toHaveBeenCalledWith(expect.objectContaining({ tenantId: "t1", conversationId: "cv1", contactId: "c1", text: "what is the price" }));
   });
 
@@ -526,5 +551,101 @@ describe("dry run", () => {
     const d = rule({ priority: 1, filters: [keyword("refund")], actions: [text("d")] });
     const hits = simulate([a, b, c, d], { text: "the price please", messageType: "text", newChat: false, silentMinutes: 0, at: NOW, phone: "", tags: [], attributes: {} });
     expect(hits.map((h) => h.id)).toEqual([b.id, a.id]);
+  });
+});
+
+describe("templates a rule can send, and the AI agent started by a rule (P5)", () => {
+  const sendTemplate = (templateId = "tp1"): Action => ({ type: "send_template", templateId, variables: [] });
+  const template = (over: Record<string, unknown> = {}) => ({ id: "tp1", name: "promo", language: "en", category: "UTILITY", status: "approved", components: [{ type: "BODY", text: "Hi" }], wabaRefId: "w1", ...over });
+
+  it("says in plain words when the step leaves out a picture link or a button link value the template needs", async () => {
+    db.template.findFirst.mockResolvedValue(template({ components: [{ type: "HEADER", format: "IMAGE" }, { type: "BODY", text: "Sale" }] }));
+    await fireRules(event(), [rule({ actions: [sendTemplate()] })]);
+    expect(svc.sendTemplateMessage).not.toHaveBeenCalled();
+    expect(logged()[0]).toMatchObject({ outcome: "failed", detail: expect.stringMatching(/picture, video or file at the top and this step has no https link to it/) });
+    db.template.findFirst.mockResolvedValue(template({ components: [{ type: "BODY", text: "Hi" }, { type: "BUTTONS", buttons: [{ type: "URL", url: "https://shop.example.com/{{1}}" }] }] }));
+    await fireRules(event(), [rule({ actions: [sendTemplate()] })]);
+    expect(logged()[1].detail).toMatch(/button link has a value to fill in and this step has none/);
+    db.template.findFirst.mockResolvedValue(template({ components: [{ type: "HEADER", format: "TEXT", text: "Order {{1}}" }, { type: "BODY", text: "Hi" }] }));
+    await fireRules(event(), [rule({ actions: [sendTemplate()] })]);
+    expect(logged()[2].detail).toMatch(/heading has a value to fill in and this step has none/);
+  });
+
+  it("a rule saved earlier with a coupon-code or named-value template logs why, instead of sending a message Meta would refuse", async () => {
+    db.template.findFirst.mockResolvedValue(template({ components: [{ type: "BODY", text: "Your code" }, { type: "BUTTONS", buttons: [{ type: "COPY_CODE", example: "SAVE10" }] }] }));
+    await fireRules(event(), [rule({ actions: [sendTemplate()] })]);
+    expect(svc.sendTemplateMessage).not.toHaveBeenCalled();
+    expect(logged()[0]).toMatchObject({ outcome: "failed", detail: expect.stringMatching(/the template has a coupon code button, which a rule cannot fill in yet/) });
+    db.template.findFirst.mockResolvedValue(template({ components: [{ type: "BODY", text: "Hi {{first_name}}" }] }));
+    await fireRules(event({ at: new Date(NOW.getTime() + 3_600_000) }), [rule({ actions: [sendTemplate()] })]);
+    expect(svc.sendTemplateMessage).not.toHaveBeenCalled();
+    expect(logged()[1]).toMatchObject({ outcome: "failed", detail: expect.stringMatching(/the template has named values like \{\{first_name\}\}, which a rule cannot fill in yet/) });
+  });
+
+  it("fills a heading picture, the text values and a button link value from the step, through the chatbot template builder", async () => {
+    db.contact.findFirst.mockImplementation(async () => ({ ...contactRow, attributes: { photo: "https://cdn.example.com/p.jpg", order: "A-17" } }));
+    db.template.findFirst.mockResolvedValue(
+      template({
+        components: [
+          { type: "HEADER", format: "IMAGE" },
+          { type: "BODY", text: "Hi {{1}}, your order {{2}} is ready" },
+          { type: "BUTTONS", buttons: [{ type: "URL", url: "https://shop.example.com/track/{{1}}" }] },
+        ],
+      }),
+    );
+    db.phoneNumber.findFirst.mockResolvedValue({ wabaRefId: "w1" });
+    svc.sendTemplateMessage.mockResolvedValue({ id: "m7" });
+    const step: Action = { type: "send_template", templateId: "tp1", variables: ["{{first_name}}", "{{attribute.order}}"], headerMediaUrl: "{{attribute.photo}}", buttonVariable: "{{attribute.order}}" };
+    await fireRules(event(), [rule({ actions: [step] })]);
+    expect(svc.sendTemplateMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        components: [
+          { type: "header", parameters: [{ type: "image", image: { link: "https://cdn.example.com/p.jpg" } }] },
+          { type: "body", parameters: [{ type: "text", text: "Asha" }, { type: "text", text: "A-17" }] },
+          { type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: "A-17" }] },
+        ],
+      }),
+    );
+    expect(logged()[0]).toMatchObject({ outcome: "ok" });
+    // A contact without the photo detail: the link comes out empty, so the run says why instead of sending a broken template.
+    db.contact.findFirst.mockImplementation(async () => ({ ...contactRow, attributes: { order: "A-18" } }));
+    await fireRules(event({ at: new Date(NOW.getTime() + 3_600_000) }), [rule({ actions: [step] })]);
+    expect(svc.sendTemplateMessage).toHaveBeenCalledTimes(1);
+    expect(logged()[1]).toMatchObject({ outcome: "failed", detail: expect.stringMatching(/came out empty for this contact/) });
+  });
+
+  it("refuses to send a template from a number of another WhatsApp Business account", async () => {
+    db.template.findFirst.mockResolvedValue(template({ wabaRefId: "w2" }));
+    db.phoneNumber.findFirst.mockResolvedValue({ wabaRefId: "w1" });
+    await fireRules(event(), [rule({ actions: [sendTemplate()] })]);
+    expect(svc.sendTemplateMessage).not.toHaveBeenCalled();
+    expect(db.phoneNumber.findFirst).toHaveBeenCalledWith({ where: { id: "ph1", tenantId: "t1" }, select: { wabaRefId: true } });
+    expect(logged()[0]).toMatchObject({ outcome: "failed", detail: expect.stringMatching(/different WhatsApp Business account/) });
+    // The same account sends.
+    db.phoneNumber.findFirst.mockResolvedValue({ wabaRefId: "w2" });
+    svc.sendTemplateMessage.mockResolvedValue({ id: "m9" });
+    await fireRules(event(), [rule({ actions: [sendTemplate()] })]);
+    expect(svc.sendTemplateMessage).toHaveBeenCalledWith(expect.objectContaining({ phoneNumberId: "ph1", templateName: "promo" }));
+  });
+
+  it("a scheduled run with no chat picks a number of the template's own account", async () => {
+    db.template.findFirst.mockResolvedValue(template({ wabaRefId: "w2" }));
+    db.conversation.findFirst.mockResolvedValue(null);
+    db.phoneNumber.findFirst.mockImplementation(async ({ where }: { where: Record<string, unknown> }) => (where.status === "connected" ? { id: "ph7" } : { wabaRefId: "w2" }));
+    svc.sendTemplateMessage.mockResolvedValue({ id: "m3" });
+    const r = rule({ trigger: { type: "scheduled", repeat: "daily", time: "10:00", days: [], timezone: "UTC" }, actions: [sendTemplate()] });
+    const e = event({ type: "scheduled", conversationId: null, message: undefined, ruleId: r.id, dedupeSince: new Date("2026-10-27T10:00:00Z") });
+    expect((await fireRules(e, [r])).fired).toBe(1);
+    expect(db.phoneNumber.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: "t1", status: "connected", wabaRefId: "w2" } }));
+    expect(svc.sendTemplateMessage).toHaveBeenCalledWith(expect.objectContaining({ phoneNumberId: "ph7" }));
+  });
+
+  it("starts the AI agent as a rule, so its Reply when setting does not stop it", async () => {
+    hooks.handleInboundForAiAgent.mockResolvedValue(true);
+    await fireRules(event(), [rule({ actions: [{ type: "start_ai_agent" }] })]);
+    expect(hooks.handleInboundForAiAgent).toHaveBeenCalledWith(expect.objectContaining({ conversationId: "cv1", startedBy: "rule" }));
+    hooks.handleInboundForAiAgent.mockResolvedValue(false);
+    await fireRules(event({ at: new Date(NOW.getTime() + 3_600_000) }), [rule({ actions: [{ type: "start_ai_agent" }] })]);
+    expect(logged().at(-1)).toMatchObject({ outcome: "skipped", detail: expect.stringMatching(/switched on for this number/) });
   });
 });

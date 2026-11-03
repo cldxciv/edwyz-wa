@@ -1,3 +1,5 @@
+import { planMove } from "@/lib/billing/plan-compare";
+
 export type BannerInput = { state: string; daysLeftInTrial: number | null; reason?: string };
 export type Banner = { tone: "warn" | "bad"; text: string };
 
@@ -120,23 +122,153 @@ export function daysLeftText(daysLeft: number): string {
   return `${daysLeft} ${daysLeft === 1 ? "day" : "days"} left in your trial`;
 }
 
-export type SubscriptionLike = { status: string; cancelAtPeriodEnd: boolean; currentPeriodEnd: string | null; plan: { name: string } } | null;
+/** `manual`: a plan our team assigned by hand. It does not renew by itself and cannot be cancelled or switched online. */
+export type SubscriptionLike = { status: string; cancelAtPeriodEnd: boolean; currentPeriodEnd: string | null; plan: { name: string; pricePaise?: number; intervalMonths?: number }; manual?: boolean } | null;
 
-export function renewalText(sub: SubscriptionLike): string | null {
-  if (!sub?.currentPeriodEnd) return null;
-  const date = formatDate(sub.currentPeriodEnd);
-  return sub.cancelAtPeriodEnd ? `Ends on ${date}. It will not renew.` : `Renews on ${date}.`;
+/**
+ * A plan change waiting to happen (GET /api/billing `scheduledChange`): a downgrade at the renewal, an upgrade the payment
+ * provider has not confirmed yet, or a new subscription that starts when the current plan ends (`authorized` once approved).
+ */
+export type ScheduledChangeLike = { kind: "downgrade" | "upgrade" | "next_subscription"; planName: string; at: string; authorized: boolean } | null;
+
+/** True for an approved new plan whose start day has come: it is waiting for its first payment to go through. */
+const nextStarting = (change: ScheduledChangeLike, now: Date) =>
+  !!change && change.kind === "next_subscription" && change.authorized && new Date(change.at).getTime() <= now.getTime();
+
+/** The line under "Your plan" about a planned change: "Changes to Growth on 30 Nov 2026." */
+export function scheduledChangeText(change: ScheduledChangeLike, now = new Date()): string | null {
+  if (!change) return null;
+  if (change.kind === "upgrade") return `Moving to ${change.planName}. It shows here as soon as the payment provider confirms it.`;
+  if (change.kind === "next_subscription" && !change.authorized) return `${change.planName} is not set up yet. Choose it again under Plans and finish the payment step to start it on ${formatDate(change.at)}.`;
+  if (nextStarting(change, now)) return `${change.planName} is starting. It switches on as soon as its first payment goes through.`;
+  return `Changes to ${change.planName} on ${formatDate(change.at)}.`;
 }
 
-export type PlanChoice = { disabled: boolean; current: boolean; reason: string | null };
+/**
+ * The line under "Your plan" about the paid-until date. Only a live plan (active, or a failed payment Razorpay is still retrying) can
+ * renew; a plan that has stopped (a hand-assigned plan past its date, a cancelled or expired one) says when it ended or will end.
+ */
+export function renewalText(sub: SubscriptionLike, now = new Date()): string | null {
+  if (!sub?.currentPeriodEnd) return null;
+  const date = formatDate(sub.currentPeriodEnd);
+  const live = sub.status === "active" || sub.status === "past_due";
+  if (!live && new Date(sub.currentPeriodEnd).getTime() <= now.getTime()) return `Ended on ${date}.`;
+  if (sub.manual && sub.status === "active") return `Runs until ${date}. It does not renew by itself.`;
+  return sub.cancelAtPeriodEnd || !live ? `Ends on ${date}. It will not renew.` : `Renews on ${date}.`;
+}
 
-export function planChoice(plan: { name: string }, sub: SubscriptionLike, paymentsConfigured: boolean): PlanChoice {
-  const activeSub = sub?.status === "active" && !sub.cancelAtPeriodEnd;
-  const current = !!sub && sub.status === "active" && sub.plan.name === plan.name;
-  if (!paymentsConfigured) return { disabled: true, current, reason: "Online payment is not set up yet. Contact support to subscribe." };
-  if (current) return { disabled: true, current, reason: null };
-  if (activeSub) return { disabled: true, current, reason: "You already have an active plan. Cancel it first if you want to switch, or contact support." };
-  return { disabled: false, current, reason: null };
+/** True when the owner may cancel online: an active Razorpay plan that is not already set to end. */
+export const canCancelOnline = (sub: SubscriptionLike) => !!sub && sub.status === "active" && !sub.cancelAtPeriodEnd && !sub.manual;
+
+/** True for a live plan our team assigned by hand, which only support can change. */
+export const isManualPlan = (sub: SubscriptionLike) => !!sub && sub.status === "active" && !!sub.manual;
+
+/**
+ * What a plan card's button does: subscribe (checkout), upgrade now or switch at renewal (POST /api/billing/change-plan),
+ * start a new subscription when the current plan ends (checkout with a later start), keep the current plan (drop a planned
+ * downgrade), or nothing.
+ */
+export type PlanAction = "subscribe" | "upgrade" | "downgrade" | "start_later" | "keep" | "none";
+export type PlanChoice = { disabled: boolean; current: boolean; reason: string | null; action: PlanAction; label: string };
+
+export type PlanChoiceOptions = {
+  /** Only the owner changes a running plan (an upgrade charges the saved payment method). Defaults to true. */
+  isOwner?: boolean;
+  scheduled?: ScheduledChangeLike;
+  now?: Date;
+};
+
+export function planChoice(plan: { name: string; pricePaise?: number; intervalMonths?: number }, sub: SubscriptionLike, paymentsConfigured: boolean, opts: PlanChoiceOptions = {}): PlanChoice {
+  const isOwner = opts.isOwner ?? true;
+  const scheduled = opts.scheduled ?? null;
+  const now = opts.now ?? new Date();
+  const live = !!sub && sub.status === "active";
+  const current = live && sub.plan.name === plan.name;
+  const subscribe: PlanChoice = { disabled: false, current, reason: null, action: "subscribe", label: `Subscribe to ${plan.name}` };
+  const off = (reason: string | null, label = subscribe.label): PlanChoice => ({ disabled: true, current, reason, action: "none", label });
+  if (!paymentsConfigured) return off("Online payment is not set up yet. Contact support to subscribe.", current ? "Current plan" : subscribe.label);
+  if (current) {
+    // A switch planned for the renewal can be undone from the current plan's card.
+    if (scheduled?.kind === "downgrade" && !sub?.manual) {
+      return isOwner
+        ? { disabled: false, current, reason: `Your plan changes to ${scheduled.planName} on ${formatDate(scheduled.at)}. Keep ${plan.name} to stay on it.`, action: "keep", label: `Keep ${plan.name}` }
+        : off("Only the workspace owner can change the plan.", "Current plan");
+    }
+    return off(null, "Current plan");
+  }
+  if (isManualPlan(sub)) return off("Your plan was set up by our team. Contact support to change it.");
+  // An approved new plan holds the cards even after the current plan has ended: its first payment can take a few days, and
+  // a second subscription would charge beside it.
+  const approvedNext = scheduled?.kind === "next_subscription" && scheduled.authorized ? scheduled : null;
+  if (approvedNext && (!live || !sub || nextStarting(approvedNext, now))) {
+    const starting = nextStarting(approvedNext, now);
+    if (approvedNext.planName === plan.name) {
+      return starting
+        ? off(`${plan.name} starts as soon as its first payment goes through.`, "Starting")
+        : off(`Your plan changes to ${plan.name} on ${formatDate(approvedNext.at)}.`, `Starts ${formatDate(approvedNext.at)}`);
+    }
+    return off(`${approvedNext.planName} is already set to start${starting ? "" : ` on ${formatDate(approvedNext.at)}`}. Cancel that change first to choose another plan.`);
+  }
+  if (!live || !sub) return subscribe;
+
+  const endsOn = sub.currentPeriodEnd ? formatDate(sub.currentPeriodEnd) : "";
+  const periodOpen = !sub.currentPeriodEnd || new Date(sub.currentPeriodEnd).getTime() > now.getTime();
+  const planned = scheduled && (scheduled.kind !== "next_subscription" || scheduled.authorized) ? scheduled : null;
+  if (planned && planned.planName === plan.name) return off(`Your plan changes to ${plan.name} on ${formatDate(planned.at)}.`, `Starts ${formatDate(planned.at)}`);
+
+  if (sub.cancelAtPeriodEnd) {
+    if (!periodOpen) return subscribe;
+    if (planned?.kind === "next_subscription") return off(`${planned.planName} is already set to start when your plan ends. Cancel that change first to choose another plan.`);
+    return {
+      disabled: false,
+      current,
+      reason: `Your current plan ends${endsOn ? ` on ${endsOn}` : ""}. ${plan.name} starts then, and nothing is charged before that day.`,
+      action: "start_later",
+      label: endsOn ? `Start ${plan.name} on ${endsOn}` : `Start ${plan.name} when your plan ends`,
+    };
+  }
+
+  // The server's rule (plan-compare.ts): a higher price per month within the same billing interval is an upgrade; a change
+  // of interval waits for the renewal whatever the prices.
+  const move =
+    typeof plan.pricePaise === "number" && typeof sub.plan.pricePaise === "number"
+      ? planMove({ pricePaise: sub.plan.pricePaise, intervalMonths: sub.plan.intervalMonths }, { pricePaise: plan.pricePaise, intervalMonths: plan.intervalMonths })
+      : "downgrade";
+  const upgrade = move === "upgrade";
+  const label = upgrade ? `Upgrade to ${plan.name}` : `Switch to ${plan.name}`;
+  if (!isOwner) return off("Only the workspace owner can change the plan.", label);
+  const startsAtRenewal = `Starts when your current period ends${endsOn ? ` on ${endsOn}` : ""}`;
+  if (move === "interval") {
+    const billed = `billed per ${intervalLabel(plan.intervalMonths ?? 1)} instead of per ${intervalLabel(sub.plan.intervalMonths ?? 1)}`;
+    return { disabled: false, current, reason: `${startsAtRenewal}, because it is ${billed}. Nothing is charged now.`, action: "downgrade", label };
+  }
+  return upgrade
+    ? { disabled: false, current, reason: "Starts now. You pay only the difference for the rest of this period.", action: "upgrade", label }
+    : { disabled: false, current, reason: `${startsAtRenewal}. Nothing is charged now.`, action: "downgrade", label };
+}
+
+/** The 409 of /api/billing/change-plan when Razorpay cannot change the plan for the way it is paid. */
+export type NewSubscriptionNeeded = { error: string; code: "new_subscription_needed"; planId: string; planName: string; endsOn: string | null; method: string | null };
+
+export function isNewSubscriptionNeeded(body: unknown): body is NewSubscriptionNeeded {
+  return !!body && typeof body === "object" && (body as { code?: unknown }).code === "new_subscription_needed" && typeof (body as { error?: unknown }).error === "string";
+}
+
+/** The toast after a plan change, from the change-plan answer. */
+export function planChangeDoneText(result: { change: string; planName: string; at?: string; endsOn?: string | null; ended?: boolean }): string {
+  switch (result.change) {
+    case "upgraded":
+      return `You are now on ${result.planName}.`;
+    case "processing":
+      return `Moving to ${result.planName}. It shows here as soon as the payment provider confirms it.`;
+    case "scheduled":
+      return `Changes to ${result.planName} on ${formatDate(result.at)}.`;
+    case "kept":
+      if (result.ended) return "The new plan will not start. Choose a plan under Plans to continue.";
+      return result.endsOn ? `The new plan will not start. Your current plan still ends on ${formatDate(result.endsOn)}.` : `You stay on ${result.planName}.`;
+    default:
+      return "Your plan was updated.";
+  }
 }
 
 /** Turns raw errors from the payment flow into something a shop owner can act on. */

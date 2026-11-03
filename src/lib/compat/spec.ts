@@ -259,7 +259,7 @@ export const ENDPOINTS = [
     scope: "messages:write",
     group: "Templates",
     summary:
-      "Send an approved template to up to 100 recipients, including templates with a media header or a link button. Each recipient is answered on its own: accepted means we queued the message for sending, not that it was delivered. Follow delivery with the message.status webhook or the message history.",
+      "Send an approved template to up to 100 recipients, including templates with a media header, a link button, a coupon-code button or a login code. Each recipient is answered on its own: accepted means we queued the message for sending, not that it was delivered. Follow delivery with the message.status webhook or the message history.",
     body: [
       { name: "template_name", type: "string", required: true, description: "Name of an approved template." },
       { name: "language", type: "string", description: "Template language code. Needed only when the name exists in several languages." },
@@ -269,7 +269,12 @@ export const ENDPOINTS = [
         name: "recipients",
         type: "array",
         required: true,
-        description: "Each item: phone_number, or bsuid for a person who messaged you through a WhatsApp username (one of the two is required), local_message_id (optional, dedupes for 24 hours), custom_params (array of { name, value } filling {{1}}, {{2}}... in order), header_param (text for a header placeholder, or the public https link of an image, video or document header), button_params (array of { index, value } for link buttons whose url has a placeholder, index counting buttons from 0).",
+        description:
+          "Each item: phone_number, or bsuid for a person who messaged you through a WhatsApp username (one of the two is required), local_message_id (optional, dedupes for 24 hours), " +
+          "custom_params (array of { name, value } for the message text: they fill {{1}}, {{2}}... in order, or by number when every name is a number; a template with named placeholders such as {{first_name}} takes them by name, and every placeholder needs one), " +
+          "header_param (text for a header placeholder, or the public https link of an image, video or document header), " +
+          "button_params (array of { index, value }, index counting the template's buttons from 0: the value for a link button whose url has a placeholder, or the code of a coupon-code button). " +
+          "A login-code (authentication) template takes the code as custom_params {{1}} (name \"1\"); its copy-code button gets the same code unless button_params gives one.",
       },
     ],
     returns: "per-recipient results",
@@ -408,10 +413,10 @@ export const ERROR_CODES = [
   { status: 401, code: "unauthorized", meaning: "Missing, revoked or malformed token." },
   { status: 402, code: "payment_required", meaning: "The workspace trial or subscription has ended, so writes are refused until a plan is chosen. Reads keep working." },
   { status: 403, code: "forbidden", meaning: "The token has none of the scopes this endpoint accepts, or the workspace is suspended." },
-  { status: 404, code: "not_found", meaning: "No such record in your workspace." },
+  { status: 404, code: "not_found", meaning: "No such record in your workspace, or no such endpoint." },
   { status: 409, code: "conflict", meaning: "The request clashes with current state, for example a duplicate contact or a closed 24-hour window." },
   { status: 413, code: "payload_too_large", meaning: "The body exceeds 64 KB." },
-  { status: 422, code: "unprocessable", meaning: "Understood but refused, for example the contact opted out or has no phone number." },
+  { status: 422, code: "unprocessable", meaning: "Understood but refused, for example a marketing template to a contact who opted out, or a contact with no phone number." },
   { status: 429, code: "rate_limited", meaning: "Too many requests; wait for Retry-After seconds." },
   { status: 500, code: "internal_error", meaning: "Something failed on our side. Safe to retry reads." },
 ] as const;

@@ -42,6 +42,7 @@ import { GET as listFilters, POST as createFilter } from "@/app/api/inbox/filter
 import { GET as mentionsRoute } from "@/app/api/inbox/mentions/route";
 import { GET as numbersRoute } from "@/app/api/inbox/numbers/route";
 import { GET as getSettings, PUT as putSettings } from "@/app/api/inbox/settings/route";
+import { templatesForWaba, wabaOf } from "@/components/inbox/ux";
 
 const ORIGIN = "https://wa.edwyz.com";
 const ctx = { params: Promise.resolve({ id: "cv1" }) };
@@ -198,6 +199,15 @@ describe("mentions and numbers", () => {
     expect((await (await numbersRoute(get())).json()).numbers).toHaveLength(1);
     expect(db.phoneNumber.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: "t1", status: "connected" } }));
   });
+
+  it("says which WhatsApp Business Account each number belongs to, so the new-chat dialog can offer only its templates", async () => {
+    db.phoneNumber.findMany.mockResolvedValue([{ id: "ph1", displayPhone: "+91 11", verifiedName: "Shop", wabaRefId: "w1" }]);
+    const { numbers } = await (await numbersRoute(get())).json();
+    expect(db.phoneNumber.findMany).toHaveBeenCalledWith(expect.objectContaining({ select: expect.objectContaining({ wabaRefId: true }) }));
+    expect(wabaOf(numbers[0])).toBe("w1");
+    const templates = [{ id: "a", wabaRefId: "w1" }, { id: "b", wabaRefId: "w2" }];
+    expect(templatesForWaba(templates, wabaOf(numbers[0]))?.map((t) => t.id)).toEqual(["a"]);
+  });
 });
 
 describe("attachments route", () => {
@@ -209,13 +219,15 @@ describe("attachments route", () => {
     upload.uploadAttachmentToMeta.mockResolvedValue({ mediaId: "99", kind: "document", mime: "application/pdf", bytes: 5, filename: "a.pdf" });
   });
 
-  it("keeps JPEG, PNG and MP4 in the media library and enforces the WhatsApp size on the declared length", async () => {
-    expect((await attach(upload2("image/png", { "content-length": "5" }), ctx)).status).toBe(201);
-    expect(content.saveUpload).toHaveBeenCalledTimes(1);
-    expect((await attach(upload2("image/png", { "content-length": String(6 * 1048576) }), ctx)).status).toBe(413);
-    expect((await attach(upload2("video/mp4", { "content-length": String(17 * 1048576) }), ctx)).status).toBe(413);
-    expect((await attach(upload2("image/png"), ctx)).status).toBe(411);
-    expect(content.saveUpload).toHaveBeenCalledTimes(1);
+  it("sends JPEG, PNG and MP4 straight to WhatsApp too, never into the media library and its 500-file limit", async () => {
+    upload.uploadAttachmentToMeta.mockResolvedValueOnce({ mediaId: "77", kind: "image", mime: "image/png", bytes: 5, filename: "a.png" });
+    const res = await attach(upload2("image/png", { "content-length": "5" }), ctx);
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({ mediaId: "77", kind: "image", mime: "image/png", bytes: 5, filename: "a.png" });
+    upload.uploadAttachmentToMeta.mockResolvedValueOnce({ mediaId: "78", kind: "video", mime: "video/mp4", bytes: 5, filename: "a.mp4" });
+    expect((await attach(upload2("video/mp4"), ctx)).status).toBe(201);
+    expect(upload.uploadAttachmentToMeta).toHaveBeenCalledTimes(2);
+    expect(content.saveUpload).not.toHaveBeenCalled();
   });
 
   it("sends documents, audio and stickers straight to WhatsApp", async () => {
@@ -250,6 +262,29 @@ describe("messages route: uploaded files, stickers and the signature", () => {
     expect((await messagesRoute(send("POST", { type: "audio", mediaId: "8" }), ctx)).status).toBe(201);
     expect((await messagesRoute(send("POST", { type: "audio", mediaId: "../etc" }), ctx)).status).toBe(400);
     expect((await messagesRoute(send("POST", { type: "gif", mediaId: "1" }), ctx)).status).toBe(400);
+  });
+
+  it("hands the upload's preview copy to the sent message", async () => {
+    const media = await import("@/lib/inbox/media");
+    const adopt = vi.spyOn(media, "adoptPendingUpload");
+    service.sendMedia.mockResolvedValue({ id: "m-sent" });
+    expect((await messagesRoute(send("POST", { type: "image", mediaId: "4242", mime: "image/jpeg" }), ctx)).status).toBe(201);
+    expect(service.sendMedia).toHaveBeenLastCalledWith(expect.objectContaining({ mediaType: "image", media: "meta-media:4242", mime: "image/jpeg" }));
+    expect(adopt).toHaveBeenCalledWith("t1", "4242", "m-sent");
+    adopt.mockRestore();
+  });
+
+  it("limits each person to 60 sends a minute, whatever the type", async () => {
+    actor.current = { userId: "u-busy", tenantId: "t1", role: "agent" };
+    service.sendText.mockResolvedValue({ id: "m1" });
+    for (let i = 0; i < 60; i++) expect((await messagesRoute(send("POST", { type: "text", body: `hi ${i}` }), ctx)).status).toBe(201);
+    const over = await messagesRoute(send("POST", { type: "text", body: "one more" }), ctx);
+    expect(over.status).toBe(429);
+    expect((await over.json()).error).toMatch(/Wait a minute/);
+    expect(service.sendText).toHaveBeenCalledTimes(60);
+    // Someone else in the same workspace is not held back.
+    actor.current = { userId: "u-calm", tenantId: "t1", role: "agent" };
+    expect((await messagesRoute(send("POST", { type: "text", body: "hello" }), ctx)).status).toBe(201);
   });
 
   it("adds the agent's name to text messages only when the workspace turned it on", async () => {

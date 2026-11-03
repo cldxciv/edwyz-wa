@@ -29,11 +29,13 @@ export type AggregateAdSet = {
 export type AdSetAvgAggregateOutputType = {
   dailyBudgetMinor: number | null
   lifetimeBudgetMinor: number | null
+  bidAmountMinor: number | null
 }
 
 export type AdSetSumAggregateOutputType = {
   dailyBudgetMinor: number | null
   lifetimeBudgetMinor: bigint | null
+  bidAmountMinor: bigint | null
 }
 
 export type AdSetMinAggregateOutputType = {
@@ -46,6 +48,13 @@ export type AdSetMinAggregateOutputType = {
   dailyBudgetMinor: number | null
   createdAt: Date | null
   lifetimeBudgetMinor: bigint | null
+  variantKey: string | null
+  audienceId: string | null
+  optimizationGoal: string | null
+  destinationType: string | null
+  bidStrategy: string | null
+  bidAmountMinor: bigint | null
+  effectiveStatus: string | null
 }
 
 export type AdSetMaxAggregateOutputType = {
@@ -58,6 +67,13 @@ export type AdSetMaxAggregateOutputType = {
   dailyBudgetMinor: number | null
   createdAt: Date | null
   lifetimeBudgetMinor: bigint | null
+  variantKey: string | null
+  audienceId: string | null
+  optimizationGoal: string | null
+  destinationType: string | null
+  bidStrategy: string | null
+  bidAmountMinor: bigint | null
+  effectiveStatus: string | null
 }
 
 export type AdSetCountAggregateOutputType = {
@@ -71,6 +87,15 @@ export type AdSetCountAggregateOutputType = {
   dailyBudgetMinor: number
   createdAt: number
   lifetimeBudgetMinor: number
+  variantKey: number
+  audienceId: number
+  optimizationGoal: number
+  destinationType: number
+  bidStrategy: number
+  bidAmountMinor: number
+  schedule: number
+  effectiveStatus: number
+  effectivePlacements: number
   _all: number
 }
 
@@ -78,11 +103,13 @@ export type AdSetCountAggregateOutputType = {
 export type AdSetAvgAggregateInputType = {
   dailyBudgetMinor?: true
   lifetimeBudgetMinor?: true
+  bidAmountMinor?: true
 }
 
 export type AdSetSumAggregateInputType = {
   dailyBudgetMinor?: true
   lifetimeBudgetMinor?: true
+  bidAmountMinor?: true
 }
 
 export type AdSetMinAggregateInputType = {
@@ -95,6 +122,13 @@ export type AdSetMinAggregateInputType = {
   dailyBudgetMinor?: true
   createdAt?: true
   lifetimeBudgetMinor?: true
+  variantKey?: true
+  audienceId?: true
+  optimizationGoal?: true
+  destinationType?: true
+  bidStrategy?: true
+  bidAmountMinor?: true
+  effectiveStatus?: true
 }
 
 export type AdSetMaxAggregateInputType = {
@@ -107,6 +141,13 @@ export type AdSetMaxAggregateInputType = {
   dailyBudgetMinor?: true
   createdAt?: true
   lifetimeBudgetMinor?: true
+  variantKey?: true
+  audienceId?: true
+  optimizationGoal?: true
+  destinationType?: true
+  bidStrategy?: true
+  bidAmountMinor?: true
+  effectiveStatus?: true
 }
 
 export type AdSetCountAggregateInputType = {
@@ -120,6 +161,15 @@ export type AdSetCountAggregateInputType = {
   dailyBudgetMinor?: true
   createdAt?: true
   lifetimeBudgetMinor?: true
+  variantKey?: true
+  audienceId?: true
+  optimizationGoal?: true
+  destinationType?: true
+  bidStrategy?: true
+  bidAmountMinor?: true
+  schedule?: true
+  effectiveStatus?: true
+  effectivePlacements?: true
   _all?: true
 }
 
@@ -220,6 +270,15 @@ export type AdSetGroupByOutputType = {
   dailyBudgetMinor: number | null
   createdAt: Date
   lifetimeBudgetMinor: bigint | null
+  variantKey: string | null
+  audienceId: string | null
+  optimizationGoal: string | null
+  destinationType: string | null
+  bidStrategy: string | null
+  bidAmountMinor: bigint | null
+  schedule: runtime.JsonValue | null
+  effectiveStatus: string | null
+  effectivePlacements: runtime.JsonValue | null
   _count: AdSetCountAggregateOutputType | null
   _avg: AdSetAvgAggregateOutputType | null
   _sum: AdSetSumAggregateOutputType | null
@@ -256,6 +315,15 @@ export type AdSetWhereInput = {
   dailyBudgetMinor?: Prisma.IntNullableFilter<"AdSet"> | number | null
   createdAt?: Prisma.DateTimeFilter<"AdSet"> | Date | string
   lifetimeBudgetMinor?: Prisma.BigIntNullableFilter<"AdSet"> | bigint | number | null
+  variantKey?: Prisma.StringNullableFilter<"AdSet"> | string | null
+  audienceId?: Prisma.StringNullableFilter<"AdSet"> | string | null
+  optimizationGoal?: Prisma.StringNullableFilter<"AdSet"> | string | null
+  destinationType?: Prisma.StringNullableFilter<"AdSet"> | string | null
+  bidStrategy?: Prisma.StringNullableFilter<"AdSet"> | string | null
+  bidAmountMinor?: Prisma.BigIntNullableFilter<"AdSet"> | bigint | number | null
+  schedule?: Prisma.JsonNullableFilter<"AdSet">
+  effectiveStatus?: Prisma.StringNullableFilter<"AdSet"> | string | null
+  effectivePlacements?: Prisma.JsonNullableFilter<"AdSet">
   campaign?: Prisma.XOR<Prisma.AdCampaignScalarRelationFilter, Prisma.AdCampaignWhereInput>
   ads?: Prisma.AdListRelationFilter
 }
@@ -271,6 +339,15 @@ export type AdSetOrderByWithRelationInput = {
   dailyBudgetMinor?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   lifetimeBudgetMinor?: Prisma.SortOrderInput | Prisma.SortOrder
+  variantKey?: Prisma.SortOrderInput | Prisma.SortOrder
+  audienceId?: Prisma.SortOrderInput | Prisma.SortOrder
+  optimizationGoal?: Prisma.SortOrderInput | Prisma.SortOrder
+  destinationType?: Prisma.SortOrderInput | Prisma.SortOrder
+  bidStrategy?: Prisma.SortOrderInput | Prisma.SortOrder
+  bidAmountMinor?: Prisma.SortOrderInput | Prisma.SortOrder
+  schedule?: Prisma.SortOrderInput | Prisma.SortOrder
+  effectiveStatus?: Prisma.SortOrderInput | Prisma.SortOrder
+  effectivePlacements?: Prisma.SortOrderInput | Prisma.SortOrder
   campaign?: Prisma.AdCampaignOrderByWithRelationInput
   ads?: Prisma.AdOrderByRelationAggregateInput
 }
@@ -289,6 +366,15 @@ export type AdSetWhereUniqueInput = Prisma.AtLeast<{
   dailyBudgetMinor?: Prisma.IntNullableFilter<"AdSet"> | number | null
   createdAt?: Prisma.DateTimeFilter<"AdSet"> | Date | string
   lifetimeBudgetMinor?: Prisma.BigIntNullableFilter<"AdSet"> | bigint | number | null
+  variantKey?: Prisma.StringNullableFilter<"AdSet"> | string | null
+  audienceId?: Prisma.StringNullableFilter<"AdSet"> | string | null
+  optimizationGoal?: Prisma.StringNullableFilter<"AdSet"> | string | null
+  destinationType?: Prisma.StringNullableFilter<"AdSet"> | string | null
+  bidStrategy?: Prisma.StringNullableFilter<"AdSet"> | string | null
+  bidAmountMinor?: Prisma.BigIntNullableFilter<"AdSet"> | bigint | number | null
+  schedule?: Prisma.JsonNullableFilter<"AdSet">
+  effectiveStatus?: Prisma.StringNullableFilter<"AdSet"> | string | null
+  effectivePlacements?: Prisma.JsonNullableFilter<"AdSet">
   campaign?: Prisma.XOR<Prisma.AdCampaignScalarRelationFilter, Prisma.AdCampaignWhereInput>
   ads?: Prisma.AdListRelationFilter
 }, "id">
@@ -304,6 +390,15 @@ export type AdSetOrderByWithAggregationInput = {
   dailyBudgetMinor?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   lifetimeBudgetMinor?: Prisma.SortOrderInput | Prisma.SortOrder
+  variantKey?: Prisma.SortOrderInput | Prisma.SortOrder
+  audienceId?: Prisma.SortOrderInput | Prisma.SortOrder
+  optimizationGoal?: Prisma.SortOrderInput | Prisma.SortOrder
+  destinationType?: Prisma.SortOrderInput | Prisma.SortOrder
+  bidStrategy?: Prisma.SortOrderInput | Prisma.SortOrder
+  bidAmountMinor?: Prisma.SortOrderInput | Prisma.SortOrder
+  schedule?: Prisma.SortOrderInput | Prisma.SortOrder
+  effectiveStatus?: Prisma.SortOrderInput | Prisma.SortOrder
+  effectivePlacements?: Prisma.SortOrderInput | Prisma.SortOrder
   _count?: Prisma.AdSetCountOrderByAggregateInput
   _avg?: Prisma.AdSetAvgOrderByAggregateInput
   _max?: Prisma.AdSetMaxOrderByAggregateInput
@@ -325,6 +420,15 @@ export type AdSetScalarWhereWithAggregatesInput = {
   dailyBudgetMinor?: Prisma.IntNullableWithAggregatesFilter<"AdSet"> | number | null
   createdAt?: Prisma.DateTimeWithAggregatesFilter<"AdSet"> | Date | string
   lifetimeBudgetMinor?: Prisma.BigIntNullableWithAggregatesFilter<"AdSet"> | bigint | number | null
+  variantKey?: Prisma.StringNullableWithAggregatesFilter<"AdSet"> | string | null
+  audienceId?: Prisma.StringNullableWithAggregatesFilter<"AdSet"> | string | null
+  optimizationGoal?: Prisma.StringNullableWithAggregatesFilter<"AdSet"> | string | null
+  destinationType?: Prisma.StringNullableWithAggregatesFilter<"AdSet"> | string | null
+  bidStrategy?: Prisma.StringNullableWithAggregatesFilter<"AdSet"> | string | null
+  bidAmountMinor?: Prisma.BigIntNullableWithAggregatesFilter<"AdSet"> | bigint | number | null
+  schedule?: Prisma.JsonNullableWithAggregatesFilter<"AdSet">
+  effectiveStatus?: Prisma.StringNullableWithAggregatesFilter<"AdSet"> | string | null
+  effectivePlacements?: Prisma.JsonNullableWithAggregatesFilter<"AdSet">
 }
 
 export type AdSetCreateInput = {
@@ -337,6 +441,15 @@ export type AdSetCreateInput = {
   dailyBudgetMinor?: number | null
   createdAt?: Date | string
   lifetimeBudgetMinor?: bigint | number | null
+  variantKey?: string | null
+  audienceId?: string | null
+  optimizationGoal?: string | null
+  destinationType?: string | null
+  bidStrategy?: string | null
+  bidAmountMinor?: bigint | number | null
+  schedule?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  effectiveStatus?: string | null
+  effectivePlacements?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   campaign: Prisma.AdCampaignCreateNestedOneWithoutAdSetsInput
   ads?: Prisma.AdCreateNestedManyWithoutAdSetInput
 }
@@ -352,6 +465,15 @@ export type AdSetUncheckedCreateInput = {
   dailyBudgetMinor?: number | null
   createdAt?: Date | string
   lifetimeBudgetMinor?: bigint | number | null
+  variantKey?: string | null
+  audienceId?: string | null
+  optimizationGoal?: string | null
+  destinationType?: string | null
+  bidStrategy?: string | null
+  bidAmountMinor?: bigint | number | null
+  schedule?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  effectiveStatus?: string | null
+  effectivePlacements?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   ads?: Prisma.AdUncheckedCreateNestedManyWithoutAdSetInput
 }
 
@@ -365,6 +487,15 @@ export type AdSetUpdateInput = {
   dailyBudgetMinor?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   lifetimeBudgetMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  variantKey?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  audienceId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  optimizationGoal?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  destinationType?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  bidStrategy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  bidAmountMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  schedule?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  effectiveStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  effectivePlacements?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   campaign?: Prisma.AdCampaignUpdateOneRequiredWithoutAdSetsNestedInput
   ads?: Prisma.AdUpdateManyWithoutAdSetNestedInput
 }
@@ -380,6 +511,15 @@ export type AdSetUncheckedUpdateInput = {
   dailyBudgetMinor?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   lifetimeBudgetMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  variantKey?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  audienceId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  optimizationGoal?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  destinationType?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  bidStrategy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  bidAmountMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  schedule?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  effectiveStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  effectivePlacements?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   ads?: Prisma.AdUncheckedUpdateManyWithoutAdSetNestedInput
 }
 
@@ -394,6 +534,15 @@ export type AdSetCreateManyInput = {
   dailyBudgetMinor?: number | null
   createdAt?: Date | string
   lifetimeBudgetMinor?: bigint | number | null
+  variantKey?: string | null
+  audienceId?: string | null
+  optimizationGoal?: string | null
+  destinationType?: string | null
+  bidStrategy?: string | null
+  bidAmountMinor?: bigint | number | null
+  schedule?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  effectiveStatus?: string | null
+  effectivePlacements?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
 }
 
 export type AdSetUpdateManyMutationInput = {
@@ -406,6 +555,15 @@ export type AdSetUpdateManyMutationInput = {
   dailyBudgetMinor?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   lifetimeBudgetMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  variantKey?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  audienceId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  optimizationGoal?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  destinationType?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  bidStrategy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  bidAmountMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  schedule?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  effectiveStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  effectivePlacements?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
 }
 
 export type AdSetUncheckedUpdateManyInput = {
@@ -419,6 +577,15 @@ export type AdSetUncheckedUpdateManyInput = {
   dailyBudgetMinor?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   lifetimeBudgetMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  variantKey?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  audienceId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  optimizationGoal?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  destinationType?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  bidStrategy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  bidAmountMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  schedule?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  effectiveStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  effectivePlacements?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
 }
 
 export type AdSetListRelationFilter = {
@@ -442,11 +609,21 @@ export type AdSetCountOrderByAggregateInput = {
   dailyBudgetMinor?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   lifetimeBudgetMinor?: Prisma.SortOrder
+  variantKey?: Prisma.SortOrder
+  audienceId?: Prisma.SortOrder
+  optimizationGoal?: Prisma.SortOrder
+  destinationType?: Prisma.SortOrder
+  bidStrategy?: Prisma.SortOrder
+  bidAmountMinor?: Prisma.SortOrder
+  schedule?: Prisma.SortOrder
+  effectiveStatus?: Prisma.SortOrder
+  effectivePlacements?: Prisma.SortOrder
 }
 
 export type AdSetAvgOrderByAggregateInput = {
   dailyBudgetMinor?: Prisma.SortOrder
   lifetimeBudgetMinor?: Prisma.SortOrder
+  bidAmountMinor?: Prisma.SortOrder
 }
 
 export type AdSetMaxOrderByAggregateInput = {
@@ -459,6 +636,13 @@ export type AdSetMaxOrderByAggregateInput = {
   dailyBudgetMinor?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   lifetimeBudgetMinor?: Prisma.SortOrder
+  variantKey?: Prisma.SortOrder
+  audienceId?: Prisma.SortOrder
+  optimizationGoal?: Prisma.SortOrder
+  destinationType?: Prisma.SortOrder
+  bidStrategy?: Prisma.SortOrder
+  bidAmountMinor?: Prisma.SortOrder
+  effectiveStatus?: Prisma.SortOrder
 }
 
 export type AdSetMinOrderByAggregateInput = {
@@ -471,11 +655,19 @@ export type AdSetMinOrderByAggregateInput = {
   dailyBudgetMinor?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   lifetimeBudgetMinor?: Prisma.SortOrder
+  variantKey?: Prisma.SortOrder
+  audienceId?: Prisma.SortOrder
+  optimizationGoal?: Prisma.SortOrder
+  destinationType?: Prisma.SortOrder
+  bidStrategy?: Prisma.SortOrder
+  bidAmountMinor?: Prisma.SortOrder
+  effectiveStatus?: Prisma.SortOrder
 }
 
 export type AdSetSumOrderByAggregateInput = {
   dailyBudgetMinor?: Prisma.SortOrder
   lifetimeBudgetMinor?: Prisma.SortOrder
+  bidAmountMinor?: Prisma.SortOrder
 }
 
 export type AdSetScalarRelationFilter = {
@@ -549,6 +741,15 @@ export type AdSetCreateWithoutCampaignInput = {
   dailyBudgetMinor?: number | null
   createdAt?: Date | string
   lifetimeBudgetMinor?: bigint | number | null
+  variantKey?: string | null
+  audienceId?: string | null
+  optimizationGoal?: string | null
+  destinationType?: string | null
+  bidStrategy?: string | null
+  bidAmountMinor?: bigint | number | null
+  schedule?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  effectiveStatus?: string | null
+  effectivePlacements?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   ads?: Prisma.AdCreateNestedManyWithoutAdSetInput
 }
 
@@ -562,6 +763,15 @@ export type AdSetUncheckedCreateWithoutCampaignInput = {
   dailyBudgetMinor?: number | null
   createdAt?: Date | string
   lifetimeBudgetMinor?: bigint | number | null
+  variantKey?: string | null
+  audienceId?: string | null
+  optimizationGoal?: string | null
+  destinationType?: string | null
+  bidStrategy?: string | null
+  bidAmountMinor?: bigint | number | null
+  schedule?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  effectiveStatus?: string | null
+  effectivePlacements?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   ads?: Prisma.AdUncheckedCreateNestedManyWithoutAdSetInput
 }
 
@@ -605,6 +815,15 @@ export type AdSetScalarWhereInput = {
   dailyBudgetMinor?: Prisma.IntNullableFilter<"AdSet"> | number | null
   createdAt?: Prisma.DateTimeFilter<"AdSet"> | Date | string
   lifetimeBudgetMinor?: Prisma.BigIntNullableFilter<"AdSet"> | bigint | number | null
+  variantKey?: Prisma.StringNullableFilter<"AdSet"> | string | null
+  audienceId?: Prisma.StringNullableFilter<"AdSet"> | string | null
+  optimizationGoal?: Prisma.StringNullableFilter<"AdSet"> | string | null
+  destinationType?: Prisma.StringNullableFilter<"AdSet"> | string | null
+  bidStrategy?: Prisma.StringNullableFilter<"AdSet"> | string | null
+  bidAmountMinor?: Prisma.BigIntNullableFilter<"AdSet"> | bigint | number | null
+  schedule?: Prisma.JsonNullableFilter<"AdSet">
+  effectiveStatus?: Prisma.StringNullableFilter<"AdSet"> | string | null
+  effectivePlacements?: Prisma.JsonNullableFilter<"AdSet">
 }
 
 export type AdSetCreateWithoutAdsInput = {
@@ -617,6 +836,15 @@ export type AdSetCreateWithoutAdsInput = {
   dailyBudgetMinor?: number | null
   createdAt?: Date | string
   lifetimeBudgetMinor?: bigint | number | null
+  variantKey?: string | null
+  audienceId?: string | null
+  optimizationGoal?: string | null
+  destinationType?: string | null
+  bidStrategy?: string | null
+  bidAmountMinor?: bigint | number | null
+  schedule?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  effectiveStatus?: string | null
+  effectivePlacements?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   campaign: Prisma.AdCampaignCreateNestedOneWithoutAdSetsInput
 }
 
@@ -631,6 +859,15 @@ export type AdSetUncheckedCreateWithoutAdsInput = {
   dailyBudgetMinor?: number | null
   createdAt?: Date | string
   lifetimeBudgetMinor?: bigint | number | null
+  variantKey?: string | null
+  audienceId?: string | null
+  optimizationGoal?: string | null
+  destinationType?: string | null
+  bidStrategy?: string | null
+  bidAmountMinor?: bigint | number | null
+  schedule?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  effectiveStatus?: string | null
+  effectivePlacements?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
 }
 
 export type AdSetCreateOrConnectWithoutAdsInput = {
@@ -659,6 +896,15 @@ export type AdSetUpdateWithoutAdsInput = {
   dailyBudgetMinor?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   lifetimeBudgetMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  variantKey?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  audienceId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  optimizationGoal?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  destinationType?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  bidStrategy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  bidAmountMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  schedule?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  effectiveStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  effectivePlacements?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   campaign?: Prisma.AdCampaignUpdateOneRequiredWithoutAdSetsNestedInput
 }
 
@@ -673,6 +919,15 @@ export type AdSetUncheckedUpdateWithoutAdsInput = {
   dailyBudgetMinor?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   lifetimeBudgetMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  variantKey?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  audienceId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  optimizationGoal?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  destinationType?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  bidStrategy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  bidAmountMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  schedule?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  effectiveStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  effectivePlacements?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
 }
 
 export type AdSetCreateManyCampaignInput = {
@@ -685,6 +940,15 @@ export type AdSetCreateManyCampaignInput = {
   dailyBudgetMinor?: number | null
   createdAt?: Date | string
   lifetimeBudgetMinor?: bigint | number | null
+  variantKey?: string | null
+  audienceId?: string | null
+  optimizationGoal?: string | null
+  destinationType?: string | null
+  bidStrategy?: string | null
+  bidAmountMinor?: bigint | number | null
+  schedule?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  effectiveStatus?: string | null
+  effectivePlacements?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
 }
 
 export type AdSetUpdateWithoutCampaignInput = {
@@ -697,6 +961,15 @@ export type AdSetUpdateWithoutCampaignInput = {
   dailyBudgetMinor?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   lifetimeBudgetMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  variantKey?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  audienceId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  optimizationGoal?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  destinationType?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  bidStrategy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  bidAmountMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  schedule?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  effectiveStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  effectivePlacements?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   ads?: Prisma.AdUpdateManyWithoutAdSetNestedInput
 }
 
@@ -710,6 +983,15 @@ export type AdSetUncheckedUpdateWithoutCampaignInput = {
   dailyBudgetMinor?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   lifetimeBudgetMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  variantKey?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  audienceId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  optimizationGoal?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  destinationType?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  bidStrategy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  bidAmountMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  schedule?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  effectiveStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  effectivePlacements?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   ads?: Prisma.AdUncheckedUpdateManyWithoutAdSetNestedInput
 }
 
@@ -723,6 +1005,15 @@ export type AdSetUncheckedUpdateManyWithoutCampaignInput = {
   dailyBudgetMinor?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   lifetimeBudgetMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  variantKey?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  audienceId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  optimizationGoal?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  destinationType?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  bidStrategy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  bidAmountMinor?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  schedule?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  effectiveStatus?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  effectivePlacements?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
 }
 
 
@@ -767,6 +1058,15 @@ export type AdSetSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
   dailyBudgetMinor?: boolean
   createdAt?: boolean
   lifetimeBudgetMinor?: boolean
+  variantKey?: boolean
+  audienceId?: boolean
+  optimizationGoal?: boolean
+  destinationType?: boolean
+  bidStrategy?: boolean
+  bidAmountMinor?: boolean
+  schedule?: boolean
+  effectiveStatus?: boolean
+  effectivePlacements?: boolean
   campaign?: boolean | Prisma.AdCampaignDefaultArgs<ExtArgs>
   ads?: boolean | Prisma.AdSet$adsArgs<ExtArgs>
   _count?: boolean | Prisma.AdSetCountOutputTypeDefaultArgs<ExtArgs>
@@ -783,6 +1083,15 @@ export type AdSetSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extensi
   dailyBudgetMinor?: boolean
   createdAt?: boolean
   lifetimeBudgetMinor?: boolean
+  variantKey?: boolean
+  audienceId?: boolean
+  optimizationGoal?: boolean
+  destinationType?: boolean
+  bidStrategy?: boolean
+  bidAmountMinor?: boolean
+  schedule?: boolean
+  effectiveStatus?: boolean
+  effectivePlacements?: boolean
   campaign?: boolean | Prisma.AdCampaignDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["adSet"]>
 
@@ -797,6 +1106,15 @@ export type AdSetSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensi
   dailyBudgetMinor?: boolean
   createdAt?: boolean
   lifetimeBudgetMinor?: boolean
+  variantKey?: boolean
+  audienceId?: boolean
+  optimizationGoal?: boolean
+  destinationType?: boolean
+  bidStrategy?: boolean
+  bidAmountMinor?: boolean
+  schedule?: boolean
+  effectiveStatus?: boolean
+  effectivePlacements?: boolean
   campaign?: boolean | Prisma.AdCampaignDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["adSet"]>
 
@@ -811,9 +1129,18 @@ export type AdSetSelectScalar = {
   dailyBudgetMinor?: boolean
   createdAt?: boolean
   lifetimeBudgetMinor?: boolean
+  variantKey?: boolean
+  audienceId?: boolean
+  optimizationGoal?: boolean
+  destinationType?: boolean
+  bidStrategy?: boolean
+  bidAmountMinor?: boolean
+  schedule?: boolean
+  effectiveStatus?: boolean
+  effectivePlacements?: boolean
 }
 
-export type AdSetOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "tenantId" | "campaignId" | "metaAdSetId" | "name" | "status" | "targeting" | "dailyBudgetMinor" | "createdAt" | "lifetimeBudgetMinor", ExtArgs["result"]["adSet"]>
+export type AdSetOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "tenantId" | "campaignId" | "metaAdSetId" | "name" | "status" | "targeting" | "dailyBudgetMinor" | "createdAt" | "lifetimeBudgetMinor" | "variantKey" | "audienceId" | "optimizationGoal" | "destinationType" | "bidStrategy" | "bidAmountMinor" | "schedule" | "effectiveStatus" | "effectivePlacements", ExtArgs["result"]["adSet"]>
 export type AdSetInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   campaign?: boolean | Prisma.AdCampaignDefaultArgs<ExtArgs>
   ads?: boolean | Prisma.AdSet$adsArgs<ExtArgs>
@@ -843,6 +1170,15 @@ export type $AdSetPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs 
     dailyBudgetMinor: number | null
     createdAt: Date
     lifetimeBudgetMinor: bigint | null
+    variantKey: string | null
+    audienceId: string | null
+    optimizationGoal: string | null
+    destinationType: string | null
+    bidStrategy: string | null
+    bidAmountMinor: bigint | null
+    schedule: runtime.JsonValue | null
+    effectiveStatus: string | null
+    effectivePlacements: runtime.JsonValue | null
   }, ExtArgs["result"]["adSet"]>
   composites: {}
 }
@@ -1278,6 +1614,15 @@ export interface AdSetFieldRefs {
   readonly dailyBudgetMinor: Prisma.FieldRef<"AdSet", 'Int'>
   readonly createdAt: Prisma.FieldRef<"AdSet", 'DateTime'>
   readonly lifetimeBudgetMinor: Prisma.FieldRef<"AdSet", 'BigInt'>
+  readonly variantKey: Prisma.FieldRef<"AdSet", 'String'>
+  readonly audienceId: Prisma.FieldRef<"AdSet", 'String'>
+  readonly optimizationGoal: Prisma.FieldRef<"AdSet", 'String'>
+  readonly destinationType: Prisma.FieldRef<"AdSet", 'String'>
+  readonly bidStrategy: Prisma.FieldRef<"AdSet", 'String'>
+  readonly bidAmountMinor: Prisma.FieldRef<"AdSet", 'BigInt'>
+  readonly schedule: Prisma.FieldRef<"AdSet", 'Json'>
+  readonly effectiveStatus: Prisma.FieldRef<"AdSet", 'String'>
+  readonly effectivePlacements: Prisma.FieldRef<"AdSet", 'Json'>
 }
     
 

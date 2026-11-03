@@ -57,7 +57,7 @@ export function WaitingList({ items, total, emptyText }: { items: QueueItem[]; t
       {total > items.length && (
         <p className="mt-2 text-sm">
           <Link href="/app/inbox" className="font-medium text-accent underline underline-offset-2">
-            See all {total} in the inbox
+            See all {total}{" "}in the inbox
           </Link>
         </p>
       )}

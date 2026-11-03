@@ -5,7 +5,7 @@ import { Alert, Button, Dialog, FormField, Input, Select, Textarea, apiFetch } f
 import { LIMITS } from "@/lib/automation/v2/model";
 import { PLACEHOLDER_HELP } from "@/lib/automation/v2/variables";
 import { useApi } from "@/components/contacts/hooks";
-import { humanError } from "./helpers";
+import { humanError, ownSubmit } from "./helpers";
 
 export type Material = { id: string; name: string; kind: string; body: string | null; mediaKey: string | null; mediaMime: string | null };
 
@@ -48,7 +48,8 @@ export function MaterialDialog({ material, onClose, onSaved }: Props) {
   const invalid = Object.values(problems).some(Boolean);
 
   async function submit(e: React.FormEvent) {
-    e.preventDefault();
+    // The dialog is opened from inside the rule form: without this its submit would also run the rule form's and save the rule.
+    if (!ownSubmit(e)) return;
     setAttempted(true);
     if (invalid) return;
     setBusy(true);
@@ -93,7 +94,7 @@ export function MaterialDialog({ material, onClose, onSaved }: Props) {
           </Alert>
         )}
         <FormField label="Name" required hint="Only your team sees this." error={attempted ? problems.name : undefined}>
-          <Input value={name} maxLength={LIMITS.name} onChange={(e) => setName(e.target.value)} data-autofocus="" placeholder="Price list" />
+          <Input value={name} maxLength={LIMITS.name} onChange={(e) => setName(e.target.value)} data-autofocus="" placeholder="e.g. Price list" />
         </FormField>
         <FormField label="What do you want to send?">
           <Select value={kind} onChange={(e) => setKind(e.target.value)}>

@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const db = vi.hoisted(() => {
-  const m = () => ({ findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), updateMany: vi.fn(), upsert: vi.fn() });
-  return { job: m(), metaAsset: m(), leadSequenceRun: m(), leadSequence: m(), lead: m(), contact: m(), conversation: m(), phoneNumber: m(), template: m(), platformSetting: m() };
+  const m = () => ({ findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), updateMany: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn() });
+  return { job: m(), metaAsset: m(), leadSequenceRun: m(), leadSequence: m(), lead: m(), contact: m(), conversation: m(), phoneNumber: m(), template: m(), platformSetting: m(), adCampaign: m(), ad: m(), auditLog: m() };
 });
 const mocks = vi.hoisted(() => ({ enqueue: vi.fn(), audit: vi.fn(), ingest: vi.fn(), allowed: new Set<string>() }));
 
@@ -19,7 +19,7 @@ vi.mock("@/lib/chatbots", () => ({ startChatbot: vi.fn() }));
 vi.mock("@/lib/leads/ingest", async (orig) => ({ ...(await orig<typeof import("@/lib/leads/ingest")>()), ingestForTenant: mocks.ingest }));
 
 import { BLOCKED_DEFER_MS, BLOCKED_GIVE_UP_MS, processRun, runDueSequences } from "@/lib/leads/runner";
-import { handleLeadJobForActiveTenants, LEAD_DEFER_MS, MAX_LEAD_DEFERRALS } from "@/lib/leads/worker";
+import { CATCH_UP_EVERY_MS, CATCH_UP_WINDOW_MS, handleLeadJobForActiveTenants, LEAD_DEFER_MS, MAX_LEAD_DEFERRALS, runSequenceCatchUp, worker } from "@/lib/leads/worker";
 
 const MIN = 60_000;
 const DAY = 86_400_000;
@@ -170,5 +170,59 @@ describe("lead fetch deferral is idempotent, not tied to the first attempt", () 
     ]);
     await handleLeadJobForActiveTenants({ leadgenId: "L1", pageId: "p1" });
     expect(mocks.enqueue.mock.calls[0][1]).toMatchObject({ deferredFor: ["alpha", "zeta"] });
+  });
+});
+
+describe("the welcome catch-up task (IG-PAGE-ADS-SPEC 3.5, PRM-10 acceptance 2a)", () => {
+  it("is scheduled every minute next to the sequence runner", () => {
+    expect(worker.periodic.map((p) => [p.name, p.everyMs])).toEqual([
+      ["leads.sequences", 30_000],
+      ["leads.sequences.catch-up", CATCH_UP_EVERY_MS],
+    ]);
+    expect(CATCH_UP_EVERY_MS).toBe(MIN);
+  });
+
+  it("looks only at running campaigns started in the last 60 minutes, and with none it reads nothing else", async () => {
+    db.adCampaign.findMany.mockResolvedValue([]);
+    expect(await runSequenceCatchUp(now)).toEqual({ campaigns: 0, started: 0 });
+    const since = new Date(now.getTime() - CATCH_UP_WINDOW_MS);
+    // First the workspaces with an active campaign changed in the window (Start writes the row), then the campaigns.
+    expect(db.adCampaign.findMany.mock.calls[0][0]).toMatchObject({ where: { status: "active", launchedAt: { not: null }, updatedAt: { gte: since } }, distinct: ["tenantId"] });
+    const where = db.adCampaign.findMany.mock.calls[1][0].where;
+    expect(where).toEqual({ status: "active", launchedAt: { not: null }, OR: [{ launchedAt: { gte: since } }, { startsAt: { gte: since, lte: now } }] });
+    expect(db.auditLog.findMany).not.toHaveBeenCalled();
+    expect(db.ad.findMany).not.toHaveBeenCalled();
+    expect(db.lead.findMany).not.toHaveBeenCalled();
+  });
+
+  it("reads Start and resume rows only for workspaces with a changed active campaign, and selects those campaigns by id", async () => {
+    const since = new Date(now.getTime() - CATCH_UP_WINDOW_MS);
+    db.adCampaign.findMany.mockResolvedValueOnce([{ tenantId: "live" }, { tenantId: "live" }]).mockResolvedValueOnce([]);
+    db.auditLog.findMany.mockResolvedValue([
+      { tenantId: "live", target: "camp_1", createdAt: new Date(now.getTime() - 30 * MIN) },
+      { tenantId: "live", target: "camp_1", createdAt: new Date(now.getTime() - 10 * MIN) },
+      { tenantId: "live", target: null, createdAt: new Date(now.getTime() - 5 * MIN) },
+    ]);
+    expect(await runSequenceCatchUp(now)).toEqual({ campaigns: 0, started: 0 });
+    expect(db.auditLog.findMany.mock.calls[0][0].where).toEqual({ tenantId: { in: ["live"] }, action: { in: ["ads.campaign.activated", "ads.campaign.resumed"] }, createdAt: { gte: since, lte: now } });
+    expect(db.adCampaign.findMany.mock.calls[1][0].where.OR).toEqual([{ launchedAt: { gte: since } }, { startsAt: { gte: since, lte: now } }, { id: { in: ["camp_1"] } }]);
+  });
+
+  it("goes on from the launch time when the audit log cannot be read", async () => {
+    db.adCampaign.findMany.mockResolvedValueOnce([{ tenantId: "live" }]).mockResolvedValueOnce([]);
+    db.auditLog.findMany.mockRejectedValue(new Error("db down"));
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect(await runSequenceCatchUp(now)).toEqual({ campaigns: 0, started: 0 });
+    expect(db.adCampaign.findMany).toHaveBeenCalledTimes(2);
+    error.mockRestore();
+  });
+
+  it("skips a blocked workspace's campaign without reading its ads or leads", async () => {
+    db.adCampaign.findMany.mockResolvedValue([{ id: "camp_1", tenantId: "blocked", metaCampaignId: "mc_1", launchedAt: new Date(now.getTime() - 10 * MIN), startsAt: null }]);
+    expect(await runSequenceCatchUp(now)).toEqual({ campaigns: 1, started: 0 });
+    expect(db.ad.findMany).not.toHaveBeenCalled();
+    expect(db.lead.findMany).not.toHaveBeenCalled();
+    expect(db.platformSetting.findUnique).not.toHaveBeenCalled();
+    expect(db.platformSetting.upsert).not.toHaveBeenCalled();
   });
 });

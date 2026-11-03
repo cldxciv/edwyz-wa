@@ -1,10 +1,13 @@
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const db = vi.hoisted(() => ({ queue: [] as unknown[], calls: 0 }));
+const db = vi.hoisted(() => ({ queue: [] as unknown[], calls: 0, sql: [] as { text: string; values: unknown[] }[] }));
 vi.mock("@/lib/db", () => ({
   prisma: {
-    $queryRaw: vi.fn(async () => {
+    $queryRaw: vi.fn(async (strings: TemplateStringsArray, ...values: unknown[]) => {
       db.calls += 1;
+      db.sql.push({ text: strings.join("?"), values });
       const next = db.queue.shift();
       if (next instanceof Error) throw next;
       return next;
@@ -12,7 +15,8 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-import { healthReport, readyReport, resetReadyCache, workerState } from "@/app/health/checks";
+import { healthReport, LATEST_MIGRATION, readyReport, resetReadyCache, workerState } from "@/app/health/checks";
+import { splitSqlStatements } from "./helpers/pg";
 import { shapeMetrics } from "@/app/api/internal/metrics/collect";
 import { GET as metricsGet } from "@/app/api/internal/metrics/route";
 import { GET as healthGet } from "@/app/health/route";
@@ -21,6 +25,7 @@ import { GET as readyGet } from "@/app/health/ready/route";
 beforeEach(() => {
   db.queue = [];
   db.calls = 0;
+  db.sql = [];
   resetReadyCache();
   process.env.WORKER_SECRET = "worker-secret-for-tests";
 });
@@ -59,25 +64,44 @@ describe("GET /health", () => {
 
 describe("GET /health/ready", () => {
   it("is ready when the schema exists and migrations are complete", async () => {
-    db.queue.push([{ tracked: true, core: true }], [{ applied: 5, pending: 0 }]);
+    db.queue.push([{ tracked: true, core: true, latest: true }], [{ applied: 5, pending: 0 }]);
     const response = await readyGet();
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "ready", checks: { database: true, schema: true, migrations: true } });
   });
 
   it("is not ready while a migration is unfinished", async () => {
-    db.queue.push([{ tracked: true, core: true }], [{ applied: 5, pending: 1 }]);
+    db.queue.push([{ tracked: true, core: true, latest: true }], [{ applied: 5, pending: 1 }]);
     const response = await readyGet();
     expect(response.status).toBe(503);
     expect((await response.json()).checks.migrations).toBe(false);
   });
 
-  it("falls back to the schema check when migrations were applied by hand", async () => {
-    db.queue.push([{ tracked: false, core: true }]);
+  it("falls back to the schema check and the newest migration's marker when migrations were applied by hand", async () => {
+    db.queue.push([{ tracked: false, core: true, latest: true }]);
     expect((await readyReport()).status).toBe("ready");
     resetReadyCache();
-    db.queue.push([{ tracked: false, core: false }]);
+    db.queue.push([{ tracked: false, core: false, latest: true }]);
     expect((await readyReport()).status).toBe("not_ready");
+  });
+
+  it("is not ready when the newest migration was skipped, although the core tables exist (the hand-applied VPS case)", async () => {
+    db.queue.push([{ tracked: false, core: true, latest: false }]);
+    const response = await readyGet();
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ status: "not_ready", checks: { database: true, schema: true, migrations: false } });
+    resetReadyCache();
+    db.queue.push([{ tracked: true, core: true, latest: false }], [{ applied: 11, pending: 0 }]);
+    expect((await readyReport()).checks.migrations).toBe(false);
+  });
+
+  it("checks the marker with bound parameters, never by pasting names into the SQL", async () => {
+    db.queue.push([{ tracked: false, core: true, latest: true }]);
+    await readyReport();
+    const { text, values } = db.sql[0];
+    expect(values).toEqual([LATEST_MIGRATION.kind, LATEST_MIGRATION.object, LATEST_MIGRATION.object, LATEST_MIGRATION.detail ?? "", LATEST_MIGRATION.object, LATEST_MIGRATION.detail ?? ""]);
+    expect(text).not.toContain(LATEST_MIGRATION.object);
+    for (const kind of ["'table'", "'column'", "'enum'"]) expect(text).toContain(kind);
   });
 
   it("is not ready, with no detail, when the database is unreachable", async () => {
@@ -88,13 +112,39 @@ describe("GET /health/ready", () => {
   });
 
   it("caches a ready answer briefly so probes stay cheap", async () => {
-    db.queue.push([{ tracked: false, core: true }]);
+    db.queue.push([{ tracked: false, core: true, latest: true }]);
     await readyReport(1000);
     await readyReport(2000);
     expect(db.calls).toBe(1);
-    db.queue.push([{ tracked: false, core: true }]);
+    db.queue.push([{ tracked: false, core: true, latest: true }]);
     await readyReport(7000);
     expect(db.calls).toBe(2);
+  });
+});
+
+describe("LATEST_MIGRATION (update it with every new migration)", () => {
+  const dir = path.join(__dirname, "..", "prisma", "migrations");
+  const folders = readdirSync(dir).filter((name) => statSync(path.join(dir, name)).isDirectory()).sort();
+  /** An index-only follow-up (0010, 0013): applied WITHOUT -1, off-peak, after the restart; the code works before it lands. */
+  const indexOnly = (name: string) => {
+    const parts = splitSqlStatements(readFileSync(path.join(dir, name, "migration.sql"), "utf8"));
+    return parts.length > 0 && parts.every((s) => /^CREATE (UNIQUE )?INDEX CONCURRENTLY IF NOT EXISTS "\w+"/.test(s) || /^ALTER TABLE "\w+" VALIDATE CONSTRAINT "\w+"$/.test(s));
+  };
+  const needed = folders.filter((name) => !indexOnly(name));
+
+  it("names the newest folder in prisma/migrations the code needs (only index-only follow-ups may come after it)", () => {
+    expect(LATEST_MIGRATION.name, `a new migration was added: point LATEST_MIGRATION in src/app/health/checks.ts at ${needed.at(-1)}`).toBe(needed.at(-1));
+    expect(indexOnly("0010_spend_message_indexes")).toBe(true);
+    expect(indexOnly("0011_template_flagged")).toBe(false);
+  });
+
+  it("names something that migration's SQL really creates", () => {
+    const sql = readFileSync(path.join(dir, LATEST_MIGRATION.name, "migration.sql"), "utf8");
+    const { kind, object, detail } = LATEST_MIGRATION;
+    if (kind === "table") expect(sql).toMatch(new RegExp(`CREATE TABLE (IF NOT EXISTS )?"${object}"`));
+    if (kind === "column") expect(sql).toMatch(new RegExp(`ALTER TABLE "${object}"[^;]*ADD COLUMN (IF NOT EXISTS )?"${detail}"`));
+    if (kind === "enum") expect(sql).toMatch(new RegExp(`ALTER TYPE "${object}" ADD VALUE (IF NOT EXISTS )?'${detail}'`));
+    if (kind !== "table") expect(detail).toBeTruthy();
   });
 });
 

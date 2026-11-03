@@ -1,10 +1,20 @@
 import { parseWebhookUrl } from "@/lib/integrations/ssrf";
 import { HttpError } from "@/lib/tenancy";
+import { LONG_WAIT_MESSAGE, LONG_WAIT_MINUTES, longWaitProblems } from "./long-wait";
 
 /** userId value of a hand-over that leaves the chat in the chosen team's queue without picking a teammate. */
 export const TEAM_QUEUE = "team_queue";
 
 export const FLOW_LIMITS = { nodes: 100, edges: 200, text: 1024, buttons: 3, buttonTitle: 20, rows: 10, rowTitle: 24, delayMin: 1, delayMax: 10080, maxRetries: 5, body: 4096, headerText: 60, footer: 60 } as const;
+
+/**
+ * A wait this long (23 hours) leaves little or none of WhatsApp's 24-hour window, inside which free messages are allowed after the
+ * customer last wrote. The next message the bot sends after such a wait must therefore be an approved template (see ./long-wait).
+ */
+export const LONG_DELAY_MINUTES = LONG_WAIT_MINUTES;
+/** What a customer's message does while the bot sleeps in a wait. Without a choice the message is held (the bot keeps the chat). */
+export const DELAY_REPLY_MODES = ["continue", "pass"] as const;
+export type DelayReplyMode = (typeof DELAY_REPLY_MODES)[number];
 
 export const NODE_TYPES = [
   "send_text",
@@ -48,7 +58,13 @@ export type NodeDataMap = {
   set_attribute: { attribute: string; value: string };
   add_tag: { tag: string };
   remove_tag: { tag: string };
-  delay: { minutes: number };
+  /**
+   * onReply, when the customer writes during the wait: "continue" ends the wait and goes on to the next step at once; "pass" lets
+   * the message reach chat routing and rules while the bot keeps waiting, so routing can give the chat to a teammate and rules can
+   * tag or assign it. Nothing answers the customer automatically meanwhile: the AI agent and rule replies stay quiet while a bot
+   * owns the chat. Unset, the bot keeps the message and nothing else acts on it.
+   */
+  delay: { minutes: number; onReply?: DelayReplyMode };
   webhook: { url: string; method: "GET" | "POST"; bodyTemplate?: string; saveAs?: string };
   /** userId is a teammate id, "round_robin" (next free teammate, within the team when teamId is set) or empty when only a team is chosen. */
   assign: { userId: string; teamId?: string };
@@ -220,7 +236,9 @@ const CHECKS: { [T in NodeType]: (data: Rec, fail: Report) => NodeDataMap[T] } =
   delay: (d, fail) => {
     const minutes = d.minutes;
     if (typeof minutes !== "number" || !Number.isInteger(minutes) || minutes < FLOW_LIMITS.delayMin || minutes > FLOW_LIMITS.delayMax) fail(`Delay must be a whole number of minutes from ${FLOW_LIMITS.delayMin} to ${FLOW_LIMITS.delayMax}.`);
-    return { minutes: typeof minutes === "number" ? minutes : 0 };
+    const onReply = (DELAY_REPLY_MODES as readonly unknown[]).includes(d.onReply) ? (d.onReply as DelayReplyMode) : undefined;
+    if (d.onReply !== undefined && d.onReply !== null && d.onReply !== "" && d.onReply !== "wait" && !onReply) fail("Choose what happens when the customer writes during the wait.");
+    return { minutes: typeof minutes === "number" ? minutes : 0, ...(onReply ? { onReply } : {}) };
   },
   webhook: (d, fail) => {
     const method = d.method === "GET" || d.method === "POST" ? d.method : "POST";
@@ -403,7 +421,19 @@ function reachable(start: string, edges: FlowEdge[]): Set<string> {
   return seen;
 }
 
-export function validateFlow(input: unknown): FlowValidation {
+/**
+ * A long wait after which the bot would send a free message (before any template) wakes outside the 24-hour window, where WhatsApp
+ * refuses anything but a template. Steps that send nothing may come between. Each such wait is reported once, on the wait step.
+ */
+function longDelayIssues(nodes: Map<string, FlowNode>, edges: FlowEdge[]): FlowIssue[] {
+  return longWaitProblems([...nodes.values()], edges).map((node) => ({ nodeId: node.id, message: LONG_WAIT_MESSAGE }));
+}
+
+/**
+ * Checks a flow. `published: true` is for reading a flow that was already published, at run time: rules added since it was
+ * published (the long-wait rule) are not applied, so a bot that is live keeps running; its waits are handled when they end.
+ */
+export function validateFlow(input: unknown, opts: { published?: boolean } = {}): FlowValidation {
   const errors: FlowIssue[] = [];
   const warnings: FlowIssue[] = [];
   const flow = isRec(input) ? input : {};
@@ -426,6 +456,7 @@ export function validateFlow(input: unknown): FlowValidation {
   const start = typeof flow.start === "string" ? flow.start : "";
   if (!nodes.has(start)) errors.push({ message: "The start step does not exist." });
   const edges = Array.isArray(flow.edges) && flow.edges.length <= FLOW_LIMITS.edges ? checkEdges(flow.edges, nodes, errors) : [];
+  if (!opts.published) errors.push(...longDelayIssues(nodes, edges));
 
   if (nodes.has(start)) {
     const seen = reachable(start, edges);

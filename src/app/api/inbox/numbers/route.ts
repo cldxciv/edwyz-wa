@@ -4,7 +4,10 @@ import { errorResponse } from "@/lib/tenancy";
 
 export const dynamic = "force-dynamic";
 
-/** GET -> { numbers: [{ id, displayPhone, verifiedName }] } the connected business numbers a chat can be started from */
+/**
+ * GET -> { numbers: [{ id, displayPhone, verifiedName, wabaRefId }] } the connected business numbers a chat can be started from.
+ * wabaRefId (the number's WhatsApp Business Account) lets the new-chat dialog offer only templates that number can send.
+ */
 export async function GET(request: Request) {
   try {
     const actor = await getActor(request);
@@ -12,7 +15,7 @@ export async function GET(request: Request) {
       where: { tenantId: actor.tenantId, status: "connected" },
       orderBy: { createdAt: "asc" },
       take: 20,
-      select: { id: true, displayPhone: true, verifiedName: true },
+      select: { id: true, displayPhone: true, verifiedName: true, wabaRefId: true },
     });
     return Response.json({ numbers });
   } catch (e) {

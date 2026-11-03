@@ -69,7 +69,12 @@ function pickCheckoutUrl(value: unknown): string | null {
   }
 }
 
-/** Parses a checkouts/create or checkouts/update body. Returns null when there is no identifier or no usable phone. */
+/**
+ * Parses a checkouts/create or checkouts/update body. Returns null when there is no identifier or no usable phone.
+ * Shopify's marketing consent (buyer_accepts_marketing, customer.accepts_marketing, email_marketing_consent, sms_marketing_consent)
+ * is deliberately not read (owner default 2): it is consent to the store's email or SMS, not a WhatsApp opt-in. Nothing here or in
+ * ingestCheckout ever writes a contact; a reminder goes only to a contact whose WhatsApp opt-in was recorded in Edwyz.
+ */
 export function parseCheckout(body: Record<string, unknown>, now = new Date()): CartInput | null {
   const token = text(body.token, 120);
   const id = text(body.id, 40);

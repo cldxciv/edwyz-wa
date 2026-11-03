@@ -64,7 +64,11 @@ export const RULE_STATUSES = ["open", "pending", "solved", "blocked"] as const;
 
 export type Action =
   | { type: "send_text"; text: string }
-  | { type: "send_template"; templateId: string; variables: string[] }
+  /**
+   * headerVariable fills a heading's {{1}}, headerMediaUrl is the https link of a picture, video or document heading, buttonVariable
+   * fills the {{1}} of a link button's web address. Each may use contact placeholders; each is left out when the template has no such gap.
+   */
+  | { type: "send_template"; templateId: string; variables: string[]; headerVariable?: string; headerMediaUrl?: string; buttonVariable?: string }
   | { type: "send_material"; materialId: string }
   | { type: "assign_user"; userId: string }
   | { type: "assign_team"; teamId: string; pickAgent: boolean }
@@ -91,6 +95,7 @@ export const LIMITS = {
   attributeValue: 200,
   variables: 20,
   variableLength: 200,
+  mediaUrl: 1000,
   note: 300,
   noResponseMinutes: 60 * 24 * 30,
   cooldownMinutes: 60 * 24 * 30,
@@ -172,7 +177,7 @@ export function parseTrigger(raw: unknown): Result<Trigger> {
   }
 }
 
-function parseCondition(raw: unknown): Result<Condition> {
+export function parseCondition(raw: unknown): Result<Condition> {
   if (!isRecord(raw) || typeof raw.type !== "string") return fail("A condition is not valid.");
   switch (raw.type) {
     case "keyword": {
@@ -267,8 +272,19 @@ export function parseFilters(raw: unknown): Result<Filters> {
 
 const idOf = (v: unknown) => (typeof v === "string" && v.length > 0 && v.length <= 64 ? v : null);
 const SCOPES: readonly string[] = ["contact", "chat", "both"];
+/** A heading picture, video or file: a secure link (placeholders may fill parts of it), or one placeholder such as {{attribute.photo}}. */
+export const MEDIA_LINK = /^(https:\/\/\S+|\{\{\s*[A-Za-z_][\w. -]{0,60}\s*(\|[^{}]{0,80})?\}\})$/i;
 
-function parseAction(raw: unknown): Result<Action> {
+/** An optional template value: undefined when empty, null when it is not valid text of at most max characters. */
+function optionalValue(v: unknown, max: number): string | undefined | null {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "string") return null;
+  const t = v.trim();
+  if (!t) return undefined;
+  return t.length > max ? null : t;
+}
+
+export function parseAction(raw: unknown): Result<Action> {
   if (!isRecord(raw) || typeof raw.type !== "string" || !(ACTION_TYPES as readonly string[]).includes(raw.type)) return fail("An action is not valid.");
   switch (raw.type as ActionType) {
     case "send_text": {
@@ -282,7 +298,20 @@ function parseAction(raw: unknown): Result<Action> {
       if (!templateId) return fail("Choose a template to send.");
       const vars = raw.variables === undefined ? [] : raw.variables;
       if (!Array.isArray(vars) || vars.length > LIMITS.variables || vars.some((v) => typeof v !== "string" || v.length > LIMITS.variableLength)) return fail("Template values are not valid.");
-      return good({ type: "send_template", templateId, variables: (vars as string[]).map((v) => v.trim()) });
+      const headerVariable = optionalValue(raw.headerVariable, LIMITS.variableLength);
+      if (headerVariable === null) return fail(`The heading value can be up to ${LIMITS.variableLength} characters.`);
+      const headerMediaUrl = optionalValue(raw.headerMediaUrl, LIMITS.mediaUrl);
+      if (headerMediaUrl === null || (headerMediaUrl !== undefined && !MEDIA_LINK.test(headerMediaUrl))) return fail("The link to the picture, video or file must start with https://.");
+      const buttonVariable = optionalValue(raw.buttonVariable, LIMITS.variableLength);
+      if (buttonVariable === null) return fail(`The button link value can be up to ${LIMITS.variableLength} characters.`);
+      return good({
+        type: "send_template",
+        templateId,
+        variables: (vars as string[]).map((v) => v.trim()),
+        ...(headerVariable ? { headerVariable } : {}),
+        ...(headerMediaUrl ? { headerMediaUrl } : {}),
+        ...(buttonVariable ? { buttonVariable } : {}),
+      });
     }
     case "send_material": {
       const materialId = idOf(raw.materialId);

@@ -7,7 +7,8 @@ import { allowedModels, isAllowedModel, resolveModel } from "./models";
 import { effectiveCreditLimit } from "./credits";
 import { htmlToText } from "./text";
 
-export const ACTIVATIONS = ["always", "outside_hours", "no_human_reply_minutes"] as const;
+/** when_started: the agent never answers on its own; it answers only when an automation rule starts it (the start_ai_agent action). */
+export const ACTIVATIONS = ["always", "outside_hours", "no_human_reply_minutes", "when_started"] as const;
 export type Activation = (typeof ACTIVATIONS)[number];
 export const MAX_AGENTS = 10;
 export const MAX_SOURCES = 50;
@@ -64,6 +65,7 @@ export function toView(row: AgentRow): AgentView {
 const LABELS: Record<string, string> = {
   name: "Name", instructions: "Instructions", tone: "Tone", language: "Language", phoneNumberId: "Phone number", model: "Model",
   noHumanReplyMinutes: "Minutes without a teammate reply", maxRepliesPerConversation: "Replies per chat",
+  content: "The text", url: "The page address", fileName: "The file name", title: "The title",
 };
 const labelOf = (key: string) => LABELS[key] ?? key;
 const REQUIRED_HINTS: Record<string, string> = { name: "Give the agent a name.", instructions: "Tell the agent what to do." };
@@ -227,32 +229,58 @@ function faqContent(items: unknown): string {
     .join("\n\n");
 }
 
-async function sourceContent(kind: string, body: Record<string, unknown>, deps: PageDeps): Promise<{ content: string; sourceUrl: string | null }> {
+/** The readable text of a public page, as stored for a url source. */
+async function pageText(url: string, deps: PageDeps): Promise<string> {
+  const page = await fetchPage(url, deps);
+  const content = (page.isHtml ? htmlToText(page.body) : page.body.trim()).slice(0, MAX_TEXT_CHARS);
+  if (content.length < 20) throw new HttpError(400, "The page has no readable text. Pages that only show their text after loading in a browser cannot be read; paste the text instead.");
+  return content;
+}
+
+/** File types whose text is read in the browser and sent as plain text. PDF and Word files need a parser the platform does not have yet. */
+const TEXT_FILE = /\.(txt|text|md|markdown)$/i;
+
+async function sourceContent(kind: string, body: Record<string, unknown>, deps: PageDeps): Promise<{ content: string; sourceUrl: string | null; fileName?: string }> {
   if (kind === "faq") return { content: faqContent(body.faq), sourceUrl: null };
   if (kind === "text") {
     const content = text(body, "content", MAX_TEXT_CHARS, true) as string;
     return { content, sourceUrl: null };
   }
+  if (kind === "file") {
+    const fileName = text(body, "fileName", 200, true) as string;
+    if (!TEXT_FILE.test(fileName)) throw new HttpError(400, "Only .txt and .md files can be added. For a PDF or Word file, copy its text into a Text source.");
+    const content = text(body, "content", MAX_TEXT_CHARS, true) as string;
+    return { content, sourceUrl: null, fileName };
+  }
   if (kind === "url") {
     const url = text(body, "url", 2048, true) as string;
-    const page = await fetchPage(url, deps);
-    const content = (page.isHtml ? htmlToText(page.body) : page.body.trim()).slice(0, MAX_TEXT_CHARS);
-    if (content.length < 20) throw new HttpError(400, "The page has no readable text.");
-    return { content, sourceUrl: url };
+    return { content: await pageText(url, deps), sourceUrl: url };
   }
-  throw new HttpError(400, "kind must be text, faq or url.");
+  throw new HttpError(400, "kind must be text, faq, file or url.");
 }
 
-/** URL content is fetched once, here, and stored. It is never re-fetched at reply time. */
+/** URL content is fetched here and stored; it is never fetched at reply time. refreshSource reads the page again on request. */
 export async function addSource(tenantId: string, userId: string, agentId: string, body: Record<string, unknown>, deps: PageDeps = {}): Promise<SourceView> {
   await getAgent(tenantId, agentId);
   if ((await prisma.aiKnowledgeSource.count({ where: { tenantId, agentId } })) >= MAX_SOURCES) throw new HttpError(409, `An agent can have up to ${MAX_SOURCES} knowledge sources.`);
   const kind = typeof body.kind === "string" ? body.kind : "";
-  const { content, sourceUrl } = await sourceContent(kind, body, deps);
-  const title = (text(body, "title", 120, false) as string | null) ?? sourceUrl ?? (kind === "faq" ? "FAQ" : "Notes");
+  const { content, sourceUrl, fileName } = await sourceContent(kind, body, deps);
+  const title = (text(body, "title", 120, false) as string | null) ?? sourceUrl ?? fileName?.slice(0, 120) ?? (kind === "faq" ? "FAQ" : "Notes");
   const row = await prisma.aiKnowledgeSource.create({ data: { tenantId, agentId, kind, title, content, sourceUrl, status: "ready" } });
   await audit({ tenantId, userId, action: "ai_agent.source_add", target: row.id, meta: { kind } });
   return { id: row.id, kind, title, sourceUrl, status: row.status, chars: content.length, createdAt: row.createdAt };
+}
+
+/** Reads a web page source again and replaces its stored text. Only url sources can be refreshed; the old text stays when the page cannot be read. */
+export async function refreshSource(tenantId: string, userId: string, agentId: string, sourceId: string, deps: PageDeps = {}): Promise<SourceView> {
+  await getAgent(tenantId, agentId);
+  const source = await prisma.aiKnowledgeSource.findFirst({ where: { id: sourceId, agentId, tenantId } });
+  if (!source) throw new HttpError(404, "Knowledge source not found.");
+  if (source.kind !== "url" || !source.sourceUrl) throw new HttpError(400, "Only web pages can be refreshed. To change other knowledge, delete it and add it again.");
+  const content = await pageText(source.sourceUrl, deps);
+  await prisma.aiKnowledgeSource.updateMany({ where: { id: sourceId, agentId, tenantId }, data: { content, status: "ready" } });
+  await audit({ tenantId, userId, action: "ai_agent.source_refresh", target: sourceId });
+  return { id: source.id, kind: source.kind, title: source.title, sourceUrl: source.sourceUrl, status: "ready", chars: content.length, createdAt: source.createdAt };
 }
 
 export async function deleteSource(tenantId: string, userId: string, agentId: string, sourceId: string): Promise<void> {

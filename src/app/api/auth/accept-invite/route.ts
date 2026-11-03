@@ -4,7 +4,7 @@ import { assertSameOrigin } from "@/lib/auth/csrf";
 import { jsonWithCookies, password, readJson, str } from "@/lib/auth/http";
 import { assertPasswordPolicy, hashPassword, verifyPassword } from "@/lib/auth/password";
 import { checkLoginLimits, clientIp } from "@/lib/auth/ratelimit";
-import { createSession, hashToken, signAccessToken } from "@/lib/auth/tokens";
+import { ACCOUNT_DISABLED, createSession, hashToken, signAccessToken } from "@/lib/auth/tokens";
 import { prisma } from "@/lib/db";
 import { HttpError, errorResponse } from "@/lib/tenancy";
 
@@ -13,9 +13,10 @@ const INVALID = "This invite link is invalid or has expired. Ask for a new invit
 async function findOpenInvite(token: string) {
   const invite = await prisma.invite.findUnique({
     where: { tokenHash: hashToken(token) },
-    include: { tenant: { select: { id: true, name: true } } },
+    include: { tenant: { select: { id: true, name: true, deletedAt: true } } },
   });
-  if (!invite || invite.acceptedAt || invite.expiresAt.getTime() <= Date.now()) throw new HttpError(400, INVALID);
+  // An invite into a deleted workspace would sign the person into a workspace that refuses every request.
+  if (!invite || invite.acceptedAt || invite.expiresAt.getTime() <= Date.now() || invite.tenant.deletedAt) throw new HttpError(400, INVALID);
   return invite;
 }
 
@@ -50,6 +51,8 @@ export async function POST(request: Request) {
       if (!(await verifyPassword(pass, existing.passwordHash))) {
         throw new HttpError(401, "That password did not work. Use the password for your existing Edwyz WA account.");
       }
+      // After the password check, like sign-in. The invite stays open, so it can be used if the account is turned back on.
+      if (existing.disabledAt) throw new HttpError(403, ACCOUNT_DISABLED);
     } else {
       name = str(body, "name", "Name", 100);
       assertPasswordPolicy(pass);

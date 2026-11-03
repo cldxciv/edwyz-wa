@@ -20,7 +20,7 @@ export default function RateLimitsPage() {
         </li>
         <li>One template send call accepts at most {MAX_TEMPLATE_RECIPIENTS} recipients. Send several calls for larger audiences, or use a broadcast in the app.</li>
         <li>
-          A local_message_id is remembered for {IDEMPOTENCY_HOURS} hours per recipient, so a retry after a timeout never sends twice. Reusing the same local_message_id with a different body answers 422 and sends nothing; use a new local_message_id for a
+          A local_message_id is remembered for {IDEMPOTENCY_HOURS}{" "}hours per recipient, so a retry after a timeout never sends twice. Reusing the same local_message_id with a different body answers 422 and sends nothing; use a new local_message_id for a
           different message. If an earlier call with the id is still being recorded the API answers 409; wait a few seconds and retry with the same id. A call that never
           finished is treated as abandoned after about a minute, and the next retry sends normally.
         </li>

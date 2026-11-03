@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const db = vi.hoisted(() => {
   const model = () => ({ findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), upsert: vi.fn() });
-  return { webhookEvent: model(), phoneNumber: model(), contact: model(), conversation: model(), message: model(), auditLog: model() };
+  return { webhookEvent: model(), phoneNumber: model(), contact: model(), conversation: model(), message: model(), auditLog: model(), note: model() };
 });
 const mods = vi.hoisted(() => ({
   sendText: vi.fn(),
@@ -27,12 +27,14 @@ vi.mock("@/lib/integrations/events", () => ({ emitEvent: mods.emit }));
 vi.mock("@/lib/conversions/referral", () => ({ captureReferral: vi.fn(), parseReferral: () => null }));
 vi.mock("@/lib/wiring", () => ({ wireModules: vi.fn() }));
 
+import { POSSIBLE_OPT_OUT_NOTE } from "@/lib/contacts/opt-out";
 import { isStartMessage } from "@/lib/webhooks/payload";
 import { processWebhookEvent } from "@/lib/webhooks/processor";
 
 const REPLIES = { agentSignature: false, optOutReply: "You are unsubscribed. Reply START to subscribe again.", optInReply: "Welcome back." };
 
-function inbound(body: string) {
+/** A text message, or (with `message`) any other inbound message shape. */
+function inbound(body: string, message?: Record<string, unknown>) {
   return {
     object: "whatsapp_business_account",
     entry: [
@@ -44,7 +46,7 @@ function inbound(body: string) {
             value: {
               metadata: { phone_number_id: "meta_phone_1" },
               contacts: [{ wa_id: "919876543210", profile: { name: "Asha" } }],
-              messages: [{ from: "919876543210", id: `wamid.${body}`, timestamp: "1760000000", type: "text", text: { body } }],
+              messages: [{ from: "919876543210", id: `wamid.${body}`, timestamp: "1760000000", ...(message ?? { type: "text", text: { body } }) }],
             },
           },
         ],
@@ -60,11 +62,15 @@ function mockContact(row: Record<string, unknown>) {
   db.contact.update.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ ...full, ...data }));
 }
 
-async function receive(body: string, contact: Record<string, unknown> = {}) {
-  db.webhookEvent.findUnique.mockResolvedValue({ id: "e1", payload: inbound(body), processedAt: null });
+async function receive(body: string, contact: Record<string, unknown> = {}, message?: Record<string, unknown>) {
+  db.webhookEvent.findUnique.mockResolvedValue({ id: "e1", payload: inbound(body, message), processedAt: null });
   mockContact({ id: "c1", optedOutAt: null, ...contact });
   await processWebhookEvent("e1");
 }
+
+/** A tap on a template's quick-reply button: WhatsApp sends type "button" with the button's text and payload. */
+const templateButton = (text: string) => ({ type: "button", button: { text, payload: text.toUpperCase() } });
+const optedOutNow = () => expect.objectContaining({ data: expect.objectContaining({ optedOutAt: expect.any(Date) }) });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -116,6 +122,38 @@ describe("STOP confirmation", () => {
     expect(mods.sendText).toHaveBeenCalledWith({ tenantId: "t1", conversationId: "cv1", body: REPLIES.optOutReply, origin: "consent" });
   });
 
+  it("honours a STOP word the workspace added, and confirms it the same way", async () => {
+    mods.getInboxSettings.mockResolvedValue({ ...REPLIES, stopWords: ["band karo"] });
+    await receive("Band karo!");
+    expect(db.contact.updateMany).toHaveBeenCalledWith({ where: { id: "c1", tenantId: "t1" }, data: { optedOutAt: expect.any(Date), optIn: false } });
+    expect(mods.sendText).toHaveBeenCalledWith({ tenantId: "t1", conversationId: "cv1", body: REPLIES.optOutReply, origin: "consent" });
+    expect(mods.chatbots).not.toHaveBeenCalled();
+    expect(mods.ai).not.toHaveBeenCalled();
+  });
+
+  it("\"cancel my order\" is an ordinary message: no opt-out, and the bots, AI agent and rules see it", async () => {
+    await receive("cancel my order");
+    expect(db.contact.updateMany).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ optedOutAt: expect.any(Date) }) }));
+    expect(mods.chatbots).toHaveBeenCalledTimes(1);
+    expect(mods.automations).toHaveBeenCalledTimes(1);
+  });
+
+  it("a later message from a contact who opted out still reaches the bots and the AI agent (an opt-out stops marketing only)", async () => {
+    await receive("Where is my order?", { optedOutAt: new Date("2026-10-01T00:00:00Z") });
+    expect(mods.chatbots).toHaveBeenCalledTimes(1);
+    expect(mods.ai).toHaveBeenCalledTimes(1);
+    expect(mods.sendText).not.toHaveBeenCalled();
+  });
+
+  it("an unreadable inbox setting falls back to the default STOP words", async () => {
+    mods.getInboxSettings.mockRejectedValue(new Error("db down"));
+    await receive("band karo");
+    expect(db.contact.updateMany).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ optedOutAt: expect.any(Date) }) }));
+    mods.getInboxSettings.mockRejectedValue(new Error("db down"));
+    await receive("STOP");
+    expect(db.contact.updateMany).toHaveBeenCalledWith({ where: { id: "c1", tenantId: "t1" }, data: { optedOutAt: expect.any(Date), optIn: false } });
+  });
+
   it("does not confirm again when the contact had already opted out", async () => {
     await receive("stop", { optedOutAt: new Date() });
     expect(db.contact.updateMany).toHaveBeenCalledTimes(1);
@@ -141,6 +179,67 @@ describe("STOP confirmation", () => {
     expect(mods.chatbots).not.toHaveBeenCalled();
     expect(mods.ai).not.toHaveBeenCalled();
     expect(mods.automations).not.toHaveBeenCalled();
+  });
+});
+
+describe("template quick-reply buttons are the business's wording", () => {
+  it.each(["Cancel", "End", "Quit"])("a tap on a template button labelled %j does not opt out, and reaches the bots, the AI agent and rules", async (label) => {
+    await receive(label, {}, templateButton(label));
+    expect(db.contact.updateMany).not.toHaveBeenCalledWith(optedOutNow());
+    expect(db.auditLog.create).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: "contact.opted_out" }) }));
+    expect(mods.leadsStopped).not.toHaveBeenCalled();
+    expect(mods.sendText).not.toHaveBeenCalled();
+    expect(mods.chatbots).toHaveBeenCalledWith(expect.objectContaining({ text: label, messageType: "button" }));
+    expect(mods.ai).toHaveBeenCalledWith(expect.objectContaining({ text: label, messageType: "button" }));
+    expect(mods.automations).toHaveBeenCalledWith(expect.objectContaining({ text: label, messageType: "button" }));
+  });
+
+  it.each(["Stop", "Unsubscribe", "Stop promotions"])("a tap on a template button labelled %j still opts out", async (label) => {
+    await receive(label, {}, templateButton(label));
+    expect(db.contact.updateMany).toHaveBeenCalledWith({ where: { id: "c1", tenantId: "t1" }, data: { optedOutAt: expect.any(Date), optIn: false } });
+    expect(mods.chatbots).not.toHaveBeenCalled();
+    expect(mods.automations).not.toHaveBeenCalled();
+  });
+
+  it("a template button with one of the workspace's own STOP words opts out", async () => {
+    mods.getInboxSettings.mockResolvedValue({ ...REPLIES, stopWords: ["band karo"] });
+    await receive("Band karo", {}, templateButton("Band karo"));
+    expect(db.contact.updateMany).toHaveBeenCalledWith(optedOutNow());
+  });
+
+  it("the same word typed is still a STOP", async () => {
+    await receive("Cancel");
+    expect(db.contact.updateMany).toHaveBeenCalledWith(optedOutNow());
+  });
+});
+
+describe("possible opt-out requests (\"stop please\")", () => {
+  it.each(["Stop please", "please stop sending me offers", "unsubscribe me"])("%j does not opt out, adds a private note and keeps the AI agent out", async (body) => {
+    await receive(body);
+    expect(db.contact.updateMany).not.toHaveBeenCalledWith(optedOutNow());
+    expect(db.note.create).toHaveBeenCalledWith({ data: { tenantId: "t1", conversationId: "cv1", authorId: "system", body: POSSIBLE_OPT_OUT_NOTE } });
+    expect(mods.ai).not.toHaveBeenCalled();
+    expect(mods.chatbots).toHaveBeenCalledTimes(1);
+    expect(mods.automations).toHaveBeenCalledTimes(1);
+    expect(mods.sendText).not.toHaveBeenCalled();
+  });
+
+  it("an ordinary message, \"cancel my order\" or a whole STOP word gets no note", async () => {
+    for (const body of ["Where is my order?", "cancel my order", "STOP"]) await receive(body);
+    expect(db.note.create).not.toHaveBeenCalled();
+  });
+
+  it("a contact who already opted out gets no note, and the AI agent answers as usual", async () => {
+    await receive("stop please", { optedOutAt: new Date("2026-10-01T00:00:00Z") });
+    expect(db.note.create).not.toHaveBeenCalled();
+    expect(mods.ai).toHaveBeenCalledTimes(1);
+  });
+
+  it("a note that cannot be saved never stops the message from being handled", async () => {
+    db.note.create.mockRejectedValue(new Error("db down"));
+    await receive("stop please");
+    expect(mods.chatbots).toHaveBeenCalledTimes(1);
+    expect(db.webhookEvent.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ processedAt: expect.any(Date) }) }));
   });
 });
 

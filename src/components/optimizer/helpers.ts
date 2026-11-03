@@ -148,6 +148,19 @@ export const SETTING_SPECS: SettingSpec[] = [
   { key: "expireHours", label: "Remove suggestions you have not answered after (hours)", hint: "From 1 to 48. Old advice stops being useful.", kind: "number", min: 1, max: 48, int: true },
 ];
 
+/** The field label with its unit. A money setting names its currency, or says which one it is when that is not known. */
+export function settingLabel(spec: SettingSpec, currency: string | null): string {
+  if (spec.kind !== "money") return spec.label;
+  return `${spec.label} (${currency ?? "in your ad account's currency"})`;
+}
+
+/** The currency every connected ad account uses, or null when there is none or they differ. */
+export function sharedCurrency(accounts: { currency: string | null }[] | null | undefined): string | null {
+  const codes = new Set((accounts ?? []).map((a) => a.currency));
+  const [only] = codes;
+  return codes.size === 1 && only ? only : null;
+}
+
 export function settingToText(spec: SettingSpec, stored: number | boolean | undefined, currency: string | null): string {
   if (typeof stored !== "number") return "";
   if (spec.kind === "number") return String(stored);

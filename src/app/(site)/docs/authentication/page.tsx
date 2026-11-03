@@ -35,7 +35,7 @@ export default function AuthPage() {
         conversations:write.&quot; Some scopes include others: a write scope also allows the matching reads. Available scopes: {API_SCOPES.join(", ")}.
       </p>
       <p>
-        <strong>Good to know:</strong> a key with conversations:write can also send free-form session text inside the 24-hour window, because replying is part of managing a chat.
+        <strong>Good to know:</strong>{" "}a key with conversations:write can also send free-form session text inside the 24-hour window, because replying is part of managing a chat.
         Keys created before this was added keep working the same way, so review the keys you hand to other systems and create a new one with only the scopes it needs.
         Template sends always need messages:write.
       </p>

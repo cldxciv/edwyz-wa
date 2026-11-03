@@ -113,6 +113,17 @@ describe("lead.created", () => {
     expect(lastEnvelope().data).toMatchObject({ contact: null, formId: "form9" });
   });
 
+  it("says a click-to-WhatsApp lead came from the ad (source ctwa, no form), read from its ctwa: leadgen id", async () => {
+    db.contact.findFirst.mockResolvedValue({ id: "c1", phone: "+919876543210", bsuid: null, waId: "919876543210", username: null, name: "Asha" });
+    const chat = { id: "l2", status: "new", leadgenId: "ctwa:AR-click-1", fields: { source: "click_to_whatsapp", ad_headline: "Free check-up" }, campaignMetaId: null, adMetaId: "ad-77", createdAt: new Date("2026-10-30T10:00:00Z"), contactId: "c1", leadFormId: null };
+    await emitLeadCreated("t1", chat, "form-ignored");
+    expect(lastEnvelope().data).toMatchObject({ leadId: "l2", source: "ctwa", formId: null, adId: "ad-77", fields: { source: "click_to_whatsapp", ad_headline: "Free check-up" } });
+    expect(new Set(leaves(lastEnvelope().data))).toEqual(documented("lead.created"));
+    // A Meta lead id (digits) is a form lead.
+    await emitLeadCreated("t1", { ...lead, leadgenId: "1234567890" });
+    expect(lastEnvelope().data).toMatchObject({ source: "meta_lead_form", formId: "form1" });
+  });
+
   it("limits what form answers can add to the payload", () => {
     const many = Object.fromEntries(Array.from({ length: 150 }, (_, i) => [`k${i}`, "x".repeat(900)]));
     const out = leadFieldsAsText(many);

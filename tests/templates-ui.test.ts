@@ -1,21 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { validateTemplateInput } from "@/lib/templates/validate";
+import { validateTemplateInput, variableAtEdge } from "@/lib/templates/validate";
 import {
+  type ButtonDraft,
+  LANGUAGES,
   type TemplateDraft,
   buildComponents,
   buttonErrorTarget,
+  buttonTypeAllowed,
   categoryLabel,
   countErrors,
   detectVariables,
+  draftFromTemplate,
   emptyDraft,
   fillExamples,
   focusKeyAfterButtonRemoved,
+  groupedButtons,
   guardedNavigationPath,
   filterTemplates,
   hasErrors,
   insertAt,
   languageLabel,
   nextVariable,
+  normalizePhone,
   rejectionText,
   requiredExamples,
   slugifyTemplateName,
@@ -23,7 +29,7 @@ import {
   validateDraft,
 } from "@/components/templates/helpers";
 
-const draft = (over = {}) => ({ ...emptyDraft(), name: "order_update", body: "Hi {{1}}, order {{2}}", bodyExamples: ["Asha", "42"], ...over });
+const draft = (over = {}) => ({ ...emptyDraft(), name: "order_update", body: "Hi {{1}}, order {{2}} is ready.", bodyExamples: ["Asha", "42"], ...over });
 
 describe("variables", () => {
   it("detects variables and required examples", () => {
@@ -130,7 +136,7 @@ describe("editor helpers", () => {
     expect(buttonErrorTarget({ ...b, type: "PHONE_NUMBER" })).toBe("phone");
   });
   it("counts every invalid field", () => {
-    const d: TemplateDraft = { ...emptyDraft(), name: "", body: "Hi {{1}} {{2}}", bodyExamples: [], buttons: [{ type: "QUICK_REPLY", text: "", url: "", urlExample: "", phone: "" }] };
+    const d: TemplateDraft = { ...emptyDraft(), name: "", body: "Hi {{1}} {{2}} thanks", bodyExamples: [], buttons: [{ type: "QUICK_REPLY", text: "", url: "", urlExample: "", phone: "" }] };
     expect(countErrors(validateDraft(d))).toBe(4);
     expect(countErrors({})).toBe(0);
   });
@@ -160,5 +166,109 @@ describe("focusKeyAfterButtonRemoved", () => {
     expect(focusKeyAfterButtonRemoved(0, 2)).toBe("remove-button-0");
     expect(focusKeyAfterButtonRemoved(1, 1)).toBe("remove-button-0");
     expect(focusKeyAfterButtonRemoved(0, 0)).toBe("add-button");
+  });
+});
+
+const button = (type: ButtonDraft["type"], text: string, extra: Partial<ButtonDraft> = {}): ButtonDraft => ({ type, text, url: "", urlExample: "", phone: "", ...extra });
+const serverAccepts = (d: TemplateDraft) => () => validateTemplateInput({ name: d.name, language: d.language, category: d.category, components: buildComponents(d) });
+
+describe("rules Meta checks, caught in the form", () => {
+  it("refuses a body that starts or ends with a placeholder, in the form and on the server", () => {
+    expect(variableAtEdge("{{1}} your order is ready")).toBe(true);
+    expect(variableAtEdge("Your order is ready {{1}}  ")).toBe(true);
+    expect(variableAtEdge("Hi {{1}}, your order is ready.")).toBe(false);
+    const d = draft({ body: "{{1}} your order is ready {{2}}" });
+    expect(validateDraft(d).body).toMatch(/starts or ends with a placeholder/);
+    expect(serverAccepts(d)).toThrow(/start or end with a variable/);
+  });
+  it("accepts phone numbers with spaces or dashes and sends them without", () => {
+    expect(normalizePhone("+91 98765 43210")).toBe("+919876543210");
+    expect(normalizePhone("+91-98765-43210")).toBe("+919876543210");
+    const d = draft({ buttons: [button("PHONE_NUMBER", "Call us", { phone: "+91 98765 43210" })] });
+    expect(validateDraft(d).buttonErrors).toBeUndefined();
+    expect(JSON.stringify(buildComponents(d))).toContain('"phone_number":"+919876543210"');
+    expect(serverAccepts(d)).not.toThrow();
+    expect(validateDraft(draft({ buttons: [button("PHONE_NUMBER", "Call", { phone: "98765 43210" })] })).buttonErrors?.[0]).toMatch(/\+ and the country code/);
+  });
+  it("checks the website and call button limits before saving", () => {
+    const urls = [1, 2, 3].map((n) => button("URL", `Site ${n}`, { url: "https://example.com" }));
+    expect(validateDraft(draft({ buttons: urls })).buttons).toMatch(/at most 2 website buttons/);
+    const calls = [button("PHONE_NUMBER", "A", { phone: "+919876543210" }), button("PHONE_NUMBER", "B", { phone: "+919876543211" })];
+    expect(validateDraft(draft({ buttons: calls })).buttons).toMatch(/at most 1 call button/);
+    expect(buttonTypeAllowed(urls.slice(0, 2), 0, "URL")).toBe(true);
+    expect(buttonTypeAllowed([...urls.slice(0, 2), button("QUICK_REPLY", "Yes")], 2, "URL")).toBe(false);
+    expect(buttonTypeAllowed([calls[0], button("QUICK_REPLY", "Yes")], 1, "PHONE_NUMBER")).toBe(false);
+  });
+  it("keeps quick replies together so a mixed order still passes Meta's grouping rule", () => {
+    const mixed = [button("QUICK_REPLY", "Yes"), button("URL", "Site", { url: "https://example.com" }), button("QUICK_REPLY", "No")];
+    expect(groupedButtons(mixed).map((b) => b.text)).toEqual(["Yes", "No", "Site"]);
+    expect(groupedButtons([mixed[1], mixed[0]]).map((b) => b.text)).toEqual(["Site", "Yes"]);
+    const d = draft({ buttons: mixed });
+    expect(validateDraft(d).buttons).toBeUndefined();
+    expect(serverAccepts(d)).not.toThrow();
+  });
+  it("offers the main Indian languages", () => {
+    const codes = LANGUAGES.map(([c]) => c);
+    for (const code of ["hi", "mr", "ta", "te", "bn", "gu", "kn", "ml", "pa", "ur"]) expect(codes).toContain(code);
+    expect(new Set(codes).size).toBe(codes.length);
+  });
+});
+
+describe("authentication templates", () => {
+  const auth = (over: Partial<TemplateDraft> = {}): TemplateDraft => ({ ...emptyDraft(), name: "login_code", category: "AUTHENTICATION", ...over });
+  it("build Meta's fixed one-time-code shape that the server accepts", () => {
+    const d = auth({ body: "ignored free text", header: "ignored", buttons: [button("URL", "Site", { url: "https://x.com" })] });
+    expect(hasErrors(validateDraft(d))).toBe(false);
+    expect(buildComponents(d)).toEqual([
+      { type: "BODY", add_security_recommendation: true },
+      { type: "FOOTER", code_expiration_minutes: 10 },
+      { type: "BUTTONS", buttons: [{ type: "OTP", otp_type: "COPY_CODE", text: "Copy code" }] },
+    ]);
+    expect(serverAccepts(d)).not.toThrow();
+    expect(buildComponents(auth({ codeExpiry: "" })).some((c) => c.type === "FOOTER")).toBe(false);
+  });
+  it("flag a bad expiry or button label", () => {
+    expect(validateDraft(auth({ codeExpiry: "91" })).codeExpiry).toMatch(/1 to 90/);
+    expect(validateDraft(auth({ copyCodeLabel: " " })).copyCodeLabel).toBeTruthy();
+  });
+  it("are refused by the server with free text, a header or other buttons", () => {
+    const base = { name: "login_code", language: "en_US", category: "AUTHENTICATION" };
+    const otp = { type: "BUTTONS", buttons: [{ type: "OTP", otp_type: "COPY_CODE", text: "Copy code" }] };
+    expect(() => validateTemplateInput({ ...base, components: [{ type: "BODY", text: "Your code is {{1}}", example: { body_text: [["1"]] } }, otp] })).toThrow(/fixed message/);
+    expect(() => validateTemplateInput({ ...base, components: [{ type: "HEADER", format: "TEXT", text: "Hi" }, { type: "BODY" }, otp] })).toThrow(/header/);
+    expect(() => validateTemplateInput({ ...base, components: [{ type: "BODY" }, { type: "BUTTONS", buttons: [{ type: "URL", text: "Go", url: "https://x.com" }] }] })).toThrow(/copy-code/);
+    expect(() => validateTemplateInput({ ...base, components: [{ type: "BODY" }] })).toThrow(/copy-code/);
+  });
+});
+
+describe("draftFromTemplate", () => {
+  it("turns saved components back into the same draft, so a draft or rejected template can be edited", () => {
+    const d = draft({
+      header: "Hello {{1}}",
+      headerExample: "Asha",
+      footer: "Bye",
+      buttons: [button("QUICK_REPLY", "Yes"), button("URL", "Track", { url: "https://x.com/o/{{1}}", urlExample: "https://x.com/o/42" }), button("PHONE_NUMBER", "Call", { phone: "+919876543210" })],
+    });
+    const back = draftFromTemplate({ name: d.name, language: d.language, category: d.category, components: buildComponents(d) });
+    expect(back).toEqual(d);
+  });
+  it("restores a media header with its file details and an authentication template's choices", () => {
+    const media = draftFromTemplate({
+      name: "promo",
+      language: "hi",
+      category: "MARKETING",
+      components: [{ type: "HEADER", format: "IMAGE", example: { header_handle: ["4::abc"] } }, { type: "BODY", text: "Sale today" }],
+      headerMedia: { type: "IMAGE", handle: "4::abc", mime: "image/png", filename: "sale.png" },
+    });
+    expect(media.headerKind).toBe("IMAGE");
+    expect(media.headerMedia).toEqual({ type: "IMAGE", handle: "4::abc", mime: "image/png", filename: "sale.png" });
+    const a = draftFromTemplate({
+      name: "otp",
+      language: "en",
+      category: "AUTHENTICATION",
+      components: [{ type: "BODY", add_security_recommendation: false }, { type: "BUTTONS", buttons: [{ type: "OTP", otp_type: "COPY_CODE", text: "Copy" }] }],
+    });
+    expect(a).toMatchObject({ securityNote: false, codeExpiry: "", copyCodeLabel: "Copy" });
+    expect(draftFromTemplate({ name: "x", language: "en", category: "ODD", components: null }).category).toBe("UTILITY");
   });
 });

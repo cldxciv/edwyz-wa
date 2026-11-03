@@ -173,7 +173,7 @@ export function RoutingExtraCard() {
             <h3 id="stages-heading" className="text-sm font-semibold">
               Lead stages
             </h3>
-            <FormField label="Stages for your customers" error={errors.stages} hint="One per line, in order. Shown on the Contacts page.">
+            <FormField label="Stages for your customers" error={errors.stages} hint="One per line, in order. Shown on the Contacts page. Leads on the Leads page have their own fixed stages.">
               <Textarea rows={6} value={form.stages} aria-invalid={errors.stages ? true : undefined} onChange={(e) => set({ stages: e.target.value })} />
             </FormField>
           </section>

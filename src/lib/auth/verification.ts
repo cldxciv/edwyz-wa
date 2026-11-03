@@ -33,6 +33,8 @@ const UNVERIFIED_WRITE_PATTERNS = [
   // Workspace settings, but not invites, members or ownership: an unverified signup must not be able to send platform mail to
   // other people (invites) or hand the workspace to someone else.
   /^\/api\/workspace\/(?!invites(\/|$)|members(\/|$)|ownership(\/|$))/,
+  // PATCH /api/workspace only renames the workspace.
+  /^\/api\/workspace$/,
   /^\/api\/inbox\/conversations\/[^/]+\/(read|marks)$/,
   // Team settings only. Putting a chat in a team or changing a contact's owner acts on customers' data, so it needs a confirmed address.
   /^\/api\/teams$/,

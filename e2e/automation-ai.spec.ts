@@ -39,9 +39,13 @@ test.describe.serial("AI agent: create, settings, knowledge, test chat, usage", 
     const { page } = ctx;
     const form = page.getByRole("form", { name: "Create AI agent" });
     await form.getByRole("button", { name: "Create AI agent" }).click();
-    // native required validation keeps the form on the page and focuses the empty field
-    await expect(form.getByLabel("Instructions")).toBeFocused();
-    expect(await form.getByLabel("Instructions").evaluate((e) => (e as HTMLTextAreaElement).validationMessage)).not.toBe("");
+    // the form checks itself like the rest of the app: the empty field is marked, explained under it and focused, with no
+    // browser bubble
+    const instructions = form.getByLabel("Instructions");
+    await expect(instructions).toBeFocused();
+    await expect(instructions).toHaveAttribute("aria-invalid", "true");
+    await expect(form.getByText(/^Tell the agent what to do/)).toBeVisible();
+    expect(await instructions.evaluate((e) => (e as HTMLTextAreaElement).validationMessage)).toBe("");
     await form.getByLabel("Name").fill("   ");
     await form.getByLabel("Instructions").fill("You answer questions for a dental clinic.");
     await form.getByRole("button", { name: "Create AI agent" }).click();
@@ -138,13 +142,23 @@ test.describe.serial("AI agent: create, settings, knowledge, test chat, usage", 
     await add.getByLabel("Question").fill("Do you accept cards?");
     await add.getByLabel("Answer").fill("Yes, all major cards and UPI.");
     await add.getByRole("button", { name: "Add knowledge" }).click();
-    await expect(page.getByText("Payments")).toBeVisible();
+    // exact: a new workspace's spending banner ("...after your first two payments.") also contains the word, and a substring
+    // match would pass before the FAQ is saved and never clear after it is deleted
+    const listed = page.getByText("Payments", { exact: true });
+    await expect(listed).toBeVisible();
     await expect(page.getByText("No knowledge yet.")).toHaveCount(0);
     const rows = (await (await db()).query(`select kind, title, content from "AiKnowledgeSource" where "agentId"=$1 order by "createdAt"`, [agentId])).rows;
     expect(rows.map((r) => r.kind)).toEqual(["text", "faq"]);
     expect(rows[1].content).toBe("Q: Do you accept cards?\nA: Yes, all major cards and UPI.");
+    // deleting knowledge asks first
     await page.getByRole("button", { name: "Delete Payments" }).click();
-    await expect(page.getByText("Payments")).toHaveCount(0);
+    const ask = page.getByRole("alertdialog");
+    await expect(ask).toContainText('Delete "Payments"?');
+    await ask.getByRole("button", { name: "Cancel" }).click();
+    await expect(listed).toBeVisible();
+    await page.getByRole("button", { name: "Delete Payments" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Delete knowledge" }).click();
+    await expect(listed).toHaveCount(0);
   });
 
   test("knowledge from a web page: private, http and local addresses are refused with a clear message", async () => {
@@ -228,11 +242,14 @@ test.describe.serial("AI agent: create, settings, knowledge, test chat, usage", 
 
   test("delete the agent asks first", async () => {
     const { page } = ctx;
-    page.once("dialog", (d) => d.dismiss());
+    // the app's own confirm dialog, not the browser's
     await page.getByRole("button", { name: "Delete agent" }).click();
+    const ask = page.getByRole("alertdialog");
+    await expect(ask).toContainText(/Delete ".+"\?/);
+    await ask.getByRole("button", { name: "Cancel" }).click();
     await expect(page.getByRole("form", { name: "AI agent settings" })).toBeVisible();
-    page.once("dialog", (d) => d.accept());
-    await page.getByRole("button", { name: "Delete agent" }).click();
+    await page.getByRole("form", { name: "AI agent settings" }).getByRole("button", { name: "Delete agent" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Delete agent" }).click();
     await expect(page.getByRole("form", { name: "Create AI agent" })).toBeVisible();
     const n = (await (await db()).query(`select count(*)::int c from "AiKnowledgeSource" where "agentId"=$1`, [agentId])).rows[0].c;
     expect(n, "knowledge is removed with the agent").toBe(0);

@@ -8,11 +8,12 @@ import { COMPANY } from "@/lib/config";
 // email setting. A build-time render would freeze a developer's SITE_URL (see src/app/(site)/layout.tsx).
 export const dynamic = "force-dynamic";
 
+// Only what works today: Instagram and Facebook ads are still coming soon (see the landing page), so they are not promised here.
 const BENEFITS = [
   "Reply to every customer from one shared WhatsApp inbox",
   "Send broadcasts to people who opted in",
   "Automate answers with chatbots and AI replies",
-  "Keep ads, messaging and AI spend under limits you set",
+  "Keep WhatsApp messaging and AI spend under limits you set",
   "Get help from Eddy in English, Hindi or Hinglish",
 ];
 
@@ -39,7 +40,7 @@ export default function AuthLayout({ children }: Readonly<{ children: React.Reac
             Edwyz WA
           </Link>
           <div className="max-w-md">
-            <h2 className="text-2xl font-semibold leading-snug tracking-tight sm:text-3xl">Your ads, your WhatsApp and your team in one place</h2>
+            <h2 className="text-2xl font-semibold leading-snug tracking-tight sm:text-3xl">Your WhatsApp chats, broadcasts and team in one place</h2>
             <ul className="mt-8 space-y-4">
               {BENEFITS.map((b) => (
                 <li key={b} className="flex items-start gap-3 text-base leading-relaxed text-[#d1fae5]">

@@ -130,7 +130,9 @@ export function InboxApp() {
   const select = useCallback((id: string) => {
     writeChatUrl(id);
     setSelectedId(id);
-    setDetail(null);
+    // Picking the chat that is already open (say after a reload restored ?c=) keeps its details: ChatView is keyed by the id, so it
+    // does not reload and send them again, and the contact panel sat on "Loading contact" until the next poll.
+    setDetail((d) => (d?.id === id ? d : null));
     setMobilePanel(false);
     setFocusRequest(true);
   }, []);
@@ -186,8 +188,12 @@ export function InboxApp() {
   }
 
   return (
-    <div className="flex h-[calc(100dvh-13rem)] min-h-[24rem] md:h-[calc(100dvh-9rem)] md:min-h-[28rem] flex-col overflow-hidden rounded-2xl border border-border bg-background">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
+    // The shell gives the inbox page a column exactly one screen tall (AppShell), so the inbox takes whatever is left below the
+    // banners and the top bar instead of guessing their height; the page itself does not scroll, only the panes do.
+    <div className="flex min-h-72 flex-1 flex-col overflow-hidden rounded-2xl border border-border bg-background">
+      {/* With a chat open on a phone or tablet, the chat gets the room; the inbox tools are one Back away. */}
+      {selectedId && <h1 className="sr-only lg:hidden">Inbox</h1>}
+      <div className={cn("flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2", selectedId && "max-lg:hidden")}>
         <h1 className="text-base font-semibold">Inbox</h1>
         <div className="flex flex-wrap items-center gap-2">
           <span className="inline-flex items-center gap-1.5 text-xs text-muted" title={streamBadge(stream.mode).title}>
@@ -246,7 +252,7 @@ export function InboxApp() {
             <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
               <p className="text-sm font-semibold">Pick a conversation</p>
               <p className="max-w-xs text-sm text-muted">
-                Choose a chat on the left, or press <kbd className="rounded border border-border bg-surface px-1 font-mono text-xs">j</kbd> and <kbd className="rounded border border-border bg-surface px-1 font-mono text-xs">k</kbd> to move and <kbd className="rounded border border-border bg-surface px-1 font-mono text-xs">Enter</kbd> to open. Press <kbd className="rounded border border-border bg-surface px-1 font-mono text-xs">?</kbd> for all shortcuts.
+                Choose a chat on the left, or press <kbd className="rounded border border-border bg-surface px-1 font-mono text-xs">j</kbd> and <kbd className="rounded border border-border bg-surface px-1 font-mono text-xs">k</kbd> to move and <kbd className="rounded border border-border bg-surface px-1 font-mono text-xs">Enter</kbd> to open. Press <kbd className="rounded border border-border bg-surface px-1 font-mono text-xs">?</kbd>{" "}for all shortcuts.
               </p>
             </div>
           )}
@@ -255,7 +261,7 @@ export function InboxApp() {
         {selectedId && panelOpen && (
           <div className="fixed inset-0 z-40 bg-background lg:static lg:inset-auto lg:z-auto lg:w-80 lg:shrink-0 lg:border-l lg:border-border">
             {detail && detail.id === selectedId ? (
-              <SidePanel key={detail.id} conversation={detail} members={members} onClose={closePanel} onChanged={onChanged} />
+              <SidePanel key={detail.id} conversation={detail} members={members} canBlock={canDelete} onClose={closePanel} onChanged={onChanged} />
             ) : (
               <div role="status" aria-label="Loading contact" className="animate-pulse space-y-3 p-4">
                 <div className="h-12 w-12 rounded-full bg-surface" />

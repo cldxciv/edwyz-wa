@@ -31,7 +31,7 @@ export default async function ForgotPasswordPage() {
             done={{
               message: (
                 <>
-                  <strong className="font-semibold">Check your email.</strong> If an account exists for that address, we have sent a link. It expires in 1 hour. Look in your spam folder
+                  <strong className="font-semibold">Check your email.</strong>{" "}If an account exists for that address, we have sent a link. It expires in 1 hour. Look in your spam folder
                   if it does not arrive.
                 </>
               ),

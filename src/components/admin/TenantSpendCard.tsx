@@ -128,7 +128,7 @@ export function TenantSpendCard({ view, endpoint }: { view: TenantSpendingView; 
                   <div>
                     <dt className="text-xs font-medium text-muted">Owner&apos;s limits</dt>
                     <dd>
-                      {moneyText(p.ownerDaily)} a day, {moneyText(p.ownerMonthly)} a month
+                      {moneyText(p.ownerDaily)} a day, {moneyText(p.ownerMonthly)}{" "}a month
                     </dd>
                   </div>
                   <div>
@@ -164,7 +164,7 @@ export function TenantSpendCard({ view, endpoint }: { view: TenantSpendingView; 
                 {view.overrides.map((o) => (
                   <li key={o.id} className="space-y-2">
                     <p>
-                      <span className="font-medium">{POT_NAMES[o.pot] ?? o.pot}</span>: {moneyText(o.daily, "no ceiling")} a day, {moneyText(o.monthly, "no ceiling")} a month
+                      <span className="font-medium">{POT_NAMES[o.pot] ?? o.pot}</span>: {moneyText(o.daily, "no ceiling")} a day, {moneyText(o.monthly, "no ceiling")}{" "}a month
                       {o.expiresAt ? `, until ${when(o.expiresAt)}` : ""}.{o.reason ? <span className="text-muted"> Why: {o.reason}</span> : null}
                     </p>
                     <ActionForm endpoint={endpoint} label="Remove override" body={{ action: "clear_spend_ceiling", pot: o.pot, currency: o.currency }} description={`The usual ${(POT_NAMES[o.pot] ?? o.pot).toLowerCase()} ceilings apply again.`} />

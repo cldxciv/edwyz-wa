@@ -2,10 +2,24 @@
 
 import { useCallback, useEffect, useId, useState } from "react";
 import { COMPANY } from "@/lib/config";
+import { promoteText } from "@/lib/promote/copy";
 import type { MetaLimitDTO, MetaOffboardChoice } from "@/lib/spend/types";
-import { Alert, apiFetch, Badge, Button, Card, Dialog, EmptyState, FormField, Input, PageHeader, Spinner } from "@/components/ui";
+import { LinkButton } from "@/components/ads/LinkButton";
+import { Alert, apiFetch, Badge, Button, Card, Dialog, EmptyState, FormField, Input, PageHeader, Spinner, type Tone } from "@/components/ui";
+import { useFacebookLoginPopup, type FbPopupPhase, type FbPopupResult } from "./useFacebookLoginPopup";
 
-type Asset = { id: string; type: string; externalId: string; name: string | null; status: string; meta?: { leadgenSubscription?: { status?: string; reason?: string } } | null };
+/** What discovery stores on each asset (docs/IG-PAGE-ADS-SPEC.md 5.4); every key may be missing on rows from older runs. */
+type AssetMeta = {
+  leadgenSubscription?: { status?: string; reason?: string };
+  canAdvertise?: boolean;
+  pictureUrl?: string | null;
+  username?: string | null;
+  profilePictureUrl?: string | null;
+  pageBacked?: boolean;
+  accountStatus?: number | null;
+  currency?: string | null;
+};
+type Asset = { id: string; type: string; externalId: string; name: string | null; status: string; meta?: AssetMeta | null };
 type Connection = {
   id: string;
   metaUserId: string;
@@ -18,7 +32,8 @@ type Connection = {
   sharedWithOtherWorkspace?: boolean;
   assets: Asset[];
 };
-type Payload = { connections: Connection[]; scopes: { scope: string; purpose: string }[]; configured: boolean };
+type WhatsAppNumber = { displayPhone: string; verifiedName: string | null };
+type Payload = { connections: Connection[]; scopes: { scope: string; purpose: string }[]; configured: boolean; whatsapp?: WhatsAppNumber[] };
 
 /** GET /api/spend/meta-limit (docs/SPEND-CONTROLS-SPEC.md 5.1, 5.8). */
 export type ConsentScreen = { textVersion: string; title: string; body: string[]; checkbox: string; button: string; existingCap: string | null };
@@ -48,6 +63,18 @@ export function notConfiguredNotice(configured: boolean, connections: number): s
   return "Connecting another Facebook account is not switched on for this server yet. The accounts below were connected earlier and still work.";
 }
 
+/**
+ * The WhatsApp line on this page. The number is connected on Connect WhatsApp, not with a Facebook login, so this page only
+ * says whether one is connected and links there (owners and admins; that page is theirs). Without it, a workspace with a
+ * working number read as having nothing connected here.
+ */
+export function whatsAppLine(numbers: WhatsAppNumber[] | undefined, canManage: boolean): { text: string; link: string | null } {
+  const list = numbers ?? [];
+  if (list.length === 0) return { text: canManage ? "No WhatsApp number connected yet." : "No WhatsApp number connected yet. Ask an owner or admin to connect one.", link: canManage ? "Connect WhatsApp" : null };
+  const names = list.map((n) => (n.verifiedName ? `${n.displayPhone} · ${n.verifiedName}` : n.displayPhone)).join(", ");
+  return { text: `${list.length === 1 ? "Your WhatsApp number is connected" : "Your WhatsApp numbers are connected"}: ${names}.`, link: canManage ? "Manage WhatsApp" : null };
+}
+
 /** The plain result line after a disconnect, naming Meta's limit when it stays (5.9). */
 export function disconnectNotice(r: { revokedAtMeta?: boolean; skippedSharedUser?: boolean; pagesUnsubscribeFailed?: number; metaLimitText?: string | null }): string {
   const base = r.skippedSharedUser
@@ -58,6 +85,49 @@ export function disconnectNotice(r: { revokedAtMeta?: boolean; skippedSharedUser
   const failed = r.pagesUnsubscribeFailed ?? 0;
   const pages = failed > 0 ? ` Lead alerts could not be removed at Meta for ${failed} Page${failed === 1 ? "" : "s"}; Edwyz ignores them, and you can remove the app from those Pages in Facebook.` : "";
   return `${base}${pages}${r.metaLimitText ? ` ${r.metaLimitText}` : ""}`;
+}
+
+/** Content publishing needs these two; ads work without them (docs/IG-PAGE-ADS-SPEC.md 3.2, 8.1 step 2). */
+export const POSTING_SCOPES: readonly string[] = ["pages_manage_posts", "instagram_content_publish"];
+export const POSTING_PERMISSION_TEXT = promoteText("readiness.posting_permission");
+
+/**
+ * Missing permissions in plain words: the posting pair gets its own line (ads still work), and every other one is named by
+ * what it lets Edwyz do, with the way to fix it.
+ */
+export function missingPermissionLines(missing: readonly string[], purposes: readonly { scope: string; purpose: string }[]): { posting: string | null; others: string | null } {
+  const posting = missing.some((s) => POSTING_SCOPES.includes(s)) ? POSTING_PERMISSION_TEXT : null;
+  const rest = missing.filter((s) => !POSTING_SCOPES.includes(s));
+  if (rest.length === 0) return { posting, others: null };
+  const what = rest.map((s) => purposes.find((p) => p.scope === s)?.purpose ?? s).map((p) => p.replace(/\.?$/, "."));
+  return { posting, others: `Permission missing: ${what.join(" ")} Reconnect and approve everything to enable all features.` };
+}
+
+/** Meta's account_status, in plain words. */
+const AD_ACCOUNT_STATUS: Record<number, { label: string; tone: Tone }> = {
+  1: { label: "Active", tone: "good" },
+  2: { label: "Disabled by Meta", tone: "bad" },
+  3: { label: "Payment problem", tone: "bad" },
+  7: { label: "Meta is reviewing it", tone: "warn" },
+  8: { label: "Payment pending", tone: "warn" },
+  9: { label: "Grace period", tone: "warn" },
+  100: { label: "Closing", tone: "warn" },
+  101: { label: "Closed", tone: "neutral" },
+};
+export const adAccountStatusLabel = (status: unknown): { label: string; tone: Tone } | null => (typeof status === "number" ? (AD_ACCOUNT_STATUS[status] ?? null) : null);
+
+/** The popup's live line (aria-live), and what each ending means for this page. */
+export function popupPhaseText(phase: FbPopupPhase): string {
+  if (phase === "opening") return "Opening Facebook in a small window.";
+  if (phase === "waiting") return "Finish in the Facebook window. This page updates by itself when you're done.";
+  if (phase === "redirecting") return "Taking you to Facebook.";
+  return "";
+}
+export function popupResultNotice(r: FbPopupResult): { notice?: string; error?: string } {
+  if (r.kind === "outcome") return r.outcome === "failed" ? { error: RESULT.failed } : { notice: RESULT[r.outcome] };
+  if (r.kind === "timeout") return { error: "Facebook took too long. Press Connect with Facebook to try again." };
+  if (r.kind === "error") return { error: r.message === "closed" ? "Facebook's window was closed before it opened. Press Connect with Facebook to try again." : r.message };
+  return {};
 }
 
 /** The blocked state of a disconnect (409 meta_connect.pause_failed), or null for any other error. */
@@ -96,24 +166,23 @@ export function ConnectionsPanel() {
     void load();
   }, [load]);
 
-  async function act(key: string, run: () => Promise<void>) {
-    setBusy(key);
+  // Facebook Login for Business opens in a popup from the click itself (D20); a blocked popup or META_LOGIN_POPUP=off falls
+  // back to the full-page redirect. Whatever way the outcome arrives, the list is read again.
+  const popup = useFacebookLoginPopup({
+    onResult: (r) => {
+      const { notice: n, error: e } = popupResultNotice(r);
+      if (n) setNotice(n);
+      if (e) setError(e);
+      if (r.kind !== "error") void load();
+    },
+  });
+  const popupBusy = popup.phase === "opening" || popup.phase === "waiting" || popup.phase === "redirecting";
+  /** The click handler itself: popup.start opens the window synchronously, before anything is awaited. */
+  const connect = () => {
     setError(null);
-    try {
-      await run();
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong.");
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  const connect = () =>
-    act("connect", async () => {
-      const { url } = await apiFetch<{ url: string }>("/api/meta-connect/start", { method: "POST", body: {} });
-      window.location.assign(url);
-    });
+    setNotice(null);
+    popup.start();
+  };
   const refresh = async (id: string) => {
     setRefreshFailed(null);
     setBusy(`r:${id}`);
@@ -137,26 +206,51 @@ export function ConnectionsPanel() {
 
   if (!data) return error ? <p role="alert" className="text-sm text-bad-fg">{error}</p> : <Spinner label="Loading" />;
   const canManage = role === "owner" || role === "admin";
+  const wa = whatsAppLine(data.whatsapp, canManage);
 
   return (
     <>
       <PageHeader
         title="Connections"
-        description="Connect Facebook, Instagram and ads so Edwyz can run campaigns, capture leads and publish for you."
-        actions={canManage && data.configured ? <Button onClick={() => void connect()} disabled={busy !== null}>{busy === "connect" ? "Opening Meta" : "Connect with Facebook"}</Button> : undefined}
+        description="Connect Facebook Pages, Instagram and ad accounts so Edwyz can run campaigns, capture leads and publish for you."
+        actions={
+          canManage && data.configured ? (
+            <Button onClick={connect} disabled={busy !== null} loading={popupBusy} data-testid="meta-connect-button">
+              Connect with Facebook
+            </Button>
+          ) : undefined
+        }
       />
+      <p role="status" aria-live="polite" className={popupBusy ? "mb-4 text-sm text-muted" : "sr-only"} data-testid="meta-connect-phase">
+        {popupPhaseText(popup.phase)}
+      </p>
       {notice && <p role="status" className="mb-4 rounded-lg border border-border bg-surface px-4 py-3 text-sm">{notice}</p>}
       {error && <p role="alert" className="mb-4 text-sm text-bad-fg">{error}</p>}
       {notConfiguredNotice(data.configured, data.connections.length) && <p className="mb-4 text-sm text-muted">{notConfiguredNotice(data.configured, data.connections.length)}</p>}
       {!canManage && <p className="mb-4 text-sm text-muted">Only an owner or admin can connect, refresh or disconnect.</p>}
 
-      {meta?.metaLimit && role && <MetaLimitStep payload={meta} role={role} onConnectAgain={data.configured ? () => void connect() : null} onChanged={() => void load()} />}
+      <Card
+        className="mb-6"
+        title="WhatsApp"
+        description="You connect WhatsApp on its own page, not with a Facebook login."
+        actions={
+          wa.link ? (
+            <LinkButton href="/app/settings/connect" variant="secondary" size="sm">
+              {wa.link}
+            </LinkButton>
+          ) : undefined
+        }
+      >
+        <p className="break-words text-sm">{wa.text}</p>
+      </Card>
+
+      {meta?.metaLimit && role && <MetaLimitStep payload={meta} role={role} onConnectAgain={data.configured ? connect : null} onChanged={() => void load()} />}
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="min-w-0 space-y-4 lg:col-span-2">
           {data.connections.length === 0 && (
             <EmptyState
-              title="Nothing connected yet"
+              title="No Facebook account connected yet"
               body={
                 data.configured || !canManage
                   ? "Connect a Facebook account to discover your Pages, Instagram accounts, ad accounts, pixels and catalogs."
@@ -182,9 +276,19 @@ export function ConnectionsPanel() {
                 </div>
                 <Badge tone={tone(c.status)}>{STATUS_LABEL[c.status] ?? c.status}</Badge>
               </div>
-              {c.missingScopes.length > 0 && (
-                <p className="mt-3 break-words text-sm text-warn-fg">Permission missing: {c.missingScopes.join(", ")}. Reconnect and approve everything to enable all features.</p>
-              )}
+              {(() => {
+                const lines = missingPermissionLines(c.missingScopes, data.scopes);
+                return (
+                  <>
+                    {lines.others && <p className="mt-3 break-words text-sm text-warn-fg">{lines.others}</p>}
+                    {lines.posting && (
+                      <p className="mt-3 break-words text-sm text-muted" data-testid="posting-permission">
+                        {lines.posting}
+                      </p>
+                    )}
+                  </>
+                );
+              })()}
               {(c.unusedScopes?.length ?? 0) > 0 && (
                 <p className="mt-3 break-words text-sm text-warn-fg">
                   This login also grants permissions Edwyz does not use: {c.unusedScopes?.join(", ")}. An owner of the Meta app should remove them from the Login for Business configuration, then reconnect.
@@ -199,7 +303,7 @@ export function ConnectionsPanel() {
                     </Button>
                   )}
                   {(["expired", "expiring", "revoked"].includes(c.status) || refreshFailed === c.id) && data.configured && (
-                    <Button size="sm" onClick={() => void connect()} disabled={busy !== null}>
+                    <Button size="sm" onClick={connect} disabled={busy !== null || popupBusy}>
                       Reconnect
                     </Button>
                   )}
@@ -400,7 +504,7 @@ export function DisconnectDialog({
     >
       <div className="space-y-4 text-sm">
         <p>
-          {warning} We will also stop lead alerts for your Pages at Meta, unless another workspace still uses the same Page. We pause every ad Edwyz runs on this account first.
+          {warning}{" "}We will also stop lead alerts for your Pages at Meta, unless another workspace still uses the same Page. We pause every ad Edwyz runs on this account first.
         </p>
         {offboard.map((o) => (
           <fieldset key={o.adAccountAssetId} className="space-y-2" aria-describedby={groupId}>
@@ -452,6 +556,26 @@ export function DisconnectDialog({
   );
 }
 
+/** A safe picture address from discovery (https only), or null. */
+export function assetPicture(a: Pick<Asset, "type" | "meta">): string | null {
+  const raw = a.type === "instagram" ? a.meta?.profilePictureUrl : a.type === "page" ? a.meta?.pictureUrl : null;
+  if (typeof raw !== "string") return null;
+  try {
+    return new URL(raw).protocol === "https:" ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The display name: Instagram accounts as @username. */
+export function assetName(a: Pick<Asset, "type" | "name" | "externalId" | "meta">): string {
+  if (a.type === "instagram") {
+    const user = a.meta?.username ?? a.name;
+    return user ? `@${user.replace(/^@/, "")}` : a.externalId;
+  }
+  return a.name ?? a.externalId;
+}
+
 function AssetGroups({ assets }: { assets: Asset[] }) {
   if (assets.length === 0) return <p className="mt-4 text-sm text-muted">No assets found.</p>;
   const types = Object.keys(TYPE_LABEL).filter((t) => assets.some((a) => a.type === t));
@@ -464,18 +588,48 @@ function AssetGroups({ assets }: { assets: Asset[] }) {
             {assets
               .filter((a) => a.type === t)
               .map((a) => (
-                <li key={a.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-1.5 text-sm">
-                  <span className="min-w-0 max-w-full truncate">{a.name ?? a.externalId}</span>
-                  <span className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
-                    {a.type === "page" && a.status === "active" && <LeadSync meta={a.meta} />}
-                    <Badge tone={a.status === "active" ? "good" : "neutral"}>{STATUS_LABEL[a.status] ?? a.status}</Badge>
-                  </span>
-                </li>
+                <AssetRow key={a.id} asset={a} />
               ))}
           </ul>
         </div>
       ))}
     </div>
+  );
+}
+
+/**
+ * One asset (docs/IG-PAGE-ADS-SPEC.md 3.2 step 5): Pages say whether this login can run ads for them (the ADVERTISE task),
+ * Instagram accounts show their picture, ad accounts their status. The pictures are decorative; the name is the text.
+ */
+export function AssetRow({ asset: a }: { asset: Asset }) {
+  const picture = assetPicture(a);
+  const active = a.status === "active";
+  const account = a.type === "ad_account" && active ? adAccountStatusLabel(a.meta?.accountStatus) : null;
+  return (
+    <li className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-1.5 text-sm" data-asset-type={a.type}>
+      <span className="flex min-w-0 max-w-full items-center gap-2">
+        {picture && (
+          // eslint-disable-next-line @next/next/no-img-element -- a small remote avatar from Meta's CDN; no optimisation needed
+          <img src={picture} alt="" width={24} height={24} loading="lazy" referrerPolicy="no-referrer" className="h-6 w-6 shrink-0 rounded-full border border-border object-cover" />
+        )}
+        <span className="min-w-0 truncate">{assetName(a)}</span>
+      </span>
+      <span className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+        {a.type === "page" && active && a.meta?.canAdvertise === true && <Badge tone="good">Can run ads</Badge>}
+        {a.type === "page" && active && a.meta?.canAdvertise === false && (
+          <span title="Ask a Page admin to give you the Advertise permission, or connect again as someone who has it.">
+            <Badge tone="warn">Can&apos;t run ads yet</Badge>
+          </span>
+        )}
+        {a.type === "instagram" && active && a.meta?.pageBacked === true && <Badge tone="neutral">Ads only</Badge>}
+        {account && <Badge tone={account.tone}>{account.label}</Badge>}
+        {a.type === "page" && active && <LeadSync meta={a.meta} />}
+        <Badge tone={active ? "good" : "neutral"}>{STATUS_LABEL[a.status] ?? a.status}</Badge>
+      </span>
+      {a.type === "page" && active && a.meta?.canAdvertise === false && (
+        <span className="basis-full text-xs text-muted">To run ads for this Page, connect again as someone who manages its ads, or ask a Page admin for the Advertise permission.</span>
+      )}
+    </li>
   );
 }
 

@@ -144,13 +144,36 @@ export function TenantListTable({ rows, q, filter }: { rows: TenantRow[]; q: str
 
 /* Audit log */
 
-export type AuditRow = { id: string; at: string; action: string; tenantId: string | null; userId: string | null; target: string | null; meta: string };
+export type AuditRow = { id: string; at: string; action: string; tenantId: string | null; tenantName?: string | null; userId: string | null; userEmail?: string | null; target: string | null; meta: string };
 
 const auditColumns: Column<AuditRow>[] = [
   { key: "at", header: "When", cell: (r) => <span className="whitespace-nowrap text-muted">{when(r.at)}</span> },
   { key: "action", header: "What happened", primary: true, cell: (r) => <span className="font-medium">{auditActionLabel(r.action)}</span> },
-  { key: "tenant", header: "Workspace", cell: (r) => (r.tenantId ? <a className={`${link} ${mono}`} href={`/admin/tenants/${r.tenantId}`}>{r.tenantId}</a> : <span className="text-muted">-</span>) },
-  { key: "user", header: "User", cell: (r) => (r.userId ? <span className={mono}>{r.userId}</span> : <span className="text-muted">-</span>) },
+  {
+    key: "tenant",
+    header: "Workspace",
+    cell: (r) =>
+      r.tenantId ? (
+        <a className={r.tenantName ? link : `${link} ${mono}`} href={`/admin/tenants/${r.tenantId}`} title={r.tenantId}>
+          {r.tenantName ?? r.tenantId}
+        </a>
+      ) : (
+        <span className="text-muted">-</span>
+      ),
+  },
+  {
+    key: "user",
+    header: "User",
+    // The link filters the log to this person, the question an admin usually has next.
+    cell: (r) =>
+      r.userId ? (
+        <a className={r.userEmail ? `${link} break-all` : `${link} ${mono}`} href={`/admin/audit?userId=${encodeURIComponent(r.userId)}`} title={`Only actions by ${r.userEmail ?? r.userId}`}>
+          {r.userEmail ?? r.userId}
+        </a>
+      ) : (
+        <span className="text-muted">-</span>
+      ),
+  },
   {
     key: "details",
     header: "Details",

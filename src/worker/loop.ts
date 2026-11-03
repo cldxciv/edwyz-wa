@@ -19,6 +19,7 @@ import { worker as lifecycle } from "@/lib/lifecycle/worker";
 import { worker as metaConnect } from "@/lib/meta-connect/worker";
 import { worker as onboarding } from "@/lib/onboarding/worker";
 import { worker as optimizer } from "@/lib/optimizer/worker";
+import { worker as promote } from "@/lib/promote/worker";
 import { worker as reports } from "@/lib/reports/worker";
 import { worker as routing } from "@/lib/routing/worker";
 import { worker as spend } from "@/lib/spend/worker";
@@ -27,7 +28,7 @@ import { worker as eddy } from "./eddy";
 import { runPeriodic } from "./periodic";
 import type { WorkerModule } from "./registry";
 
-const MODULES: WorkerModule[] = [billing, automation, integrations, lifecycle, reports, chatbots, routing, metaConnect, onboarding, insights, optimizer, conversions, commerce, content, leads, inbox, spend, eddy];
+const MODULES: WorkerModule[] = [billing, automation, integrations, lifecycle, reports, chatbots, routing, metaConnect, onboarding, insights, optimizer, conversions, commerce, content, leads, inbox, spend, eddy, promote];
 
 const BATCH = 25;
 const STALE_EVENT_MS = 5 * 60_000;
@@ -86,9 +87,18 @@ export function resetSweepState(): void {
 /** swept is the number of stale webhook events the safety-net sweep processed successfully in this pass. */
 export type PassResult = { webhook: number; send: number; broadcast: number; swept: number; queues: Record<string, number>; periodic: string[] };
 
+/**
+ * A pass claims no further scheduled task once its tasks have run this long; the ones it did not claim stay due and run in the
+ * next pass. So a pass where several slow sweeps fall due together never holds the queues behind it, or the tick's answer, for
+ * minutes. The first due task always runs.
+ */
+export const PERIODIC_PASS_BUDGET_MS = 15_000;
+
 export type PassOptions = {
   /** Skip the scheduled tasks. The daemon passes false on most passes: they are due every few minutes or hours at most. */
   periodic?: boolean;
+  /** Default PERIODIC_PASS_BUDGET_MS. */
+  periodicBudgetMs?: number;
 };
 
 /**
@@ -109,9 +119,17 @@ export async function runPass(options: PassOptions = {}): Promise<PassResult> {
 
   const queues: Record<string, number> = {};
   const periodic: string[] = [];
+  const periodicBudget = options.periodicBudgetMs ?? PERIODIC_PASS_BUDGET_MS;
+  let periodicMs = 0;
   for (const module of MODULES) {
     for (const [queue, handler] of Object.entries(module.queues)) queues[queue] = await runDueJobs(queue, handler, BATCH);
-    if (options.periodic !== false) for (const task of module.periodic) if (await runPeriodic(task)) periodic.push(task.name);
+    if (options.periodic === false) continue;
+    for (const task of module.periodic) {
+      if (periodicMs > periodicBudget) break;
+      const started = Date.now();
+      if (await runPeriodic(task)) periodic.push(task.name);
+      periodicMs += Date.now() - started;
+    }
   }
   return { webhook, send, broadcast, swept, queues, periodic };
 }

@@ -1,4 +1,5 @@
 import { getRateCard } from "@/lib/admin/ratecard";
+import { mayReceive, receivableWhere, sendKindForCategory } from "@/lib/contacts/opt-out";
 import { prisma } from "@/lib/db";
 import { emitBroadcastCompleted } from "@/lib/integrations/emitters";
 import { sendTemplateMessage } from "@/lib/inbox/service";
@@ -14,6 +15,7 @@ import { backgroundGate } from "@/lib/tenant-lifecycle-state";
 import { TEMPLATE_BLOCK_CODES, TENANT_BLOCKED, isTemplateBlockCode, pauseForBlockedTemplate, pauseWithReason } from "./blocked";
 import { estimateBroadcastHold, holdBroadcastFor, openBulkHold, releaseBulkFor, releaseBulkHold } from "./cost";
 import { acquireRunLease, enqueueBroadcastRun, releaseRunLease } from "./jobs";
+import { mediaWakeAt, refreshBroadcastMedia } from "./media";
 import { type MissingValuePolicy, type VariableMap, buildRecipientComponents } from "./mapping";
 import { notifyBroadcastPaused } from "./notify";
 import { type PauseReasonCode, storePauseReason } from "./pause";
@@ -61,7 +63,17 @@ function errorCodeOf(error: unknown): string {
 type Recipient = {
   id: string;
   attempts?: number;
-  contact: { id: string; name: string | null; phone?: string | null; bsuid?: string | null; attributes: unknown; optIn: boolean; optedOutAt: Date | null };
+  contact: {
+    id: string;
+    name: string | null;
+    phone?: string | null;
+    bsuid?: string | null;
+    attributes: unknown;
+    optIn: boolean;
+    optedOutAt: Date | null;
+    /** Conversations of the contact that a person blocked (only those are selected). */
+    conversations?: { id: string }[];
+  };
 };
 
 const policyOf = (raw: unknown): MissingValuePolicy => (raw === "fallback" || raw === "fail" ? raw : "skip");
@@ -97,7 +109,10 @@ export async function sendOne(
   if (claimed.count === 0) return;
   const finish = (data: Record<string, unknown>) => prisma.broadcastRecipient.update({ where: { id: r.id, tenantId: b.tenantId }, data });
 
-  if (!r.contact.optIn || r.contact.optedOutAt) return void (await finish({ status: "skipped" }));
+  // A broadcast needs a recorded opt-in for every template; the opt-out (lib/contacts/opt-out.ts) blocks its marketing ones.
+  if (!r.contact.optIn || !mayReceive(r.contact, sendKindForCategory(b.template.category))) return void (await finish({ status: "skipped" }));
+  // Blocked after the audience was frozen: never messaged, and the report says why.
+  if (r.contact.conversations?.length) return void (await finish({ status: "skipped", errorCode: "blocked" }));
   // A contact known only by BSUID (no phone) can get any template except authentication (login code) ones, which Meta sends to phone numbers only.
   if (r.contact.phone === null && (!r.contact.bsuid || b.template.category?.toUpperCase() === "AUTHENTICATION")) {
     return void (await finish({ status: "skipped", errorCode: r.contact.bsuid ? "bsuid_auth_template" : "no_recipient" }));
@@ -176,34 +191,40 @@ export async function syncRecipientFromMessage(messageId: string): Promise<boole
   if (!data) return false;
   const { count } = await prisma.broadcastRecipient.updateMany({ where: { id: recipient.id, tenantId: recipient.tenantId, status: "queued" }, data });
   if (count > 0 && blockedMessage(message ?? undefined) && recipient.broadcast?.id) {
-    await pauseForBlockedTemplate({ id: recipient.broadcast.id, tenantId: recipient.tenantId, templateId: recipient.broadcast.templateId, name: recipient.broadcast.name }, true);
+    await pauseForBlockedTemplate({ id: recipient.broadcast.id, tenantId: recipient.tenantId, templateId: recipient.broadcast.templateId, name: recipient.broadcast.name }, true, "template_paused", message?.errorCode);
   }
   return count > 0;
 }
 
-/** Settles queued recipients from their messages. Returns how many were refused because the template is paused or disabled. */
-async function reconcileRecipients(b: { id: string; tenantId: string; retryDays?: number; startedAt?: Date | null }): Promise<number> {
+/**
+ * Settles queued recipients from their messages. Returns how many were refused because the template is paused, disabled or gone,
+ * and the code of the first refusal (132001 turns the template off instead of pausing it).
+ */
+async function reconcileRecipients(b: { id: string; tenantId: string; retryDays?: number; startedAt?: Date | null }): Promise<{ blocked: number; code: string | null }> {
+  const out = { blocked: 0, code: null as string | null };
   const queued = await prisma.broadcastRecipient.findMany({
     where: { tenantId: b.tenantId, broadcastId: b.id, status: "queued", messageId: { not: null } },
     orderBy: { id: "asc" },
     take: SYNC_LIMIT,
     select: { id: true, messageId: true, attempts: true },
   });
-  if (queued.length === 0) return 0;
+  if (queued.length === 0) return out;
   const messages = await prisma.message.findMany({
     where: { tenantId: b.tenantId, id: { in: queued.map((r) => r.messageId as string) } },
     select: { id: true, status: true, wamid: true, errorCode: true, statusTimeline: true },
   });
   const byId = new Map(messages.map((m) => [m.id, m]));
-  let blocked = 0;
   for (const r of queued) {
     const m = byId.get(r.messageId as string);
     const data = m ? recipientUpdateFromMessage(m, new Date(), { attempts: r.attempts, retryDays: b.retryDays ?? 0, startedAt: b.startedAt ?? null }) : null;
     if (!data) continue;
     const { count } = await prisma.broadcastRecipient.updateMany({ where: { id: r.id, tenantId: b.tenantId, status: "queued" }, data });
-    if (count > 0 && blockedMessage(m)) blocked++;
+    if (count > 0 && blockedMessage(m)) {
+      out.blocked++;
+      out.code ??= m?.errorCode ?? null;
+    }
   }
-  return blocked;
+  return out;
 }
 
 const countInFlight = (b: { id: string; tenantId: string }) =>
@@ -218,6 +239,7 @@ export async function requeueDueRetries(b: RetryBroadcast, now: Date): Promise<n
   const days = b.retryDays ?? 0;
   if (days <= 0) return 0;
   const base = { tenantId: b.tenantId, broadcastId: b.id, status: "failed" as const, errorCode: RETRYABLE_ERROR_CODE, retryAfter: { not: null } };
+  // Only Meta's per-user marketing cap (131049) is retried, so these are marketing sends: an opt-out ends the retry.
   const optedOut = { OR: [{ contact: { optIn: false } }, { contact: { optedOutAt: { not: null } } }] };
   await prisma.broadcastRecipient.updateMany({ where: { ...base, ...optedOut }, data: { retryAfter: null } });
   if (!retryWindowOpen(b.startedAt, days, now)) {
@@ -225,7 +247,7 @@ export async function requeueDueRetries(b: RetryBroadcast, now: Date): Promise<n
     return 0;
   }
   const { count } = await prisma.broadcastRecipient.updateMany({
-    where: { ...base, retryAfter: { lte: now }, contact: { optIn: true, optedOutAt: null } },
+    where: { ...base, retryAfter: { lte: now }, contact: { optIn: true, ...receivableWhere("marketing") } },
     data: { status: "pending", errorCode: null, retryAfter: null },
   });
   return count;
@@ -241,11 +263,35 @@ async function nextRetryAt(b: RetryBroadcast): Promise<Date | null> {
   return row?.retryAfter ?? null;
 }
 
-/** Completes only when nothing is pending, nothing awaits a retry, and every queued message has settled; otherwise checks again later. */
+/**
+ * Meta can report a per-user cap failure (131049) by webhook a little after a message was accepted as sent. With retries on, the
+ * broadcast stays open this long after its last send, so such a late failure is still retried (a finished broadcast never is).
+ */
+export const LATE_FAILURE_GRACE_MS = 10 * 60_000;
+
+/** When the grace for late failures ends, or null when retries are off, the window has closed, or nothing was sent. */
+async function lateFailureWait(b: RetryBroadcast, now: Date): Promise<Date | null> {
+  const days = b.retryDays ?? 0;
+  if (days <= 0 || !retryWindowOpen(b.startedAt, days, now)) return null;
+  const last = await prisma.broadcastRecipient.findFirst({
+    where: { tenantId: b.tenantId, broadcastId: b.id, sentAt: { not: null } },
+    orderBy: { sentAt: "desc" },
+    select: { sentAt: true },
+  });
+  const until = last?.sentAt ? new Date(last.sentAt.getTime() + LATE_FAILURE_GRACE_MS) : null;
+  return until && until.getTime() > now.getTime() ? until : null;
+}
+
+/**
+ * Completes only when nothing is pending, nothing awaits a retry, every queued message has settled and (with retries on) a late
+ * 131049 has had time to arrive; otherwise checks again later.
+ */
 async function completeOrWait(b: RetryBroadcast, now: Date) {
   if ((await countInFlight(b)) > 0) return void (await requeue(b.id, new Date(now.getTime() + WAIT_MS)));
   const retryAt = await nextRetryAt(b);
   if (retryAt) return void (await requeue(b.id, retryAt.getTime() > now.getTime() ? retryAt : new Date(now.getTime() + WAIT_MS)));
+  const grace = await lateFailureWait(b, now);
+  if (grace) return void (await requeue(b.id, grace));
   await complete(b);
 }
 
@@ -321,20 +367,25 @@ async function holdWhenDue(b: { id: string; tenantId: string; name: string; phon
 async function processLocked(broadcastId: string, now: Date): Promise<void> {
   const b = await prisma.broadcast.findUnique({ where: { id: broadcastId }, include: { template: true, phoneNumber: true } });
   if (!b) return;
-  const blockedByTemplate = await reconcileRecipients(b);
+  const refused = await reconcileRecipients(b);
 
   // A finished broadcast never keeps money aside (cancel and completion release it; this catches anything left over).
   if (FINISHED.has(b.status)) return void (await releaseBulkFor(b.tenantId, { type: "broadcast", id: b.id }, `Broadcast "${b.name}" ended, so what it did not use went back to your WhatsApp limit.`, WORKER));
 
   if (b.status === "scheduled") {
-    if (b.scheduledAt && b.scheduledAt > now) return void (await requeue(b.id, b.scheduledAt));
+    if (b.scheduledAt && b.scheduledAt > now) {
+      // An uploaded header file lives 30 days at WhatsApp: a broadcast scheduled further out wakes up to upload it again in time.
+      const refreshed = await refreshBroadcastMedia(b, now);
+      const wake = mediaWakeAt(refreshed, now);
+      return void (await requeue(b.id, wake && wake < b.scheduledAt ? wake : b.scheduledAt));
+    }
   } else if (b.status !== "sending") return;
 
   const gate = await backgroundGate(b.tenantId);
   if (gate === "blocked") return void (await pauseForBlockedTenant(b));
   if (gate === "unknown") return void (await requeue(b.id, new Date(now.getTime() + WAIT_MS)));
 
-  if (blockedByTemplate > 0) return void (await pauseForBlockedTemplate(b, true));
+  if (refused.blocked > 0) return void (await pauseForBlockedTemplate(b, true, "template_paused", refused.code));
   if (TEMPLATE_BLOCKED_STATUSES.has(b.template.status)) return void (await pauseForBlockedTemplate(b, false));
 
   const stop = await spendStopReason(b, now);
@@ -369,12 +420,17 @@ async function processLocked(broadcastId: string, now: Date): Promise<void> {
     where: { tenantId: b.tenantId, broadcastId: b.id, status: "pending" },
     orderBy: { id: "asc" },
     take: quota,
-    include: { contact: { select: { id: true, name: true, phone: true, bsuid: true, attributes: true, optIn: true, optedOutAt: true } } },
+    include: {
+      contact: {
+        select: { id: true, name: true, phone: true, bsuid: true, attributes: true, optIn: true, optedOutAt: true, conversations: { where: { tenantId: b.tenantId, status: "blocked" }, select: { id: true }, take: 1 } },
+      },
+    },
   });
   // The messages take their estimate from the broadcast's hold; without one (none taken, expired, used up) each reserves its own.
   const reservationId = batch.length > 0 ? await openBulkHold(b.tenantId, { type: "broadcast", id: b.id }) : null;
+  const sending = batch.length > 0 ? { ...b, variableMap: await refreshBroadcastMedia(b, now) } : b;
   for (const r of batch) {
-    const outcome = await sendOne(b, r, reservationId);
+    const outcome = await sendOne(sending, r, reservationId);
     if (outcome === "blocked") return void (await pauseForBlockedTenant(b));
     if (outcome === "retry") return void (await requeue(b.id, new Date(now.getTime() + WAIT_MS)));
     if (outcome === "missing") return void (await pauseWithReason(b, "missing_values", true));

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { cn } from "@/components/ui";
 import { NODE_META, cardSummary, handlesOf, isBranching } from "./catalog";
 import { NODE_W, bounds, edgePath, inputPosition, nodeHeight, portPosition } from "./layout";
-import { screenToCanvas, zoomAt, type View } from "./viewport";
+import { screenToCanvas, wheelZoom, zoomAt, type View } from "./viewport";
 import type { FlowDefinition, FlowNode, Point } from "./types";
 
 type Drag =
@@ -62,9 +62,10 @@ export function Canvas(p: CanvasProps) {
     const el = ref.current;
     if (!el || locked) return;
     const onWheel = (e: WheelEvent) => {
+      const factor = wheelZoom(e);
+      if (factor === null) return; // a plain wheel scrolls the page
       e.preventDefault();
       const r = el.getBoundingClientRect();
-      const factor = Math.exp(-e.deltaY * 0.0015);
       propsRef.current.onView(zoomAt(viewRef.current, factor, e.clientX - r.left, e.clientY - r.top));
     };
     el.addEventListener("wheel", onWheel, { passive: false });

@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Alert, Button, Dialog, FormField, ProgressBar, Stat, Textarea, toast, DataTable, type Column } from "@/components/ui";
+import type { ExistingContacts } from "@/lib/contacts/import";
 import {
   type ImportAnalysis,
   type ImportReport,
+  EXISTING_CHOICES,
   MAX_IMPORT_BYTES,
   addChunkReport,
   analyzeImport,
@@ -12,6 +14,8 @@ import {
   emptyReport,
   friendlyError,
   importProgress,
+  importResultStats,
+  importQuery,
   importSummary,
   sampleCsv,
 } from "./helpers";
@@ -20,7 +24,8 @@ import { Disclosure } from "./Disclosure";
 type Ok = Extract<ImportAnalysis, { ok: true }>;
 type Preview = Ok["preview"][number];
 type Step = "choose" | "review" | "importing" | "done";
-type Outcome = { report: ImportReport; imported: number; total: number; stopped: "user" | "error" | null; message: string };
+/** kept: people already saved that the batches left alone (the "skip" choice), counted apart from duplicates in the file. */
+type Outcome = { report: ImportReport; imported: number; total: number; stopped: "user" | "error" | null; message: string; existing: ExistingContacts; kept: number };
 
 const previewColumns: Column<Preview>[] = [
   { key: "name", header: "Name", primary: true, cell: (r) => r.name || <span className="text-muted">No name</span> },
@@ -46,6 +51,8 @@ export function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone:
   const [problem, setProblem] = useState("");
   const [fileName, setFileName] = useState("");
   const [consent, setConsent] = useState(false);
+  const [existing, setExisting] = useState<ExistingContacts>("update");
+  const existingHint = useId();
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [stopping, setStopping] = useState(false);
@@ -100,6 +107,8 @@ export function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone:
     let report = emptyReport();
     report.skipped = analysis.duplicates;
     report.errors = analysis.rows.filter((r) => r.status === "invalid").map((r) => ({ row: r.row, reason: r.reason ?? "Not a valid phone number" }));
+    const choice = existing;
+    let kept = 0;
     let imported = 0;
     let stopped: Outcome["stopped"] = null;
     let message = "";
@@ -113,10 +122,13 @@ export function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone:
         break;
       }
       try {
-        const res = await fetch("/api/contacts/import", { method: "POST", headers: { "content-type": "text/csv" }, body: chunk.csv, credentials: "same-origin" });
+        const res = await fetch(`/api/contacts/import${importQuery(choice)}`, { method: "POST", headers: { "content-type": "text/csv" }, body: chunk.csv, credentials: "same-origin" });
         const json = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error((json as { error?: string }).error ?? "");
-        report = addChunkReport(report, (json as { report: ImportReport }).report, chunk.rows);
+        const part = (json as { report: ImportReport }).report;
+        report = addChunkReport(report, part, chunk.rows);
+        // The file's own duplicates were left out of the batches, so what a batch skipped was already saved.
+        if (choice === "skip") kept += part.skipped;
         imported += chunk.rows.length;
         setProgress({ done: imported, total: analysis.ready });
       } catch (err) {
@@ -127,10 +139,10 @@ export function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone:
     }
 
     stopRef.current = null;
-    setOutcome({ report, imported, total: analysis.ready, stopped, message });
+    setOutcome({ report, imported, total: analysis.ready, stopped, message, existing: choice, kept });
     setStep("done");
     if (imported > 0) onDone();
-    if (!stopped) toast.success("Import finished", { description: importSummary(report) });
+    if (!stopped) toast.success("Import finished", { description: importSummary(report, kept) });
     else if (stopped === "error") toast.error("Import stopped", { description: message });
   }
 
@@ -191,7 +203,7 @@ export function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone:
         <div className="space-y-4">
           <StepHeading headingRef={stepHeading}>Choose your file</StepHeading>
           <Alert tone="warn" title="Only include people who agreed to hear from you">
-            Mark someone as opted in only if they really agreed to get WhatsApp messages from your business, and you can prove it. People who opted out are never opted in again by an import.
+            Mark someone as opted in only if they really agreed to get WhatsApp messages from your business, and you can prove it. A Shopify or email &quot;accepts marketing&quot; column is not a WhatsApp opt-in, so it is kept only as a detail. People who opted out are never opted in again by an import.
           </Alert>
 
           <FormField label="CSV file" hint="Up to 10,000 contacts and 2 MB. Export from Excel or Google Sheets as CSV.">
@@ -209,7 +221,7 @@ export function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone:
               <p>The first row names the columns. Only phone is required.</p>
               <ul className="list-disc space-y-1 pl-5">
                 <li>
-                  <b className="text-foreground">phone</b>: with country code, like +919876543210
+                  <b className="text-foreground">phone</b>: with country code, like +919876543210. A column called Phone Number, Mobile, WhatsApp or wa_id works too, so files exported from other tools can be used as they are.
                 </li>
                 <li>
                   <b className="text-foreground">name</b>: the person&rsquo;s name
@@ -231,9 +243,19 @@ export function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone:
             </div>
           </Disclosure>
 
-          <Disclosure title="Or paste your contacts">
+          {/* Open again after Back from the review, so pasted rows stay in view to be fixed */}
+          <Disclosure title="Or paste your contacts" defaultOpen={!fileName && !!text.trim()}>
             <FormField label="CSV text">
-              <Textarea rows={6} value={text} onChange={(e) => setText(e.target.value)} className="font-mono text-xs" spellCheck={false} />
+              <Textarea
+                rows={6}
+                value={text}
+                onChange={(e) => {
+                  setText(e.target.value);
+                  setFileName(""); // what gets reviewed is now the edited text, not the chosen file
+                }}
+                className="font-mono text-xs"
+                spellCheck={false}
+              />
             </FormField>
           </Disclosure>
 
@@ -256,11 +278,11 @@ export function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone:
 
           {analysis.ready === 0 ? (
             <Alert tone="bad" title="There is nothing to import">
-              None of the {n(analysis.total)} rows has a usable phone number. Fix the file and choose it again.
+              None of the {n(analysis.total)}{" "}rows has a usable phone number. Fix the file and choose it again.
             </Alert>
           ) : (
             <Alert tone="good">
-              {n(analysis.ready)} of {n(analysis.total)} {analysis.total === 1 ? "row is" : "rows are"} ready. People already in your contacts are updated, not duplicated. Numbers without a country code are treated as Indian (+91).
+              {n(analysis.ready)} of {n(analysis.total)} {analysis.total === 1 ? "row is" : "rows are"}{" "}ready. Nobody already in your contacts is added twice. Numbers without a country code are treated as Indian (+91).
             </Alert>
           )}
 
@@ -288,15 +310,37 @@ export function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone:
             </div>
           )}
 
+          {analysis.phoneColumn.toLowerCase() !== "phone" && <p className="text-sm text-muted">Phone numbers are read from the column <b className="text-foreground">{analysis.phoneColumn}</b>.</p>}
+
           {analysis.extraColumns.length > 0 && (
             <p className="text-sm text-muted">Extra columns saved as details on each contact: {analysis.extraColumns.join(", ")}.</p>
+          )}
+
+          {analysis.ready > 0 && (
+            <fieldset aria-describedby={existingHint}>
+              <legend className="text-sm font-medium">People already in your contacts</legend>
+              <p id={existingHint} className="text-xs text-muted">
+                Matched by phone number. An import never opts in someone who opted out.
+              </p>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                {EXISTING_CHOICES.map((c) => (
+                  <label key={c.value} className="flex min-h-10 cursor-pointer items-start gap-3 rounded-control border border-border-strong bg-raised p-3 has-checked:border-accent has-checked:bg-accent-soft">
+                    <input type="radio" name="import-existing" value={c.value} checked={existing === c.value} onChange={() => setExisting(c.value)} className="mt-0.5 h-5 w-5 shrink-0 accent-(--accent)" />
+                    <span className="text-sm">
+                      <span className="block font-medium">{c.label}</span>
+                      <span className="block text-xs text-muted">{c.description}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
           )}
 
           {analysis.optInYes > 0 && (
             <label className="flex min-h-10 items-start gap-3 rounded-lg border border-border-strong p-3 text-sm">
               <input type="checkbox" className="mt-0.5 h-5 w-5 shrink-0 accent-(--accent)" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
               <span>
-                I confirm that the {n(analysis.optInYes)} {analysis.optInYes === 1 ? "person" : "people"} marked as opted in agreed to receive WhatsApp messages from my business.
+                I confirm that the {n(analysis.optInYes)} {analysis.optInYes === 1 ? "person" : "people"}{" "}marked as opted in agreed to receive WhatsApp messages from my business.
               </span>
             </label>
           )}
@@ -308,7 +352,7 @@ export function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone:
           <StepHeading headingRef={stepHeading}>{stopping ? "Stopping after this batch" : "Importing your contacts"}</StepHeading>
           <ProgressBar label="Import progress" showLabel showValue value={progress.done} max={Math.max(progress.total, 1)} valueText={`${importProgress(progress.done, progress.total)}%`} />
           <p role="status" aria-live="polite" className="text-sm text-muted">
-            Importing {n(progress.done)} of {n(progress.total)} contacts. Keep this window open until it finishes.
+            Importing {n(progress.done)} of {n(progress.total)}{" "}contacts. Keep this window open until it finishes.
           </p>
         </div>
       )}
@@ -318,24 +362,23 @@ export function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone:
           <StepHeading headingRef={stepHeading}>Import results</StepHeading>
           {outcome.stopped === "user" && (
             <Alert tone="warn" title="Import stopped">
-              {n(outcome.imported)} of {n(outcome.total)} contacts were imported before you stopped. Import the file again to add the rest; people already added will not be duplicated.
+              {n(outcome.imported)} of {n(outcome.total)}{" "}contacts were imported before you stopped. Import the file again to add the rest; people already added will not be duplicated.
             </Alert>
           )}
           {outcome.stopped === "error" && (
             <Alert tone="bad" title="Import stopped early">
-              {outcome.message} {n(outcome.imported)} of {n(outcome.total)} contacts were imported. Fix the problem and import the file again; people already added will not be duplicated.
+              {outcome.message} {n(outcome.imported)} of {n(outcome.total)}{" "}contacts were imported. Fix the problem and import the file again; people already added will not be duplicated.
             </Alert>
           )}
           {!outcome.stopped && (
             <Alert tone="good" title="Import finished">
-              {importSummary(outcome.report)}
+              {importSummary(outcome.report, outcome.kept)}
             </Alert>
           )}
           <div className="grid grid-cols-2 gap-3 min-[520px]:grid-cols-4">
-            <Stat label="Added" value={n(outcome.report.created)} />
-            <Stat label="Updated" value={n(outcome.report.updated)} />
-            <Stat label="Duplicates skipped" value={n(outcome.report.skipped)} />
-            <Stat label="Left out" value={n(outcome.report.errors.length)} />
+            {importResultStats(outcome.report, outcome.existing, outcome.kept).map((s) => (
+              <Stat key={s.label} label={s.label} value={n(s.value)} />
+            ))}
           </div>
           {outcome.report.errors.length > 0 && (
             <Disclosure title={`Rows that were left out (${n(outcome.report.errors.length)})`}>

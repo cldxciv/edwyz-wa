@@ -37,8 +37,9 @@ import { POST as postForm } from "@/app/api/leads/forms/route";
 import { POST as postSequence } from "@/app/api/leads/sequences/route";
 import { detectConsent, extractIdentity, hasConsentField, isAffirmative, isConsentKey, mapFieldData, mapFieldNames } from "@/lib/leads/fields";
 import { handleLeadJob } from "@/lib/leads/ingest";
+import { createForm, CREATED_FORM_CONSENT, leadSource, listForms } from "@/lib/leads/service";
 import { fetchFormDefinitionKeys } from "@/lib/leads/form-definition";
-import { onInboundFromContact, processRun } from "@/lib/leads/runner";
+import { onContactOptedOut, onInboundFromContact, processRun } from "@/lib/leads/runner";
 
 const ORIGIN = "https://wa.edwyz.com";
 const SECRET = "app-secret";
@@ -172,6 +173,16 @@ describe("field mapping", () => {
 
 describe("lead ingestion", () => {
   const run = () => handleLeadJob({ leadgenId: "L1", pageId: "p1", formId: "f1" });
+
+  it("queues a Lead conversion for every new lead, at the time Meta says it arrived", async () => {
+    mocks.graph.mockResolvedValue(graphLead([phoneField]));
+    await run();
+    expect(mocks.convert).toHaveBeenCalledWith("t1", { leadId: "lead1", contactId: "c1", eventName: "Lead", eventTime: new Date("2026-10-01T10:00:00+0000") });
+    mocks.convert.mockClear();
+    db.lead.findFirst.mockResolvedValue({ id: "lead1" });
+    await run();
+    expect(mocks.convert).not.toHaveBeenCalled();
+  });
 
   it("creates an opted-in contact when the lead answered a consent field affirmatively", async () => {
     db.leadForm.upsert.mockResolvedValue({ id: "form1", consentText: "I agree" });
@@ -361,11 +372,21 @@ describe("sequence runner", () => {
     expect(mocks.send).not.toHaveBeenCalled();
   });
 
-  it("stops the run for an opted-out contact", async () => {
-    setup(baseRun(), { optedOutAt: new Date() });
-    await processRun("r1");
+  it("still sends a utility step to a contact who opted out: an opt-out stops marketing only", async () => {
+    setup(baseRun(), { optedOutAt: new Date(), optIn: false });
+    await processRun("r1", new Date("2026-10-01T10:00:00Z"));
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    expect(mocks.send.mock.calls[0][0]).toMatchObject({ templateName: "welcome", origin: "lead_sequence" });
+    expect(db.leadSequenceRun.updateMany.mock.calls.at(-1)![0].data.stepIndex).toBe(1);
+  });
+
+  it("skips a marketing step for a contact who opted out, even with an opt-in on record, and moves on to the next step", async () => {
+    setup(baseRun(), { optedOutAt: new Date(), optIn: true }, { category: "MARKETING" });
+    await processRun("r1", new Date("2026-10-01T10:00:00Z"));
     expect(mocks.send).not.toHaveBeenCalled();
-    expect(db.leadSequenceRun.updateMany.mock.calls.at(-1)![0].data.status).toBe("stopped");
+    const last = db.leadSequenceRun.updateMany.mock.calls.at(-1)![0];
+    expect(last.data.stepIndex).toBe(1);
+    expect(last.data.status).toBeUndefined();
   });
 
   it("stops before a later step when the contact has replied", async () => {
@@ -386,6 +407,34 @@ describe("sequence runner", () => {
     expect(await onInboundFromContact("t1", "c1")).toBe(1);
     expect(db.leadSequenceRun.findMany.mock.calls[0][0].where).toMatchObject({ tenantId: "t1", status: "active", lead: { contactId: "c1", tenantId: "t1" } });
     expect(db.leadSequenceRun.updateMany.mock.calls[0][0]).toMatchObject({ where: { id: "a", tenantId: "t1", status: "active" }, data: { status: "stopped" } });
+  });
+
+  it("onContactOptedOut stops only runs with nothing left that may still go: marketing steps only", async () => {
+    const steps = (...templateIds: string[]) => templateIds.map((templateId, i) => ({ delayMinutes: i ? 5 : 0, templateId, stopOnReply: false }));
+    db.leadSequenceRun.findMany.mockResolvedValue([
+      { id: "promo", stepIndex: 0, sequence: { steps: steps("mkt1", "mkt2") } },
+      { id: "mixed", stepIndex: 0, sequence: { steps: steps("mkt1", "util1") } },
+      { id: "utility-done", stepIndex: 1, sequence: { steps: steps("util1", "mkt2") } },
+      { id: "bot", stepIndex: 0, sequence: { steps: [{ delayMinutes: 0, chatbotId: "b1", stopOnReply: false }] } },
+    ]);
+    db.template.findMany.mockResolvedValue([
+      { id: "mkt1", category: "MARKETING" },
+      { id: "mkt2", category: "MARKETING" },
+      { id: "util1", category: "UTILITY" },
+    ]);
+    db.leadSequenceRun.updateMany.mockResolvedValue({ count: 1 });
+    expect(await onContactOptedOut("t1", "c1")).toBe(2);
+    expect(db.leadSequenceRun.findMany.mock.calls[0][0].where).toMatchObject({ tenantId: "t1", status: "active", lead: { contactId: "c1", tenantId: "t1" } });
+    expect(db.template.findMany.mock.calls[0][0].where).toMatchObject({ tenantId: "t1", status: "approved" });
+    expect(db.leadSequenceRun.updateMany.mock.calls.map((c) => c[0].where.id)).toEqual(["promo", "utility-done"]);
+    for (const call of db.leadSequenceRun.updateMany.mock.calls) expect(call[0]).toMatchObject({ where: { tenantId: "t1", status: "active" }, data: { status: "stopped", nextRunAt: null } });
+  });
+
+  it("onContactOptedOut does nothing when the contact has no running sequence", async () => {
+    db.leadSequenceRun.findMany.mockResolvedValue([]);
+    expect(await onContactOptedOut("t1", "c1")).toBe(0);
+    expect(db.template.findMany).not.toHaveBeenCalled();
+    expect(db.leadSequenceRun.updateMany).not.toHaveBeenCalled();
   });
 });
 
@@ -510,6 +559,74 @@ describe("api routes", () => {
     expect((await postSequence(json("/api/leads/sequences", "POST", { name: "s", steps: [{ delayMinutes: 0, templateId: "tp1" }] }))).status).toBe(201);
     mocks.role = "agent";
     expect((await postSequence(json("/api/leads/sequences", "POST", { name: "s", steps: [] }))).status).toBe(403);
+  });
+});
+
+describe("lead forms built in Edwyz and hidden forms (IG-PAGE-ADS-SPEC D13, D35, PRM-10)", () => {
+  const admin = { userId: "u1", tenantId: "t1", role: "admin" as const };
+  const row = (over: Record<string, unknown> = {}) => ({ id: "f1", metaFormId: "m1", name: null, consentText: null, status: "active", createdAt: new Date(), ...over });
+
+  it("listForms leaves hidden forms out and shows each form's origin, form type and test-sent time", async () => {
+    const until = new Date("2026-10-31T10:10:00Z");
+    db.leadForm.findMany.mockResolvedValue([row({ origin: "created", formType: "higher_intent", locale: "en_US", testLeadUntil: until, hiddenAt: null, pageAssetId: "a1" }), row({ id: "f2", metaFormId: "m2" })]);
+    // A stored consentAssumed never shows on a built form.
+    db.platformSetting.findMany.mockResolvedValue([{ key: "leads:form-settings:t1:f1", value: { consentAssumed: true } }]);
+    const res = await (await import("@/app/api/leads/forms/route")).GET(new Request(`${ORIGIN}/api/leads/forms`));
+    expect(res.status).toBe(200);
+    expect(db.leadForm.findMany.mock.calls[0][0].where).toEqual({ tenantId: "t1", hiddenAt: null });
+    const items = (await res.json()).items as Record<string, unknown>[];
+    expect(items[0]).toMatchObject({ id: "f1", origin: "created", formType: "higher_intent", locale: "en_US", testLeadUntil: until.toISOString(), hidden: false, consentAssumed: false, pageAssetId: "a1" });
+    expect(items[1]).toMatchObject({ id: "f2", origin: "registered", formType: null, testLeadUntil: null, hidden: false });
+    await listForms("t1", { includeHidden: true, pageAssetId: "a1" });
+    expect(db.leadForm.findMany.mock.calls[1][0].where).toEqual({ tenantId: "t1", pageAssetId: "a1" });
+  });
+
+  it("createForm refuses consentAssumed on a created form, and so does PATCH for a form built in Edwyz", async () => {
+    db.metaAsset.findFirst.mockResolvedValue({ id: "a1" });
+    await expect(createForm(admin, { metaFormId: "m9", pageAssetId: "a1", consentAssumed: true }, { origin: "created" })).rejects.toMatchObject({ status: 400, message: CREATED_FORM_CONSENT });
+    expect(db.leadForm.upsert).not.toHaveBeenCalled();
+    db.leadForm.findFirst.mockResolvedValue({ id: "f1", origin: "created" });
+    const res = await patchForm(json("/api/leads/forms/f1", "PATCH", { consentAssumed: true }), ctx("f1"));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe(CREATED_FORM_CONSENT);
+    expect(db.platformSetting.upsert).not.toHaveBeenCalled();
+    // Turning it off, or editing the consent text, is still fine.
+    db.leadForm.findMany.mockResolvedValue([]);
+    expect((await patchForm(json("/api/leads/forms/f1", "PATCH", { consentAssumed: false }), ctx("f1"))).status).toBe(200);
+  });
+
+  it("a route body never sets origin, spec, form type, locale, Meta status or copiedFromId", async () => {
+    db.metaAsset.findFirst.mockResolvedValue({ id: "a1" });
+    db.leadForm.upsert.mockResolvedValue({ id: "form9" });
+    db.leadForm.findFirst.mockResolvedValue(row({ id: "form9", metaFormId: "m9" }));
+    const body = { metaFormId: "m9", pageAssetId: "a1", origin: "created", spec: { questions: [] }, formType: "higher_intent", locale: "en_US", metaStatus: "ACTIVE", copiedFromId: "f1", hiddenAt: null };
+    expect((await postForm(json("/api/leads/forms", "POST", body))).status).toBe(201);
+    expect(db.leadForm.upsert.mock.calls[0][0]).toEqual({
+      where: { tenantId_metaFormId: { tenantId: "t1", metaFormId: "m9" } },
+      create: { tenantId: "t1", pageAssetId: "a1", metaFormId: "m9" },
+      update: {},
+    });
+  });
+
+  it("server callers register a built form with its spec, and a later import keeps origin created and the built spec", async () => {
+    db.metaAsset.findFirst.mockResolvedValue({ id: "a1" });
+    db.leadForm.upsert.mockResolvedValue({ id: "form9" });
+    db.leadForm.findFirst.mockResolvedValueOnce(null).mockResolvedValue(row({ id: "form9", metaFormId: "m9", origin: "created" }));
+    const spec = { name: "Salon leads", questions: [{ type: "FULL_NAME" }] };
+    await createForm(admin, { metaFormId: "m9", pageAssetId: "a1" }, { origin: "created", spec, formType: "more_volume", locale: "en_US", metaStatus: "ACTIVE" });
+    const built = db.leadForm.upsert.mock.calls[0][0];
+    expect(built.create).toMatchObject({ tenantId: "t1", pageAssetId: "a1", metaFormId: "m9", origin: "created", spec, formType: "more_volume", locale: "en_US", metaStatus: "ACTIVE", hiddenAt: null });
+    expect(built.update).toMatchObject({ origin: "created", spec });
+
+    db.leadForm.findFirst.mockResolvedValue(row({ id: "form9", metaFormId: "m9", origin: "created" }));
+    await createForm(admin, { metaFormId: "m9", pageAssetId: "a1" }, { origin: "imported", spec: { source: "meta", questions: [] }, locale: "en_US", metaStatus: "PAUSED" });
+    const imported = db.leadForm.upsert.mock.calls[1][0].update;
+    expect(imported).toMatchObject({ origin: "created", metaStatus: "PAUSED" });
+    expect(imported).not.toHaveProperty("spec");
+    // An unknown origin, form type or another workspace's source form is refused.
+    await expect(createForm(admin, { metaFormId: "m9", pageAssetId: "a1" }, { origin: "built" as never })).rejects.toMatchObject({ status: 400 });
+    db.leadForm.findFirst.mockResolvedValue(null);
+    await expect(createForm(admin, { metaFormId: "m9", pageAssetId: "a1" }, { origin: "created", copiedFromId: "foreign" })).rejects.toMatchObject({ status: 404 });
   });
 });
 
@@ -831,5 +948,13 @@ describe("lead ingestion with the form definition", () => {
     withDefinition(graphLead([phoneField]), new Error("down"));
     await run();
     expect(db.contact.create.mock.calls[0][0].data.optIn).toBeUndefined();
+  });
+});
+
+describe("lead source", () => {
+  it("tells click-to-WhatsApp leads from lead form leads", () => {
+    expect(leadSource("ctwa:AR-click-1")).toBe("ctwa");
+    expect(leadSource("1234567890")).toBe("meta_lead_form");
+    expect(leadSource(undefined)).toBe("meta_lead_form");
   });
 });

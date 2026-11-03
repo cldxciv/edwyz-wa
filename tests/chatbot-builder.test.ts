@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { addNode, connect, disconnect, duplicateNode, pruneEdges, reachable, reconnectEdge, removeNode, updateNode } from "@/components/chatbots/flow";
-import { NODE_W, autoLayout, nodeHeight } from "@/components/chatbots/layout";
+import { NODE_W, autoLayout, freeSpot, nodeHeight } from "@/components/chatbots/layout";
 import { canRedo, canUndo, commit, createHistory, redo, undo } from "@/components/chatbots/history";
-import { hasErrors, validateFlowIssues, validateTrigger, validateTriggerConflicts, type PublishedBot } from "@/components/chatbots/validation";
+import { hasErrors, LONG_WAIT_MINUTES, validateFlowIssues, validateTrigger, validateTriggerConflicts, type PublishedBot } from "@/components/chatbots/validation";
+import { docFromChatbot, hasUnpublishedChanges } from "@/components/chatbots/editor";
 import { evaluateCondition, interpolate, reply, startPreview, triggerMatches } from "@/components/chatbots/preview";
-import { fitView, zoomAt } from "@/components/chatbots/viewport";
+import { fitView, reveal, wheelZoom, zoomAt } from "@/components/chatbots/viewport";
 import { NODE_TYPES, type FlowDefinition, type FlowNode, type NodeType } from "@/components/chatbots/types";
 import { emptyFlow } from "@/components/chatbots/types";
 
@@ -122,6 +123,27 @@ describe("auto layout", () => {
     f = connect(f, ids.ask, undefined, ids.hello);
     expect(autoLayout(f).nodes).toHaveLength(4);
   });
+
+  it("a new step goes to a free place: where it was asked for when that is empty, otherwise below the steps in the way", () => {
+    const { flow } = build();
+    const laid = autoLayout(flow);
+    const overlaps = (f: FlowDefinition, p: { x: number; y: number }, h: number) =>
+      f.nodes.some((n) => p.x < n.position.x + NODE_W && n.position.x < p.x + NODE_W && p.y < n.position.y + nodeHeight(n) && n.position.y < p.y + h);
+    // far from everything: unchanged
+    expect(freeSpot(laid, { x: 5000, y: 5000 }, 84)).toEqual({ x: 5000, y: 5000 });
+    // right on top of the existing steps (the "Ask a question" over "Hand over" case): moved clear of every one of them
+    for (const n of laid.nodes) {
+      const spot = freeSpot(laid, n.position, 84);
+      expect(spot.x).toBe(n.position.x);
+      expect(spot.y).toBeGreaterThan(n.position.y);
+      expect(overlaps(laid, spot, 84)).toBe(false);
+    }
+    // a whole stack of steps in one column: the new one ends up under the last
+    const stack = { ...laid, nodes: laid.nodes.map((n, i) => ({ ...n, position: { x: 0, y: i * 90 } }) as FlowNode) };
+    const below = freeSpot(stack, { x: 10, y: 10 }, 84);
+    expect(overlaps(stack, below, 84)).toBe(false);
+    expect(freeSpot(emptyFlow(), { x: 1, y: 2 }, 84)).toEqual({ x: 1, y: 2 });
+  });
 });
 
 describe("viewport", () => {
@@ -131,6 +153,24 @@ describe("viewport", () => {
     expect((100 - v.x) / v.k).toBeCloseTo((100 - 10) / 1);
     expect(zoomAt({ x: 0, y: 0, k: 1 }, 100, 0, 0).k).toBe(2);
     expect(zoomAt({ x: 0, y: 0, k: 1 }, 0.001, 0, 0).k).toBe(0.25);
+  });
+
+  it("a plain mouse wheel scrolls the page; only Ctrl or Cmd with the wheel (or a trackpad pinch) zooms", () => {
+    expect(wheelZoom({ deltaY: 100, ctrlKey: false, metaKey: false })).toBeNull();
+    expect(wheelZoom({ deltaY: -100, ctrlKey: false, metaKey: false })).toBeNull();
+    expect(wheelZoom({ deltaY: 100, ctrlKey: true, metaKey: false })).toBeLessThan(1);
+    expect(wheelZoom({ deltaY: -100, ctrlKey: false, metaKey: true })).toBeGreaterThan(1);
+  });
+
+  it("reveal pans just enough to show a new step and leaves a step already in view alone", () => {
+    const view = { x: 0, y: 0, k: 1 };
+    expect(reveal(view, { x: 100, y: 100, w: 220, h: 84 }, 800, 500)).toBe(view);
+    const down = reveal(view, { x: 100, y: 700, w: 220, h: 84 }, 800, 500);
+    expect(down.k).toBe(1);
+    expect(700 + 84 + down.y).toBeLessThanOrEqual(500 - 24);
+    expect(700 + down.y).toBeGreaterThanOrEqual(24);
+    const left = reveal({ x: 0, y: 0, k: 0.5 }, { x: -400, y: 10, w: 220, h: 84 }, 800, 500);
+    expect(-400 * 0.5 + left.x).toBe(24);
   });
 
   it("fits content inside the viewport", () => {
@@ -389,5 +429,59 @@ describe("checks against the other chatbots", () => {
     expect(issues).toHaveLength(1);
     expect(issues[0].message).toContain('also starts on "price"');
     expect(issues[0].message).toMatch(/Remove the shared words/);
+  });
+});
+
+describe("drafts of a published bot's trigger and long waits (P5)", () => {
+  const steps: FlowDefinition = { version: 1, start: "a", nodes: [{ id: "a", type: "send_text", position: { x: 0, y: 0 }, data: { text: "Hi" } } as FlowNode], edges: [] };
+  const live = { status: "published" as const, triggerType: "keyword" as const, triggerKeywords: ["hi"], phoneNumberId: null, flow: steps, publishedFlow: steps };
+  const withPending = (trigger: Record<string, unknown>) => ({ ...live, flow: { ...steps, trigger } as unknown as FlowDefinition });
+
+  it("shows the saved draft trigger in the builder, not the live one", () => {
+    const doc = docFromChatbot({ name: "Bot", ...withPending({ triggerType: "any_message", triggerKeywords: [], phoneNumberId: "pn2" }) });
+    expect(doc).toMatchObject({ triggerType: "any_message", triggerKeywords: [], phoneNumberId: "pn2" });
+    expect(doc.flow).not.toHaveProperty("trigger");
+    expect(docFromChatbot({ name: "Bot", ...live })).toMatchObject({ triggerType: "keyword", triggerKeywords: ["hi"], phoneNumberId: null });
+  });
+
+  it("counts a saved trigger change as not published yet", () => {
+    expect(hasUnpublishedChanges(live)).toBe(false);
+    expect(hasUnpublishedChanges(withPending({ triggerType: "any_message", triggerKeywords: [], phoneNumberId: null }))).toBe(true);
+    expect(hasUnpublishedChanges(withPending({ triggerType: "keyword", triggerKeywords: ["hi", "hello"], phoneNumberId: null }))).toBe(true);
+    expect(hasUnpublishedChanges(withPending({ triggerType: "keyword", triggerKeywords: ["hi"], phoneNumberId: "pn2" }))).toBe(true);
+    // The same trigger as live is no change, and a bot that is not live has nothing unpublished.
+    expect(hasUnpublishedChanges(withPending({ triggerType: "keyword", triggerKeywords: ["hi"], phoneNumberId: null }))).toBe(false);
+    expect(hasUnpublishedChanges({ ...withPending({ triggerType: "any_message" }), status: "draft" })).toBe(false);
+  });
+
+  it("asks for a Send template step after a wait of 23 hours or more", () => {
+    const flowWith = (minutes: number, next: FlowNode): FlowDefinition => ({
+      version: 1,
+      start: "w",
+      nodes: [{ id: "w", type: "delay", position: { x: 0, y: 0 }, data: { minutes } } as FlowNode, next],
+      edges: [{ id: "e1", from: "w", to: next.id }],
+    });
+    const text = { id: "t", type: "send_text", position: { x: 0, y: 0 }, data: { text: "Still there?" } } as FlowNode;
+    const template = { id: "p", type: "send_template", position: { x: 0, y: 0 }, data: { templateId: "tp1", variables: {} } } as FlowNode;
+    const long = validateFlowIssues(flowWith(LONG_WAIT_MINUTES, text)).filter((i) => i.severity === "error");
+    expect(long).toEqual([expect.objectContaining({ nodeId: "w", message: expect.stringMatching(/^Wait: after a wait of 23 hours or more, the next message the bot sends must be Send template/) })]);
+    expect(hasErrors(validateFlowIssues(flowWith(LONG_WAIT_MINUTES, template)))).toBe(false);
+    expect(hasErrors(validateFlowIssues(flowWith(LONG_WAIT_MINUTES - 1, text)))).toBe(false);
+  });
+
+  it("matches the server: steps that send nothing may come first, a free message behind them is still an error", () => {
+    const step = (id: string, type: string, data: Record<string, unknown>) => ({ id, type, position: { x: 0, y: 0 }, data }) as FlowNode;
+    const chain = (...nodes: FlowNode[]): FlowDefinition => ({
+      version: 1,
+      start: "w",
+      nodes: [step("w", "delay", { minutes: 1440 }), ...nodes],
+      edges: [{ id: "e0", from: "w", to: nodes[0].id }, ...nodes.slice(1).map((n, i) => ({ id: `e${i + 1}`, from: nodes[i].id, to: n.id }))],
+    });
+    const longWaitErrors = (flow: FlowDefinition) => validateFlowIssues(flow).filter((i) => i.severity === "error" && /23 hours/.test(i.message));
+    expect(longWaitErrors(chain(step("s", "set_status", { status: "solved" })))).toEqual([]);
+    expect(longWaitErrors(chain(step("g", "add_tag", { tag: "x" }), step("p", "send_template", { templateId: "tp1", variables: {} })))).toEqual([]);
+    expect(longWaitErrors(chain(step("h", "handoff", { message: "" })))).toEqual([]);
+    expect(longWaitErrors(chain(step("g", "add_tag", { tag: "x" }), step("t", "send_text", { text: "Still there?" })))).toHaveLength(1);
+    expect(longWaitErrors(chain(step("h", "handoff", { message: "A teammate will reply." })))).toHaveLength(1);
   });
 });

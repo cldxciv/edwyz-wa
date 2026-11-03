@@ -24,6 +24,9 @@ const SAMPLE = 5;
 const NAME_MAX = 80;
 
 export type AudienceSpec = { segmentId?: string; filter?: Filter };
+
+/** Contacts a person blocked (a conversation with status "blocked") never get marketing messages, so no audience counts them. */
+export const NOT_BLOCKED: Prisma.ContactWhereInput = { conversations: { none: { status: "blocked" } } };
 export type Sample = { id: string; name: string | null; phone: string | null; bsuid?: string | null; username?: string | null };
 export type Preview = { count: number; sample: Sample[]; truncated: boolean };
 
@@ -225,7 +228,7 @@ export async function previewMatching(tenantId: string, base: Prisma.ContactWher
 export async function previewSegmentFilter(actor: Actor, spec: AudienceSpec) {
   const filters = await resolveFilters(actor.tenantId, spec);
   const base: Prisma.ContactWhereInput = { tenantId: actor.tenantId };
-  const eligible: Prisma.ContactWhereInput = { tenantId: actor.tenantId, optIn: true, optedOutAt: null };
+  const eligible: Prisma.ContactWhereInput = { tenantId: actor.tenantId, optIn: true, optedOutAt: null, ...NOT_BLOCKED };
   const [all, ok] = await Promise.all([previewMatching(actor.tenantId, base, filters), countMatching(actor.tenantId, eligible, filters, new Date(), { allowPartial: true })]);
   return { count: all.count, eligible: ok, sample: all.sample, truncated: all.truncated };
 }

@@ -45,7 +45,8 @@ export const EDDY_BLOCKS: { modifier: string; path: string }[] = [
   { modifier: "=", path: "/api/eddy/turn" },
   { modifier: "^~", path: "/api/eddy/" },
   { modifier: "^~", path: "/api/actions/" },
-  { modifier: "^~", path: "/api/notices/" },
+  // No trailing slash: nginx would answer /api/notices with a 301 to /api/notices/, and Next.js sends that back with a 308.
+  { modifier: "^~", path: "/api/notices" },
 ];
 
 /** Every missing directive, as "<block>: <directive>". Empty when the config is right. */
@@ -104,8 +105,9 @@ describe("nginx blocks for Eddy (Eddy 7.10)", () => {
   );
 
   it("fails when a block is missing, or a directive is only present in a comment", () => {
-    const withoutNotices = SITE.replace(/location \^~ \/api\/notices\/ \{[^}]*\}/, "");
-    expect(eddyNginxProblems(withoutNotices)).toContain("location ^~ /api/notices/: missing");
+    const withoutNotices = SITE.replace(/location \^~ \/api\/notices \{[^}]*\}/, "");
+    expect(withoutNotices).not.toBe(SITE);
+    expect(eddyNginxProblems(withoutNotices)).toContain("location ^~ /api/notices: missing");
     const commented = SITE.replace(/(location \^~ \/api\/actions\/ \{[^}]*?)\n(\s*)gzip off;/, "$1\n$2# gzip off;");
     expect(eddyNginxProblems(commented)).toContain("location ^~ /api/actions/: gzip off");
   });

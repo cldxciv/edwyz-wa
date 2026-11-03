@@ -37,6 +37,18 @@ export async function digestCounts(tenantId: string, since: Date): Promise<Diges
 export const producer: NoticeProducer = {
   name: "activity",
   kinds: ["automation_digest"],
+  /** Workspaces where an automation ran in the last 25 hours (today, in any time zone, started inside it). */
+  async due(tenantIds, now) {
+    const tenantId = { in: [...tenantIds] };
+    const since = new Date(now.getTime() - DAY_MS - 60 * 60_000);
+    const rows = (await Promise.all([
+      prisma.message.groupBy({ by: ["tenantId"], where: { tenantId, origin: "ai_reply", createdAt: { gte: since } } }),
+      prisma.conversation.groupBy({ by: ["tenantId"], where: { tenantId, tags: { has: AI_HANDOFF_TAG }, statusChangedAt: { gte: since } } }),
+      prisma.chatbotSession.groupBy({ by: ["tenantId"], where: { tenantId, startedAt: { gte: since } } }),
+      prisma.ruleExecution.groupBy({ by: ["tenantId"], where: { tenantId, createdAt: { gte: since } } }),
+    ])) as { tenantId: string }[][];
+    return rows.flat().map((r) => r.tenantId);
+  },
   async run(ctx) {
     const tz = await workspaceTimezone(ctx.tenantId);
     const day = dayKey(ctx.now, tz);

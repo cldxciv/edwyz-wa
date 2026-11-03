@@ -7,7 +7,7 @@ const db = vi.hoisted(() => ({
   subscription: { findUnique: vi.fn(), upsert: vi.fn(async () => ({})) },
   user: { findUnique: vi.fn(), update: vi.fn(async () => ({})), updateMany: vi.fn(async () => ({ count: 1 })) },
   session: { updateMany: vi.fn(async () => ({ count: 2 })) },
-  emailToken: { create: vi.fn(async () => ({})) },
+  emailToken: { create: vi.fn(async () => ({})), updateMany: vi.fn(async () => ({ count: 0 })) },
   platformSetting: { findUnique: vi.fn(async () => null), upsert: vi.fn(async () => ({})) },
   // Meta's spending limit rows the suspend and delete forms offboard (docs/SPEND-CONTROLS-SPEC.md 5.8).
   metaSpendLimit: { findMany: vi.fn(async (): Promise<{ adAccountAssetId: string }[]> => []) },
@@ -161,12 +161,29 @@ describe("user actions", () => {
     expect(data.expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(3_600_000);
     expect(JSON.stringify(auditMock.mock.calls)).not.toContain(token);
   });
-  it("resend verification queues an email; mark verified is audited", async () => {
-    await applyUserAction("admin", "u9", { action: "resend_verification", reason: "x" });
+  it("resend verification uses the user's own flow: earlier links stop working and the link is sealed in the queue", async () => {
+    process.env.SMTP_USER = "mailer";
+    try {
+      await applyUserAction("admin", "u9", { action: "resend_verification", reason: "x" });
+    } finally {
+      delete process.env.SMTP_USER;
+    }
     expect(mail).toHaveBeenCalledOnce();
+    expect((mail.mock.calls[0] as unknown[])[1]).toEqual({ seal: true });
+    expect(db.emailToken.updateMany).toHaveBeenCalledWith({ where: { userId: "u9", kind: "verify", usedAt: null }, data: { usedAt: expect.any(Date) } });
+    expect(actions()).toContain("admin.user.resend_verification");
+  });
+  it("resend verification answers 503 when email is not set up, instead of reporting a mail that is never sent", async () => {
+    delete process.env.SMTP_USER;
+    await expect(applyUserAction("admin", "u9", { action: "resend_verification", reason: "x" })).rejects.toMatchObject({ status: 503, message: expect.stringContaining("Mark email as verified") });
+    expect(mail).not.toHaveBeenCalled();
+    expect(db.emailToken.create).not.toHaveBeenCalled();
+    expect(actions()).not.toContain("admin.user.resend_verification");
+  });
+  it("mark verified is audited", async () => {
     await applyUserAction("admin", "u9", { action: "mark_verified", reason: "phone check" });
     expect(db.user.update).toHaveBeenCalledWith({ where: { id: "u9" }, data: { emailVerifiedAt: expect.any(Date) } });
-    expect(actions()).toEqual(expect.arrayContaining(["admin.user.resend_verification", "admin.user.mark_verified"]));
+    expect(actions()).toContain("admin.user.mark_verified");
   });
 });
 

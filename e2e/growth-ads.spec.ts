@@ -46,7 +46,10 @@ test.describe("Ad campaigns: list and spending limit", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Ad campaigns" })).toBeVisible();
     await expect(page.getByText("No campaigns yet")).toBeVisible();
     await expect(page.getByText("No limit set yet")).toBeVisible();
-    await expect(page.getByRole("link", { name: "New campaign" })).toBeVisible();
+    // No ad account yet: the list says so and its buttons go to the connection, not to a wizard that can only say "connect first".
+    await expect(page.getByText(/Campaigns run in your Meta ad account\. Connect it first/)).toBeVisible();
+    await expect(page.getByRole("link", { name: "Connect ad account" }).first()).toHaveAttribute("href", "/app/settings/connections");
+    await expect(page.getByRole("link", { name: "New campaign" })).toHaveCount(0);
     expect(await axeSerious(page), "axe").toEqual([]);
 
     const amount = page.getByLabel(/^(New daily limit|Daily limit)/);
@@ -83,6 +86,16 @@ test.describe("Ad campaigns: list and spending limit", () => {
     await page.getByRole("dialog").getByRole("button", { name: "Save limit" }).click();
     await expect(page.getByTestId("cap-status")).toContainText(/9,000/);
     expect(errors, errors.join("\n")).toEqual([]);
+  });
+
+  test("with an ad account connected the list offers New campaign", async ({ page, context }) => {
+    const u = await signupUser(context, "ads");
+    await seedMeta(u);
+    await page.goto("/app/ads");
+    await expect(page.getByText("No campaigns yet")).toBeVisible();
+    await expect(page.getByRole("link", { name: "New campaign" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Create a campaign" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Connect ad account" })).toHaveCount(0);
   });
 
   test("the limit panel links to all spending limits, and shows the same stored limit there", async ({ page, context }) => {
@@ -143,7 +156,12 @@ test.describe("Ad campaigns: list and spending limit", () => {
     await expect(bpage.getByText("No campaigns yet")).toBeVisible();
     await expect(bpage.locator("body")).not.toContainText("Private diwali offer");
     await bpage.goto(`/app/ads/${id}`);
-    await expect(bpage.getByText(/could not load this campaign/i)).toBeVisible();
+    // Another workspace's campaign looks exactly like a missing one: a not-found state with a way back, no Try again.
+    await expect(bpage.getByRole("heading", { level: 1, name: "Campaign not found" })).toBeVisible();
+    await expect(bpage.getByText("This campaign does not exist")).toBeVisible();
+    await expect(bpage.getByRole("button", { name: "Try again" })).toHaveCount(0);
+    await bpage.getByRole("link", { name: "Back to ad campaigns" }).click();
+    await expect(bpage).toHaveURL(/\/app\/ads$/);
     await expect(bpage.locator("body")).not.toContainText("Private diwali offer");
     expect((await bctx.request.get(`/api/ads/campaigns/${id}`)).status()).toBe(404);
     for (const action of ["launch", "activate", "archive", "pause"]) {

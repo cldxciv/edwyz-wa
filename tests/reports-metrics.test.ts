@@ -8,6 +8,7 @@ const db = vi.hoisted(() => ({
   broadcast: { findMany: vi.fn() },
   message: { groupBy: vi.fn() },
   membership: { findMany: vi.fn(), count: vi.fn() },
+  invite: { count: vi.fn() },
   contact: { count: vi.fn() },
   plan: { findUnique: vi.fn() },
 }));
@@ -15,6 +16,8 @@ const billing = vi.hoisted(() => ({ getBillingStatus: vi.fn() }));
 const auth = vi.hoisted(() => ({ getActor: vi.fn() }));
 vi.mock("@/lib/db", () => ({ prisma: db }));
 vi.mock("@/lib/billing", () => billing);
+// The meter reads limits and counts through src/lib/billing/limits.ts (the code enforcement uses), which reads the status here.
+vi.mock("@/lib/billing/status", () => billing);
 vi.mock("@/lib/auth", () => auth);
 
 import { GET as overviewRoute } from "@/app/api/reports/overview/route";
@@ -23,6 +26,7 @@ import { broadcastRow, buildOverview, foldMessageRows } from "@/lib/reports/metr
 import { parseRange } from "@/lib/reports/range";
 import { runSnapshots } from "@/lib/reports/snapshot";
 import { getUsage } from "@/lib/reports/usage";
+import { broadcastQuotaWhere } from "@/lib/billing/limits";
 import { worker } from "@/lib/reports/worker";
 
 const sql = (call: unknown[]) => (call[0] as string[]).join("?");
@@ -203,31 +207,75 @@ describe("runSnapshots", () => {
 });
 
 describe("usage", () => {
+  const status = (over: Record<string, unknown> = {}) => ({ state: "active", planId: null, daysLeftInTrial: null, ...over });
+  beforeEach(() => {
+    db.invite.count.mockResolvedValue(0);
+  });
+
   it("shows usage without limits when there is no plan", async () => {
-    billing.getBillingStatus.mockResolvedValue({ planId: null });
+    billing.getBillingStatus.mockResolvedValue(status({ state: "locked" }));
     db.contact.count.mockResolvedValue(12);
     db.membership.count.mockResolvedValue(2);
     db.broadcastRecipient.count.mockResolvedValue(40);
     const u = await getUsage("t1", new Date("2026-03-15T00:00:00Z"));
     expect(u.plan).toBeNull();
+    expect(u.limitsFrom).toBeNull();
     expect(u.contacts).toEqual({ used: 12, limit: null });
+    expect(u.periodStart).toBe("2026-03-01T00:00:00.000Z");
     expect(db.contact.count.mock.calls[0][0].where.tenantId).toBe("t1");
-    expect(db.broadcastRecipient.count.mock.calls[0][0].where.sentAt.gte.toISOString()).toBe("2026-03-01T00:00:00.000Z");
+    expect(db.broadcastRecipient.count.mock.calls[0][0].where.OR[0].sentAt.gte.toISOString()).toBe("2026-03-01T00:00:00.000Z");
   });
   it("reports plan limits", async () => {
-    billing.getBillingStatus.mockResolvedValue({ planId: "p1" });
+    billing.getBillingStatus.mockResolvedValue(status({ planId: "p1" }));
     db.plan.findUnique.mockResolvedValue({ name: "Growth", seatLimit: 5, contactLimit: 1000, monthlyBroadcastLimit: null });
     db.contact.count.mockResolvedValue(1);
     db.membership.count.mockResolvedValue(1);
     db.broadcastRecipient.count.mockResolvedValue(1);
     const u = await getUsage("t1");
     expect(u.plan).toEqual({ name: "Growth" });
+    expect(u.limitsFrom).toBe("plan");
     expect(u.seats.limit).toBe(5);
     expect(u.broadcastRecipients.limit).toBeNull();
   });
+  it("counts the way enforcement does: seats include open invites, broadcasts use the shared quota rule", async () => {
+    billing.getBillingStatus.mockResolvedValue(status({ planId: "p1" }));
+    db.plan.findUnique.mockResolvedValue({ name: "Growth", seatLimit: 3, contactLimit: null, monthlyBroadcastLimit: 100 });
+    db.contact.count.mockResolvedValue(0);
+    db.membership.count.mockResolvedValue(2);
+    db.invite.count.mockResolvedValue(1);
+    db.broadcastRecipient.count.mockResolvedValue(7);
+    const now = new Date("2026-03-15T00:00:00Z");
+    const u = await getUsage("t1", now);
+    expect(u.seats).toEqual({ used: 3, limit: 3 });
+    expect(u.broadcastRecipients).toEqual({ used: 7, limit: 100 });
+    expect(db.broadcastRecipient.count.mock.calls[0][0].where).toEqual(broadcastQuotaWhere("t1", now));
+    expect(db.invite.count.mock.calls[0][0].where).toMatchObject({ tenantId: "t1", acceptedAt: null });
+  });
+  it("shows the free trial's limits while they apply, like enforcement", async () => {
+    billing.getBillingStatus.mockResolvedValue(status({ state: "trialing", daysLeftInTrial: 4 }));
+    db.plan.findUnique.mockResolvedValue({ name: "Free trial", seatLimit: 2, contactLimit: 100, monthlyBroadcastLimit: 50 });
+    db.contact.count.mockResolvedValue(10);
+    db.membership.count.mockResolvedValue(1);
+    db.broadcastRecipient.count.mockResolvedValue(0);
+    const u = await getUsage("t1");
+    expect(u.plan).toBeNull();
+    expect(u.limitsFrom).toBe("trial");
+    expect(u.contacts).toEqual({ used: 10, limit: 100 });
+    expect(u.billing).toEqual({ state: "trialing", trialDaysLeft: 4 });
+    expect(db.plan.findUnique.mock.calls[0][0].where).toEqual({ code: "trial" });
+  });
+  it("a complimentary workspace has no limits even with a plan on file", async () => {
+    billing.getBillingStatus.mockResolvedValue(status({ state: "exempt", planId: "p1" }));
+    db.contact.count.mockResolvedValue(1);
+    db.membership.count.mockResolvedValue(1);
+    db.broadcastRecipient.count.mockResolvedValue(0);
+    const u = await getUsage("t1");
+    expect(u).toMatchObject({ plan: null, limitsFrom: null, contacts: { limit: null } });
+    expect(db.plan.findUnique).not.toHaveBeenCalled();
+  });
   it("route is tenant scoped", async () => {
     auth.getActor.mockResolvedValue({ userId: "u", tenantId: "t7", role: "agent" });
-    billing.getBillingStatus.mockResolvedValue({ planId: null });
+    billing.getBillingStatus.mockResolvedValue(status());
     db.contact.count.mockResolvedValue(0);
     db.membership.count.mockResolvedValue(0);
     db.broadcastRecipient.count.mockResolvedValue(0);

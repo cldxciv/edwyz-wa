@@ -6,6 +6,11 @@ import { WebhookGuide } from "./WebhookGuide";
 import { accessTokenError, friendlyError, needsAccessToken, parseShopDomain, secretError, shopDomainError, storeAnnouncement, storeView } from "./helpers";
 import type { Store } from "./types";
 
+/** Keeps password managers out of the store form: Chrome ignores autocomplete="off" on password inputs and filled the owner's saved login into these fields. */
+const NOT_A_LOGIN = { "data-1p-ignore": "", "data-lpignore": "true", "data-form-type": "other" } as const;
+/** "new-password" stops a saved password being filled in; the input stays masked. */
+const SECRET_FIELD = { ...NOT_A_LOGIN, autoComplete: "new-password" } as const;
+
 function Step({ n, title, children }: { n: number; title: string; children: ReactNode }) {
   return (
     <li className="flex gap-3 sm:gap-4">
@@ -59,13 +64,13 @@ function ConnectForm({ onConnected }: { onConnected: () => void }) {
   return (
     <form onSubmit={connect} noValidate className="grid gap-4 md:grid-cols-2">
       <FormField label="Store address" required error={domainError} hint="The address that ends in .myshopify.com, for example my-store.myshopify.com. You can paste the link from your browser.">
-        <Input value={domain} onChange={(e) => setDomain(e.target.value)} autoComplete="off" inputMode="url" autoCapitalize="none" spellCheck={false} />
+        <Input name="shopify-store" value={domain} onChange={(e) => setDomain(e.target.value)} autoComplete="off" inputMode="url" autoCapitalize="none" spellCheck={false} {...NOT_A_LOGIN} />
       </FormField>
       <FormField label="Signing secret" required error={secretProblem} hint="The long code Shopify shows in the Webhooks section. It proves the notifications really come from your store. We store it encrypted.">
-        <Input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} autoComplete="off" spellCheck={false} />
+        <Input name="shopify-signing-secret" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} spellCheck={false} {...SECRET_FIELD} />
       </FormField>
       <FormField label="Admin API access token" required error={tokenProblem} hint="From the custom app you create in Shopify (step 3). It lets us ask Shopify whether the store is really yours. We store it encrypted and never show it again.">
-        <Input type="password" value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" spellCheck={false} />
+        <Input name="shopify-access-token" type="password" value={token} onChange={(e) => setToken(e.target.value)} spellCheck={false} {...SECRET_FIELD} />
       </FormField>
       {error && (
         <Alert className="md:col-span-2" tone="bad" title="We could not connect the store">
@@ -126,7 +131,7 @@ function SecretDialog({ store, onClose, onSaved }: { store: Store; onClose: () =
       <form id={formId} onSubmit={save} noValidate className="space-y-4">
         <p className="text-sm text-muted">If Shopify notifications are not being accepted, the secret may be wrong. Copy it again from Settings, Notifications, Webhooks in Shopify.</p>
         <FormField label="New signing secret" required error={problem}>
-          <Input data-autofocus="" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} autoComplete="off" spellCheck={false} />
+          <Input data-autofocus="" name="shopify-signing-secret" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} spellCheck={false} {...SECRET_FIELD} />
         </FormField>
         {error && <Alert tone="bad">{error}</Alert>}
       </form>
@@ -180,7 +185,7 @@ function TokenDialog({ store, resume, onClose, onSaved }: { store: Store; resume
       <form id={formId} onSubmit={save} noValidate className="space-y-4">
         <p className="text-sm text-muted">We need the Admin API access token to confirm with Shopify that this store is yours. Copy it from the custom app in Settings, Apps and sales channels, Develop apps in Shopify.</p>
         <FormField label="Admin API access token" required error={problem}>
-          <Input data-autofocus="" type="password" value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" spellCheck={false} />
+          <Input data-autofocus="" name="shopify-access-token" type="password" value={token} onChange={(e) => setToken(e.target.value)} spellCheck={false} {...SECRET_FIELD} />
         </FormField>
         {error && <Alert tone="bad">{error}</Alert>}
       </form>
@@ -311,7 +316,7 @@ export function StoreSection({ stores, editable, webhookUrl, selected, onSelect,
           <Step n={3} title="Copy the Admin API access token">
             <p className="text-sm">
               In Shopify, open <strong>Settings</strong>, then <strong>Apps and sales channels</strong>, then <strong>Develop apps</strong>, and create an app. Under <strong>Configuration</strong> choose one read permission, for example <strong>read_orders</strong>, then
-              select <strong>Install app</strong>. Shopify shows the <strong>Admin API access token</strong> once, so copy it right away. We use it to check that the store is yours.
+              select <strong>Install app</strong>. Shopify shows the <strong>Admin API access token</strong>{" "}once, so copy it right away. We use it to check that the store is yours.
             </p>
           </Step>
           <Step n={4} title="Connect your store here">

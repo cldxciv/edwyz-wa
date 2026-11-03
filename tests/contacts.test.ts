@@ -27,7 +27,7 @@ vi.mock("@/lib/db", () => ({
 }));
 
 import { parseCsv } from "@/lib/contacts/csv";
-import { importContacts } from "@/lib/contacts/import";
+import { importContacts, parseExistingContacts } from "@/lib/contacts/import";
 import { normalizePhone } from "@/lib/contacts/phone";
 import { updateContact } from "@/lib/contacts/service";
 
@@ -119,8 +119,43 @@ describe("importContacts", () => {
     expect(store.find((c) => c.tenantId === "t2")!.name).toBe("Theirs");
   });
 
+  it("finds the phone column under the names other tools export: Phone Number, Mobile, WhatsApp, wa_id", async () => {
+    await importContacts("t1", "Name,Phone Number,City\nAsha,98765 43210,Pune\n", { now });
+    expect(store[0]).toMatchObject({ phone: "+919876543210", name: "Asha", attributes: { city: "Pune" } });
+    store.length = 0;
+    await importContacts("t1", "mobile,name\n09123456789,Ravi\n", { now });
+    expect(store[0]).toMatchObject({ phone: "+919123456789", attributes: {} });
+    store.length = 0;
+    await importContacts("t1", "WhatsApp\n+14155550123\n", { now });
+    expect(store[0].phone).toBe("+14155550123");
+  });
+
+  it("reads wa_id as an international number, so a foreign one keeps its own country code", async () => {
+    await importContacts("t1", "wa_id,name\n14155550123,Sam\n919876543210,Asha\n", { now });
+    expect(store.map((c) => c.phone)).toEqual(["+14155550123", "+919876543210"]);
+    expect(store[0].attributes).toEqual({});
+  });
+
+  it("prefers a column named phone when the file also has a mobile column, which is kept as a detail", async () => {
+    await importContacts("t1", "mobile,phone\n+911111111111,+919876543210\n", { now });
+    expect(store[0]).toMatchObject({ phone: "+919876543210", attributes: { mobile: "+911111111111" } });
+  });
+
+  it("leaves people already in the contacts untouched when asked to skip them", async () => {
+    store.push({ id: "c1", tenantId: "t1", phone: "+919876543210", name: "Old", tags: ["a"], attributes: { city: "Delhi" }, optIn: false, optedOutAt: null });
+    const report = await importContacts("t1", "phone,name,tags,city,opt_in\n9876543210,New,b,Pune,yes\n9123456789,Ravi,,,\n", { now, existing: "skip" });
+    expect(report).toEqual({ created: 1, updated: 0, skipped: 1, errors: [] });
+    expect(store[0]).toMatchObject({ name: "Old", tags: ["a"], attributes: { city: "Delhi" }, optIn: false });
+    expect(store[1]).toMatchObject({ phone: "+919123456789", name: "Ravi" });
+  });
+
+  it("updates existing people by default; only the exact value skip changes that", () => {
+    expect(parseExistingContacts("skip")).toBe("skip");
+    for (const v of ["update", "SKIP", "", null, undefined, 1]) expect(parseExistingContacts(v)).toBe("update");
+  });
+
   it("rejects missing phone column and oversize files", async () => {
-    await expect(importContacts("t1", "name\nA\n")).rejects.toMatchObject({ status: 400 });
+    await expect(importContacts("t1", "name\nA\n")).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/phone number, mobile, whatsapp or wa_id/) });
     const big = "phone\n" + Array.from({ length: 10_001 }, (_, i) => `98${String(i).padStart(8, "0")}`).join("\n");
     await expect(importContacts("t1", big)).rejects.toMatchObject({ status: 400 });
   });
@@ -132,10 +167,10 @@ describe("updateContact", () => {
   });
   const actor = { userId: "u", tenantId: "t1", role: "admin" as const };
 
-  it("requires a source to opt in and refuses opted-out contacts", async () => {
+  it("requires a source to opt in and refuses opted-out contacts, saying only their START undoes it", async () => {
     store.push({ id: "c1", tenantId: "t1", phone: "+911", optIn: false, optedOutAt: new Date() });
     await expect(updateContact(actor, "c1", { optIn: true })).rejects.toMatchObject({ status: 400 });
-    await expect(updateContact(actor, "c1", { optIn: true, optInSource: "form" })).rejects.toMatchObject({ status: 409 });
+    await expect(updateContact(actor, "c1", { optIn: true, optInSource: "form" })).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/sending START/) });
   });
 
   it("404s for another tenant's contact", async () => {

@@ -130,3 +130,59 @@ describe("variables", () => {
     expect(validateAnswer("text", "   ").ok).toBe(false);
   });
 });
+
+describe("long waits and replies during a wait (P5)", () => {
+  const wait = (minutes: number, extra: Record<string, unknown> = {}) => node("w", "delay", { minutes, ...extra });
+
+  it("refuses a free message after a wait of 23 hours or more, and accepts a template there", () => {
+    const text = validateFlow(flow([wait(23 * 60), node("b", "send_text", { text: "Still there?" })], [edge("e1", "w", "b")], "w"));
+    expect(text.ok).toBe(false);
+    expect(text.errors).toEqual([expect.objectContaining({ nodeId: "w", message: expect.stringMatching(/next message the bot sends must be Send template/) })]);
+    expect(validateFlow(flow([wait(3 * 1440), node("b", "send_template", { templateId: "tp1", variables: {} })], [edge("e1", "w", "b")], "w")).ok).toBe(true);
+    // Shorter waits, and a long wait at the end of the flow, are fine.
+    expect(validateFlow(flow([wait(22 * 60 + 59), node("b", "send_text", { text: "Hi" })], [edge("e1", "w", "b")], "w")).ok).toBe(true);
+    expect(validateFlow(flow([wait(2 * 1440)], [], "w")).ok).toBe(true);
+  });
+
+  it("lets steps that send nothing come between a long wait and the template", () => {
+    const template = node("t", "send_template", { templateId: "tp1", variables: {} });
+    // Wait a day, then mark the chat solved: nothing is sent.
+    expect(validateFlow(flow([wait(1440), node("s", "set_status", { status: "solved" })], [edge("e1", "w", "s")], "w")).ok).toBe(true);
+    // Wait two days, add a tag, then send a template.
+    expect(validateFlow(flow([wait(2 * 1440), node("g", "add_tag", { tag: "follow-up" }), template], [edge("e1", "w", "g"), edge("e2", "g", "t")], "w")).ok).toBe(true);
+    // Wait a day, check an answer: a template on one side, the end on the other.
+    const check = node("c", "condition", { variable: "plan", operator: "equals", value: "pro" });
+    expect(validateFlow(flow([wait(1440), check, template, node("x", "end")], [edge("e1", "w", "c"), edge("e2", "c", "t", "yes"), edge("e3", "c", "x", "no")], "w")).ok).toBe(true);
+    // A hand-over without a message sends nothing either.
+    expect(validateFlow(flow([wait(1440), node("h", "handoff", {})], [edge("e1", "w", "h")], "w")).ok).toBe(true);
+  });
+
+  it("finds a free message behind steps that send nothing, on any branch, and after another wait", () => {
+    const refused = (nodes: unknown[], edges: unknown[]) => {
+      const result = validateFlow(flow(nodes, edges, "w"));
+      return !result.ok && result.errors.every((e) => e.nodeId === "w");
+    };
+    const text = node("b", "send_text", { text: "Still there?" });
+    expect(refused([wait(1440), node("g", "add_tag", { tag: "x" }), text], [edge("e1", "w", "g"), edge("e2", "g", "b")])).toBe(true);
+    const check = node("c", "condition", { variable: "plan", operator: "exists" });
+    const template = node("t", "send_template", { templateId: "tp1", variables: {} });
+    expect(refused([wait(1440), check, template, text], [edge("e1", "w", "c"), edge("e2", "c", "t", "yes"), edge("e3", "c", "b", "no")])).toBe(true);
+    expect(refused([wait(1440), node("w2", "delay", { minutes: 30 }), text], [edge("e1", "w", "w2"), edge("e2", "w2", "b")])).toBe(true);
+    expect(refused([wait(1440), node("h", "handoff", { message: "A teammate will reply." })], [edge("e1", "w", "h")])).toBe(true);
+    expect(refused([wait(1440), node("u", "unsubscribe", { message: "You will not hear from us again." })], [edge("e1", "w", "u")])).toBe(true);
+    expect(messages(validateFlow(flow([wait(1440), node("h", "handoff", { message: "Hi" })], [edge("e1", "w", "h")], "w")))).toMatch(/cannot have a message/);
+  });
+
+  it("does not apply the rule to a flow that is already published, so a live bot keeps running", () => {
+    const live = flow([wait(2 * 1440), node("b", "send_text", { text: "Still there?" })], [edge("e1", "w", "b")], "w");
+    expect(validateFlow(live).ok).toBe(false);
+    expect(validateFlow(live, { published: true }).ok).toBe(true);
+  });
+
+  it("keeps the choice of what a customer's message does during a wait", () => {
+    expect(validateFlow(flow([wait(10, { onReply: "continue" })], [], "w")).flow?.nodes[0].data).toEqual({ minutes: 10, onReply: "continue" });
+    expect(validateFlow(flow([wait(10, { onReply: "pass" })], [], "w")).flow?.nodes[0].data).toEqual({ minutes: 10, onReply: "pass" });
+    expect(validateFlow(flow([wait(10, { onReply: "wait" })], [], "w")).flow?.nodes[0].data).toEqual({ minutes: 10 });
+    expect(messages(validateFlow(flow([wait(10, { onReply: "explode" })], [], "w")))).toMatch(/customer writes during the wait/);
+  });
+});

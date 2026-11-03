@@ -1,9 +1,12 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ActionList } from "@/components/automation/ActionEditor";
 import { UsageMeter } from "@/components/automation/AutomationSettings";
 import { GroupEditor } from "@/components/automation/ConditionEditor";
+import { ownSubmit } from "@/components/automation/helpers";
 import {
   ACTION_GROUPS,
   CONDITIONS,
@@ -11,7 +14,10 @@ import {
   STARTERS,
   TRIGGERS,
   actionGroupsFor,
+  actionProblem,
   applyTrigger,
+  cardProblems,
+  conditionProblem,
   conditionsFor,
   defaultAction,
   defaultCondition,
@@ -24,6 +30,7 @@ import {
   relativeTime,
   ruleSentence,
   toBody,
+  triggerProblem,
   validateDraftV2,
   type Options,
   type RuleRow,
@@ -116,6 +123,123 @@ describe("draft validation", () => {
     expect(result.dropped.join(" ")).toMatch(/conditions/);
     expect(result.dropped.join(" ")).toMatch(/AI agent/);
     expect(applyTrigger(draft, { type: "message_received" }).dropped).toEqual([]);
+  });
+});
+
+describe("errors under the field they are about", () => {
+  it("names the field of a step's problem, in the server's own words", () => {
+    expect(actionProblem(defaultAction("send_text"))).toEqual({ field: "text", message: "Write the message to send." });
+    expect(actionProblem({ type: "send_text", text: "Hi" })).toBeNull();
+    expect(actionProblem(defaultAction("send_material"))).toEqual({ field: "material", message: "Choose a reply material to send." });
+    expect(actionProblem({ type: "update_attribute", name: "", value: "Pune", remove: false })?.field).toBe("name");
+    expect(actionProblem({ type: "update_attribute", name: "city", value: "", remove: false })?.field).toBe("value");
+    expect(actionProblem({ type: "notify", target: "user", userId: null, message: "" })?.field).toBe("user");
+    expect(actionProblem({ type: "add_tag", tag: "", scope: "both" })?.field).toBe("tag");
+  });
+
+  it("names the field of a condition's problem", () => {
+    expect(conditionProblem(defaultCondition("keyword", "UTC"))).toEqual({ field: "keywords", message: expect.stringMatching(/^Add between 1 and \d+ keywords\.$/) });
+    const window = defaultCondition("time_window", "UTC");
+    if (window.type !== "time_window") throw new Error("unexpected default");
+    expect(conditionProblem(window)).toBeNull();
+    expect(conditionProblem({ ...window, days: [] })?.field).toBe("days");
+    expect(conditionProblem({ ...window, start: "" })?.field).toBe("times");
+    expect(conditionProblem({ ...window, timezone: "Not/A_Zone" })?.field).toBe("timezone");
+    expect(conditionProblem(defaultCondition("attribute", "UTC"))?.field).toBe("name");
+    expect(conditionProblem({ type: "attribute", name: "city", op: "equals", value: "" })?.field).toBe("value");
+    expect(conditionProblem(defaultCondition("segment", "UTC"))?.field).toBe("segment");
+    expect(conditionProblem({ type: "message_type", types: [] })?.field).toBe("types");
+  });
+
+  it("names the field of the start's problem", () => {
+    expect(triggerProblem({ type: "message_received" })).toBeNull();
+    expect(triggerProblem(defaultTrigger("attribute_changed", "UTC"))?.field).toBe("attribute");
+    const daily = defaultTrigger("scheduled", "UTC");
+    if (daily.type !== "scheduled") throw new Error("unexpected default");
+    expect(triggerProblem(daily)).toBeNull();
+    expect(triggerProblem({ ...daily, time: "" })?.field).toBe("time");
+    expect(triggerProblem({ ...daily, timezone: "Not/A_Zone" })?.field).toBe("timezone");
+    expect(triggerProblem({ ...daily, repeat: "weekly", days: [] })?.field).toBe("days");
+    expect(triggerProblem({ ...daily, repeat: "once", date: "" })?.field).toBe("date");
+  });
+
+  it("the cards keep only problems that have no field of their own, so nothing is said twice", () => {
+    const draft = { ...emptyDraftV2(), name: "Hello" };
+    const problems = validateDraftV2(draft);
+    expect(problems.actions).toBe("Write the message to send.");
+    expect(cardProblems(draft, problems).actions).toBeUndefined();
+    const nothingToDo = { ...draft, actions: [] };
+    expect(cardProblems(nothingToDo, validateDraftV2(nothingToDo)).actions).toMatch(/at least one thing/);
+    const keyword = { ...draft, actions: [{ type: "send_text" as const, text: "Hi" }], filters: { ...draft.filters, root: { type: "group" as const, op: "and" as const, items: [defaultCondition("keyword", "UTC")] } } };
+    expect(cardProblems(keyword, validateDraftV2(keyword)).filters).toBeUndefined();
+    const attribute = { ...draft, trigger: defaultTrigger("attribute_changed", "UTC"), actions: [{ type: "send_text" as const, text: "Hi" }] };
+    expect(cardProblems(attribute, validateDraftV2(attribute)).trigger).toBeUndefined();
+    // a step that does not fit the start belongs to no single field: it stays on the Then card
+    const combo = { ...draft, trigger: defaultTrigger("contact_created", "UTC"), actions: [defaultAction("start_ai_agent")] };
+    expect(cardProblems(combo, validateDraftV2(combo)).actions).toMatch(/AI agent can only be started/);
+  });
+
+  it("after Create rule the field itself is marked wrong and linked to its message; before, nothing is", () => {
+    const props = { actions: [defaultAction("send_text")], trigger: { type: "message_received" } as const, options: OPTIONS, onMaterialCreated: () => undefined, onChange: () => undefined };
+    const before = renderToStaticMarkup(createElement(ActionList, props));
+    expect(before).not.toContain('aria-invalid="');
+    expect(before).not.toContain("Write the message to send.");
+    const after = renderToStaticMarkup(createElement(ActionList, { ...props, showErrors: true }));
+    const textarea = after.match(/<textarea[^>]*>/)?.[0] ?? "";
+    expect(textarea).toContain('aria-invalid="true"');
+    const errorId = /<p id="([^"]+)" role="alert"[^>]*>Write the message to send\.<\/p>/.exec(after)?.[1];
+    expect(errorId).toBeTruthy();
+    expect(textarea).toMatch(new RegExp(`aria-describedby="[^"]*${errorId!.replace(/[^\w-]/g, "\\$&")}`));
+
+    const words = renderToStaticMarkup(
+      createElement(GroupEditor, { group: { type: "group", op: "and", items: [defaultCondition("keyword", "UTC")] }, depth: 1, ctx: { trigger: { type: "message_received" }, options: OPTIONS, timezone: "UTC", showErrors: true }, onChange: () => undefined }),
+    );
+    const input = words.match(/<input[^>]*aria-label="Add a word or phrase"[^>]*>/)?.[0] ?? "";
+    expect(input).toContain('aria-invalid="true"');
+    expect(words).toMatch(/role="alert"[^>]*>Add between 1 and \d+ keywords\./);
+  });
+});
+
+describe("the reply-material dialog inside the rule form", () => {
+  // React passes a submit up the component tree, not the page: the dialog is drawn at the end of the page through a portal,
+  // yet its form's submit still reaches the onSubmit of the rule form that holds the dialog. This replays that walk.
+  type SubmitEvent = Parameters<typeof ownSubmit>[0];
+  function submitFrom(path: { form: object; onSubmit: (e: SubmitEvent) => void }[]) {
+    let stopped = false;
+    const preventDefault = vi.fn();
+    for (const step of path) {
+      if (stopped) break;
+      step.onSubmit({ target: path[0].form, currentTarget: step.form, preventDefault, stopPropagation: () => void (stopped = true) });
+    }
+    return { prevented: preventDefault.mock.calls.length > 0 };
+  }
+
+  it("Create material runs only the dialog's own submit and never saves the rule", () => {
+    const dialogForm = {};
+    const ruleForm = {};
+    const ran: string[] = [];
+    const material = (e: SubmitEvent) => void (ownSubmit(e) && ran.push("material"));
+    const rule = (e: SubmitEvent) => void (ownSubmit(e) && ran.push("rule"));
+    expect(submitFrom([{ form: dialogForm, onSubmit: material }, { form: ruleForm, onSubmit: rule }]).prevented).toBe(true);
+    expect(ran).toEqual(["material"]);
+    // Even a dialog that forgets to stop it cannot save the rule: the rule form ignores a submit that is not its own.
+    ran.length = 0;
+    submitFrom([{ form: dialogForm, onSubmit: () => undefined }, { form: ruleForm, onSubmit: rule }]);
+    expect(ran).toEqual([]);
+    // Create rule, or Enter in a rule field, still saves.
+    expect(submitFrom([{ form: ruleForm, onSubmit: rule }]).prevented).toBe(true);
+    expect(ran).toEqual(["rule"]);
+  });
+
+  it("both forms claim only their own submit, and the dialog's button belongs to the dialog's form", () => {
+    const read = (file: string) => readFileSync(path.join(__dirname, "..", "src/components", file), "utf8");
+    const builder = read("automation/RuleBuilder.tsx");
+    const dialog = read("automation/MaterialDialog.tsx");
+    for (const src of [builder, dialog]) expect(src).toMatch(/async function submit\(e: React\.FormEvent\) \{\s*(\/\/[^\n]*\n\s*)?if \(!ownSubmit\(e\)\) return;/);
+    expect(dialog).toContain('<Button type="submit" form={FORM_ID}');
+    expect(dialog).toContain("<form id={FORM_ID} onSubmit={submit}");
+    // and the dialog is drawn at the end of the page, so its form is never inside the rule form's element
+    expect(read("ui/Dialog.tsx")).toContain("document.body");
   });
 });
 

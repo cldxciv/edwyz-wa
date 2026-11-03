@@ -89,11 +89,61 @@ export type PersonalDataEntry = {
   how: string;
   /** True when workspace-connection erasure for one Meta user also removes this data (data derived solely from that connection). */
   metaDerived?: boolean;
+  /** What kind of data the table is registered as, where a spec names it (docs/IG-PAGE-ADS-SPEC.md 5.5). */
+  category?: PersonalDataCategory;
+  /** Columns added after the table, each with what it holds and the rule it follows (docs/IG-PAGE-ADS-SPEC.md 5.5). */
+  columns?: Readonly<Record<string, string>>;
+  /**
+   * Deleted by workspace id inside the erasure's final transaction, together with the workspace row and the tombstone, instead
+   * of in batches beforehand: either all of these rows go with the workspace or none do and the erasure can run again
+   * (docs/IG-PAGE-ADS-SPEC.md 5.5). Only for tables a workspace keeps few enough rows in for one transaction.
+   */
+  inErasureTransaction?: true;
 };
+
+/** "Registered as" in docs/IG-PAGE-ADS-SPEC.md 5.5. */
+export type PersonalDataCategory = "user_content" | "no_personal_data" | "counts_only" | "aggregates";
+
+/** Fixed retention of Instagram and Facebook Page ads data (docs/IG-PAGE-ADS-SPEC.md 5.5), in days. Used by retention.ts. */
+export const PROMOTE_RETENTION_DAYS = {
+  /** The longest period; a shorter ad performance period (insightSnapshotDays) wins. */
+  insightBreakdowns: 400,
+  audienceUploads: 180,
+  /** After AdMedia.lastUsedAt, for ad-only media no live ad uses. Their files go too. */
+  adOnlyMedia: 30,
+  /** After a video Meta has processed became ready, when no live ad or draft uses it: the local file goes, the row stays. */
+  processedVideoOriginals: 30,
+  testLeads: 30,
+  /** After AdCampaign.discardedAt. */
+  discardedDrafts: 30,
+} as const;
+
+/**
+ * Fixed retention of Studio images and Canva data (docs/specs/ADS-MCP-CANVA-CREATIVE-SPEC.md 4.4, 5.3). Used by the studio.sweep
+ * task (src/lib/studio/sweep.ts), which runs every `sweepHours`.
+ */
+export const STUDIO_RETENTION = {
+  /** The sweep's interval: a row whose Library file is gone, or a former member's Canva connection, goes within this. */
+  sweepHours: 6,
+  /** StudioJob rows, after they finish (done or failed). */
+  finishedJobDays: 7,
+  /** An unfinished StudioJob older than this is failed, then removed with the finished ones. */
+  unfinishedJobDays: 1,
+  /** CanvaReturnState rows, after they are used. */
+  usedReturnStateDays: 2,
+  /** CanvaReturnState lifetime when unused: the life of a Canva edit link. */
+  returnStateDays: 30,
+} as const;
 
 const WORKSPACE = "Kept while the workspace exists. Removed when the customer deletes it or the workspace is erased.";
 const del: EraseMethod = { method: "delete" };
 const BY_TENANT = "Deleted in batches by workspace id.";
+const IN_ERASURE_TX: Partial<PersonalDataEntry> = {
+  inErasureTransaction: true,
+  how: "Deleted by workspace id in the erasure's final transaction, together with the workspace row.",
+};
+const SAME_AS_LEAD = "The same rules as the rest of the lead.";
+const FORM_SETTING = "No personal data: a setting or state of the form.";
 
 const table = (id: string, holds: string, retention: string, extra: Partial<PersonalDataEntry> = {}): PersonalDataEntry => ({
   id,
@@ -112,8 +162,19 @@ const table = (id: string, holds: string, retention: string, extra: Partial<Pers
 export const PERSONAL_DATA: readonly PersonalDataEntry[] = [
   // Leads
   table("LeadSequenceRun", "Progress of a follow-up sequence for one lead (lead id, step, schedule).", "Removed with its lead (24 months after last activity) or with the workspace.", { metaDerived: true, retentionKey: "leadMonths" }),
-  table("Lead", "Lead-form answers (name, email, phone, free text), consent text and time, status, assignee.", "24 months after last activity (configurable), unless the customer deletes it earlier.", { metaDerived: true, retentionKey: "leadMonths" }),
-  table("LeadForm", "Lead form id, name and consent text (no person data).", WORKSPACE, { metaDerived: true }),
+  table("Lead", "Lead-form answers (name, email, phone, free text), consent text and time, status, assignee, where the lead came from (a form, a chat started from an ad, or added by hand), the platform and ad set, and the chat it started.", `24 months after last activity (configurable), unless the customer deletes it earlier. Test leads are removed after ${PROMOTE_RETENTION_DAYS.testLeads} days.`, {
+    metaDerived: true,
+    retentionKey: "leadMonths",
+    columns: { source: SAME_AS_LEAD, platform: SAME_AS_LEAD, adsetMetaId: SAME_AS_LEAD, isOrganic: SAME_AS_LEAD, isTest: SAME_AS_LEAD, conversationId: SAME_AS_LEAD },
+  }),
+  table("LeadForm", "Lead form id, name and consent text, and for forms built in Edwyz the questions, privacy link, thank-you screen and disclaimer sent to Meta (no person data).", WORKSPACE, {
+    metaDerived: true,
+    columns: {
+      spec: "No personal data: the form as sent to Meta (questions, privacy link, thank-you screen, disclaimer).",
+      origin: FORM_SETTING, formType: FORM_SETTING, locale: FORM_SETTING, metaStatus: FORM_SETTING, syncedAt: FORM_SETTING,
+      copiedFromId: FORM_SETTING, lastBackfillAt: FORM_SETTING, testLeadUntil: FORM_SETTING, hiddenAt: FORM_SETTING,
+    },
+  }),
   table("LeadSequence", "Follow-up message steps written by the customer.", WORKSPACE),
   table("ConversionEvent", "Lead and contact ids, event name and time, the response from Meta.", "90 days (configurable).", { retentionKey: "conversionEventDays", metaDerived: true }),
   table("ApprovalRequest", "Hashed approval link token, subject id, the approver's comment.", "90 days after the decision (configurable).", { retentionKey: "approvalRequestDays", metaDerived: true }),
@@ -121,17 +182,56 @@ export const PERSONAL_DATA: readonly PersonalDataEntry[] = [
   // Ads and insights
   table("OptimizerProposal", "Ad entity ids, rationale and payload of a suggested change, deciding user id.", "Finished proposals are removed with ad performance data (400 days, configurable).", { retentionKey: "insightSnapshotDays", metaDerived: true }),
   table("InsightSnapshot", "Daily ad performance numbers per campaign, ad set and ad (spend, impressions, clicks, results). No individual people.", "400 days (configurable).", { retentionKey: "insightSnapshotDays", metaDerived: true }),
+  // Instagram and Facebook Page ads (docs/IG-PAGE-ADS-SPEC.md 5.5): deleted in the erasure's final transaction, children first.
+  // All five are also erased with the Meta connection whose ad account they came from (erase-meta.ts).
+  table("InsightBreakdown", "Ad results per day by placement, ad version (text, picture, video, button), age and gender band, region and the run total: spend, impressions, reach, clicks, results. Aggregates only, no individual people.", `${PROMOTE_RETENTION_DAYS.insightBreakdowns} days after the day they describe, or the ad performance period if that is shorter (configurable).`, {
+    category: "aggregates",
+    retentionKey: "insightSnapshotDays",
+    metaDerived: true,
+    ...IN_ERASURE_TX,
+  }),
+  table("AdTest", "A comparison of ad versions: the ad sets compared, the measure, the verdict numbers and the deciding user id. No personal data.", "Kept with its campaign. Removed when the campaign or the workspace is deleted.", {
+    category: "no_personal_data",
+    metaDerived: true,
+    ...IN_ERASURE_TX,
+  }),
+  table("AdMedia", "Pictures and videos prepared for ads (file key, size, checksum, dimensions, Meta's image hash or video id) and the user id that added them. User content: the files can show people and the customer's brand.", `Kept while the workspace exists. Crops and copies made only for ads are removed with their files ${PROMOTE_RETENTION_DAYS.adOnlyMedia} days after their last use, once no live ad uses them. Copies of Instagram videos that Meta has processed lose their local file ${PROMOTE_RETENTION_DAYS.processedVideoOriginals} days after they were ready, once no live ad or draft uses them; Meta keeps its copy and the row keeps the video id and thumbnail.`, {
+    category: "user_content",
+    metaDerived: true,
+    ...IN_ERASURE_TX,
+  }),
+  table("AdAudienceUpload", "One customer-list upload: row counts, batch number, status and the requesting user id. Counts only: no hashes, no identifiers.", `${PROMOTE_RETENTION_DAYS.audienceUploads} days after the upload.`, {
+    category: "counts_only",
+    metaDerived: true,
+    ...IN_ERASURE_TX,
+  }),
+  table("AdAudience", "Audience definitions: name, targeting spec, Meta audience id, size range and, for customer lists, the lawful basis (consentBasis). No personal data: people in a customer list are hashed and sent to Meta, never stored here.", "Kept while the workspace exists. Customer-list audiences are also deleted on Meta when the workspace, or the Meta connection of their ad account, is erased.", {
+    category: "no_personal_data",
+    metaDerived: true,
+    ...IN_ERASURE_TX,
+  }),
   table("Ad", "Ad creative settings (page id, copy, link, form id) and name.", WORKSPACE, { metaDerived: true }),
   table("AdSet", "Targeting settings (locations, age range, interests) and name.", WORKSPACE, { metaDerived: true }),
-  table("AdCampaign", "Campaign settings, budget, schedule, creating user id.", WORKSPACE, { metaDerived: true }),
+  table("AdCampaign", "Campaign settings, budget, schedule, creating user id.", `${WORKSPACE} Discarded drafts are removed ${PROMOTE_RETENTION_DAYS.discardedDrafts} days after they were discarded.`, { metaDerived: true }),
 
   // Publishing and creative
   table("PostTarget", "Page or account the post goes to, external post id, error text.", WORKSPACE, { metaDerived: true }),
   table("ScheduledPost", "Post text and media file keys, schedule, creating user id.", WORKSPACE),
+  // Studio images and Canva (docs/specs/ADS-MCP-CANVA-CREATIVE-SPEC.md 4.4), before Brand (StudioItem.brandId). None is data of
+  // the Meta connection: the Meta data-deletion callback has nothing new to remove.
+  table("StudioItem", "Where a Library image came from: its file key, the template inputs the member typed (offer text, prices, the business contact line), the Canva design id and the creating user id.", `While its Library file exists. A row whose file is gone is removed by the sweep within ${STUDIO_RETENTION.sweepHours} hours.`, {
+    how: "Rows deleted in batches by workspace id. The files go with the files:content entry.",
+  }),
+  table("StudioJob", "A Canva import, autofill or return run by the worker: the Canva design or template id, chosen pages and format, error text and the user id.", `${STUDIO_RETENTION.finishedJobDays} days after it finishes (done or failed). Unfinished jobs older than ${STUDIO_RETENTION.unfinishedJobDays} day are failed, then removed.`),
+  table("CanvaReturnState", "The Canva design id, user id and export settings behind Canva's Return button.", `Until used plus ${STUDIO_RETENTION.usedReturnStateDays} days, or its expiry (${STUDIO_RETENTION.returnStateDays} days, the life of a Canva edit link).`),
+  table("CanvaConnection", "A member's Canva user id, team id and display name, and the sealed Canva access and refresh tokens.", `Until the member disconnects, leaves the workspace (removed by the sweep within ${STUDIO_RETENTION.sweepHours} hours) or the workspace is erased.`, {
+    erase: { method: "secrets-then-delete", overwrite: { accessTokenEnc: null, refreshTokenEnc: null } },
+    how: "Tokens revoked at Canva (best effort), then overwritten, then rows deleted by workspace id.",
+  }),
   table("CreativeAsset", "Ad copy, file key of a generated image or video, provider, policy check.", "Kept while the workspace exists. Files with no database row are deleted after 24 hours.", { how: "Rows deleted in batches by workspace id. Files under DATA_DIR/creative/<tenant id> are removed with the files:creative entry." }),
   table("CreativeAngle", "Ad angle text (hook, audience, call to action).", WORKSPACE),
   table("CreativeBrief", "Offer text and research summary, which can include text taken from the customer's website.", WORKSPACE),
-  table("Brand", "Brand name, website, logo link, colours, tone, banned words.", WORKSPACE),
+  table("Brand", "Brand name, website, logo link and logo file key, colours, fonts and image style, tone, banned words, tagline and the business contact line shown on images.", WORKSPACE),
 
   // Commerce
   table("AbandonedCart", "Shopper phone number, cart items, total, checkout link, reminder state.", "90 days after creation (configurable).", { retentionKey: "abandonedCartDays" }),
@@ -358,7 +458,7 @@ export const RETENTION_SUMMARY: { label: string; period: string }[] = [
   { label: "Automation run records", period: `${FIXED_RETENTION_DAYS.automationRuns} days` },
   { label: "Sign-in sessions", period: `${FIXED_RETENTION_DAYS.sessions} days after expiry or revocation` },
   { label: "One-time email tokens", period: `${FIXED_RETENTION_DAYS.emailTokens} days after use or expiry` },
-  { label: "Ad performance data (insight snapshots, finished optimizer proposals)", period: `${RETENTION_DEFAULTS.insightSnapshotDays} days` },
+  { label: "Ad performance data (insight snapshots, results by placement, version, age and gender, and region, finished optimizer proposals)", period: `${RETENTION_DEFAULTS.insightSnapshotDays} days` },
   { label: "Conversion events sent to Meta", period: `${RETENTION_DEFAULTS.conversionEventDays} days` },
   { label: "Approval requests", period: `${RETENTION_DEFAULTS.approvalRequestDays} days after the decision` },
   { label: "Finished chatbot sessions", period: `${RETENTION_DEFAULTS.chatbotSessionDays} days after they end` },
@@ -370,9 +470,22 @@ export const RETENTION_SUMMARY: { label: string; period: string }[] = [
 
 export const lowerFirst = (s: string): string => s.charAt(0).toLowerCase() + s.slice(1);
 
-/** Entries that workspace erasure deletes through the generic batched path, in order. */
+/**
+ * Entries that workspace erasure deletes by workspace id, in order: in batches beforehand (batchedTables) or inside its final
+ * transaction (erasureTransactionTables).
+ */
 export function deletableTables(): PersonalDataEntry[] {
   return PERSONAL_DATA.filter((e) => e.store === "table" && (e.erase.method === "delete" || e.erase.method === "secrets-then-delete"));
+}
+
+/** The deletable tables erasure clears in batches before its final transaction, in order. */
+export function batchedTables(): PersonalDataEntry[] {
+  return deletableTables().filter((e) => !e.inErasureTransaction);
+}
+
+/** The deletable tables erasure clears inside its final transaction, with the workspace row and the tombstone, in order. */
+export function erasureTransactionTables(): PersonalDataEntry[] {
+  return deletableTables().filter((e) => e.inErasureTransaction === true);
 }
 
 /** Append-only tables that workspace erasure purges inside one transaction with the edwyz.purge GUC (SpendLedger, SpendConsent). */

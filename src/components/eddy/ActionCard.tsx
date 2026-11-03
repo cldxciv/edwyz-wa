@@ -9,11 +9,16 @@
  * Every word comes from the caller, which renders it from the catalogue. Navigate chips accept only allowlisted /app paths
  * (safeAppPath); a path it refuses shows no chip. Meta links accept only a known screen and an https URL, and they are
  * built by server code, never from model text; this file names no Meta host.
+ *
+ * E-R2 (docs/IG-PAGE-ADS-SPEC.md 6.3, 6.6): the `meta_screen` UI hint renders as MetaScreenButton, a labelled button with an
+ * external-link icon that opens a new tab with rel="noopener noreferrer". It renders only for an allowlisted screen key
+ * (contract.ts META_SCREEN_HINT_KEYS) and an address on Meta's own hosts (meta-links.ts isMetaHref); anything else shows nothing.
  */
 import { useId, type ReactNode } from "react";
 import { Button, cn, type Tone } from "@/components/ui";
-import { safeAppPath } from "@/lib/eddy/contract";
-import { htmlLang, t, type EddyLang } from "@/lib/eddy/i18n";
+import { isMetaScreenHintKey, safeAppPath, type MetaScreenHint } from "@/lib/eddy/contract";
+import { hasKey, htmlLang, t, translateKey, type EddyLang } from "@/lib/eddy/i18n";
+import { isMetaHref } from "@/lib/eddy/meta-links";
 import { cardTextClass, SafeMarkdown } from "./SafeMarkdown";
 import { StatusChip } from "./StatusChip";
 
@@ -111,6 +116,50 @@ export function MetaLinkButton({ link, lang }: { link: unknown; lang: EddyLang }
   );
 }
 
+const LABEL_KEY = /^[a-z][a-z0-9_.]{0,119}$/;
+
+/**
+ * A server-resolved "Opens Meta" hint (E-R2), checked: kind meta_screen, an allowlisted screen key, a catalogue label key, and an
+ * https address on Meta's own hosts with no credentials. Otherwise null, so a hint built from anything else renders nothing.
+ */
+export function safeMetaScreenHint(hint: unknown): MetaScreenHint | null {
+  if (!hint || typeof hint !== "object" || Array.isArray(hint)) return null;
+  const { kind, key, href, labelKey } = hint as Record<string, unknown>;
+  if (kind !== "meta_screen" || !isMetaScreenHintKey(key)) return null;
+  if (typeof labelKey !== "string" || !LABEL_KEY.test(labelKey)) return null;
+  if (!isMetaHref(href)) return null;
+  return { kind: "meta_screen", key, href: new URL(href).toString(), labelKey };
+}
+
+/**
+ * The "Opens Meta" button of the E-R2 hint: the screen's label, the "Opens Meta" tag and an external-link icon. It opens a new
+ * tab (rel="noopener noreferrer"); the accessible name says where it goes and that it opens a new tab. Renders nothing for a hint
+ * that fails safeMetaScreenHint.
+ */
+export function MetaScreenButton({ hint, lang, className }: { hint: unknown; lang: EddyLang; className?: string }) {
+  const safe = safeMetaScreenHint(hint);
+  if (!safe) return null;
+  const opens = t(lang, "link.opens_meta");
+  const label = hasKey(safe.labelKey) ? translateKey(lang, safe.labelKey) : opens;
+  const newTab = translateKey(lang, "eddy_promote.new_tab", {}, "opens in a new tab");
+  return (
+    <a
+      href={safe.href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={cn(chipClass, "min-h-11 justify-center", className)}
+      aria-label={`${label} (${opens}, ${newTab})`}
+      data-eddy-meta-screen={safe.key}
+    >
+      <span className="min-w-0 truncate">{label}</span>
+      <span className="rounded-full bg-surface-2 px-1.5 py-0.5 text-[0.7rem] font-medium text-muted">{opens}</span>
+      <svg viewBox="0 0 16 16" className="h-3.5 w-3.5 shrink-0" aria-hidden="true" focusable="false">
+        <path d="M9 3h4v4M13 3L7.5 8.5M11 9.5V13H3V5h3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </a>
+  );
+}
+
 const TONE_FRAME: Record<Tone, string> = {
   neutral: "border-border bg-raised",
   info: "border-border bg-raised",
@@ -129,6 +178,8 @@ export type ActionCardProps = {
   buttons?: readonly ActionButton[];
   chips?: readonly NavChip[];
   metaLink?: unknown;
+  /** The E-R2 "Opens Meta" hint (a server-resolved MetaScreenHint); anything that fails safeMetaScreenHint renders nothing. */
+  metaScreen?: unknown;
   onNavigate?: (path: string) => void;
   children?: ReactNode;
   className?: string;
@@ -173,7 +224,7 @@ export function TurnOnEddyCard({ lang, isOwner, ownerNames, perTurn, perDay, onT
   return <ActionCard lang={lang} title={t(lang, "turnon.title")} body={body} buttons={buttons} chips={chips} onNavigate={onNavigate} className={className} />;
 }
 
-export function ActionCard({ lang, title, body, tone = "neutral", chip, buttons = [], chips, metaLink, onNavigate, children, className, headingId }: ActionCardProps) {
+export function ActionCard({ lang, title, body, tone = "neutral", chip, buttons = [], chips, metaLink, metaScreen, onNavigate, children, className, headingId }: ActionCardProps) {
   const generated = useId();
   const id = headingId ?? `eddy-ac-${generated}`;
   return (
@@ -199,6 +250,12 @@ export function ActionCard({ lang, title, body, tone = "neutral", chip, buttons 
       {metaLink !== undefined && (
         <div className="mt-3">
           <MetaLinkButton link={metaLink} lang={lang} />
+        </div>
+      )}
+      {safeMetaScreenHint(metaScreen) && (
+        <div className="mt-3 flex flex-col gap-1" data-eddy-meta>
+          <MetaScreenButton hint={metaScreen} lang={lang} className="w-full sm:w-auto" />
+          <p className="text-xs text-muted">{t(lang, "meta.screen.note")}</p>
         </div>
       )}
     </section>

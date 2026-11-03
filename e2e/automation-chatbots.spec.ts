@@ -36,7 +36,7 @@ test.describe.serial("chatbots: list, templates, preview, save, publish", () => 
     for (const n of ["Welcome and menu", "Collect lead details", "Business hours reply"]) {
       await expect(page.getByRole("link", { name: `Use this template: ${n}` })).toBeVisible();
     }
-    await expect(page.getByRole("link", { name: "Auto-replies" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Rules", exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "New chatbot" })).toBeVisible();
   });
 

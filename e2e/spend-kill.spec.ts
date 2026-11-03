@@ -8,7 +8,7 @@
  * Runs with SPEND_DRY_RUN=1 on the app under test.
  */
 import { expect, test, type Page } from "@playwright/test";
-import { ORIGIN, closeDb, connectFakeNumber, db, deliverInbound, signupUser, stamp, watchErrors } from "./helpers";
+import { ORIGIN, closeDb, connectFakeNumber, db, deliverInbound, signupUser, stamp, tick, watchErrors } from "./helpers";
 import { agentContext, axeSerious, dismissWelcome, goDark, noHorizontalOverflow } from "./audience-campaigns-util";
 import { connectSpendingAdAccount, ledgerRows, liftNewWorkspaceLimits, resetSpend, setAllowance, spendDryRun, storedFreeze } from "./spend-kit";
 
@@ -39,6 +39,8 @@ test("an admin stops all spending; only the owner turns it back on, and nothing 
   );
   const fx = await connectFakeNumber(owner.tenantId);
   await deliverInbound(page.request, fx, `9198${stamp().slice(-8)}`, "Is the Diwali offer still on?");
+  // Inbound webhooks are queued; the tick processes them (no worker daemon runs under e2e).
+  await tick(page.request, 2);
 
   // The admin stops all spending.
   const admin = await agentContext(browser, owner.tenantId, "admin");

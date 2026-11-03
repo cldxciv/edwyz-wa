@@ -32,11 +32,13 @@ export const NOTICE_KINDS: readonly NoticeKind[] = [
   "approvals_waiting",
   "ai_limit_100",
   "template_rejected",
+  "ad_rejected",
   "failed_sends",
   "token_expiring",
   "ai_limit_80",
   "template_paused",
   "template_approved",
+  "ad_approved",
   "automation_digest",
   "setup_next_step",
   "eddy_handoff",
@@ -68,6 +70,9 @@ export const KIND_SPECS: Readonly<Record<NoticeKind, KindSpec>> = {
   automation_digest: { severity: "fyi", minRole: "admin", numberBased: false },
   setup_next_step: { severity: "fyi", minRole: "admin", numberBased: false },
   eddy_handoff: { severity: "action_needed", minRole: "admin", numberBased: false },
+  // Meta's ad review (docs/IG-PAGE-ADS-SPEC.md 3.9, PRM-08): published by src/lib/promote/review.ts, one per ad and state.
+  ad_approved: { severity: "fyi", minRole: "admin", numberBased: false },
+  ad_rejected: { severity: "action_needed", minRole: "admin", numberBased: false },
 };
 
 export const isNoticeKind = (v: unknown): v is NoticeKind => typeof v === "string" && (NOTICE_KINDS as readonly string[]).includes(v);
@@ -86,6 +91,8 @@ export const dedupe = {
   spending: (scope: "workspace" | "platform", level: string) => `spending:${scope}:${level}`,
   digest: (day: string) => `digest:${day}`,
   setup: (stepId: string) => `setup:${stepId}`,
+  /** One notice per ad (the Ad row id) and review state: approved, rejected or partly_rejected. */
+  adReview: (adId: string, state: "approved" | "rejected" | "partly_rejected") => `ad-review:${adId}:${state}`,
 } as const;
 
 /** A dedupe key: id and code characters, at most 200. */
@@ -136,6 +143,10 @@ export const PAYLOAD_KEYS: ReadonlySet<string> = new Set([
   "outcome",
   "approvalId",
   "correlationId",
+  // Ad review notices (ad_approved, ad_rejected): row ids and Meta's policy codes, never the reason's words or the ad's text.
+  "adId",
+  "campaignId",
+  "codes",
 ]);
 
 /** An id, a code or a comma-separated id list: letters, digits and _ . : , - only. No spaces, so no sentence fits. */
@@ -250,7 +261,8 @@ export function textKeyFor(kind: string, payload: NoticePayload, source: string 
     case "ai_limit_80":
       return `notices.ai_80.${period}`;
     case "ai_limit_100":
-      return `notices.ai_100.${period}`;
+      // "hour": the plan's AI replies per hour were reached (src/lib/billing/ai-hourly.ts noteHourlyCapHit).
+      return payload.period === "hour" ? "notices.ai_100.hour" : `notices.ai_100.${period}`;
     case "spending_stopped":
       if (payload.scope === "platform") return "notices.spending.platform";
       if (payload.level === "assistants") return "notices.spending.assistants";
@@ -261,6 +273,10 @@ export function textKeyFor(kind: string, payload: NoticePayload, source: string 
       return typeof payload.stepId === "string" && SETUP_STEP_KEYS.has(payload.stepId) ? `notices.setup.${payload.stepId}` : "notices.generic";
     case "eddy_handoff":
       return "notices.eddy_handoff";
+    case "ad_approved":
+      return "notices.ad_approved";
+    case "ad_rejected":
+      return payload.state === "partly_rejected" ? "notices.ad_rejected_partly" : "notices.ad_rejected";
     case "action_done":
       return "notice.action_done";
     case "action_failed":
@@ -278,10 +294,16 @@ export function textKeyFor(kind: string, payload: NoticePayload, source: string 
  * Until Phase 0 writes through publishNotice() (request E6), it keeps writing its own in-app rows (source 'spend'). Where an
  * Eddy notice already tells the member the same thing, in their language, the strip shows only the Eddy one: a quality
  * breaker on a number (Phase 0 `breaker_tripped`, subject the phone) and waiting approvals (Phase 0 `approval_waiting`).
- * The AI 80% and 100% notices share Phase 0's dedupe key, so there is only ever one row for them.
+ * The AI 80% and 100% notices share Phase 0's dedupe key, so there is only ever one row for them. The structure sync's own
+ * "Meta did not approve an ad" row (dedupe `ads-review:<ad>:rejected`) gives way to the ad_rejected notice of the same ad.
  */
-export function supersededSpendRow(row: { source: string; kind: string; subjectType: string | null; subjectId: string | null }, eddyRows: readonly { kind: string; subjectType: string | null; subjectId: string | null }[]): boolean {
+export function supersededSpendRow(
+  row: { source: string; kind: string; subjectType: string | null; subjectId: string | null; dedupeKey?: string | null },
+  eddyRows: readonly { kind: string; subjectType: string | null; subjectId: string | null }[],
+): boolean {
   if (row.source !== "spend") return false;
+  const adRejected = row.kind === "breaker_tripped" && typeof row.dedupeKey === "string" ? /^ads-review:([A-Za-z0-9_-]{1,64}):rejected$/.exec(row.dedupeKey) : null;
+  if (adRejected) return eddyRows.some((e) => e.kind === "ad_rejected" && e.subjectType === "ad" && e.subjectId === adRejected[1]);
   if (row.kind === "breaker_tripped" && row.subjectType === "phone") return eddyRows.some((e) => e.kind === "number_quality_dropped" && e.subjectId === row.subjectId);
   if (row.kind === "approval_waiting") return eddyRows.some((e) => e.kind === "approvals_waiting");
   return false;

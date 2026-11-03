@@ -8,6 +8,8 @@ import { SESSION_LABEL } from "./SessionsPanel";
 type BotState = {
   session: { id: string; chatbotName: string; status: string; endedAt: string | null } | null;
   available: { id: string; name: string }[];
+  /** The AI agent handed this chat to the team (or stepped aside for a bot) and stays quiet here until it is let back in. */
+  aiPaused?: boolean;
 };
 
 const RUNNING = new Set(["active", "waiting"]);
@@ -15,14 +17,16 @@ const RUNNING = new Set(["active", "waiting"]);
 const MAX_FAILURES = 3;
 
 /**
- * Sits in the inbox chat header. Shows whether a chatbot is talking to this customer, lets a teammate stop it, and lets them
- * start any published chatbot on the chat.
+ * Sits in the inbox chat header. Shows whether a chatbot is talking to this customer, lets a teammate stop it, lets them
+ * start any published chatbot on the chat, and lets the AI agent answer again in a chat it handed over. The header is a size
+ * container, so the long labels (@2xl:) follow the chat column's width, not the window's: with the list and Details open beside
+ * it the column is narrow even on a wide screen.
  */
 export function ConversationBot({ conversationId, onChanged }: { conversationId: string; onChanged?: () => void }) {
   const [state, setState] = useState<BotState | null>(null);
   const [open, setOpen] = useState(false);
   const [chosen, setChosen] = useState("");
-  const [busy, setBusy] = useState<"start" | "stop" | null>(null);
+  const [busy, setBusy] = useState<"start" | "stop" | "resume" | null>(null);
   const [failures, setFailures] = useState(0);
 
   const load = useCallback(async () => {
@@ -39,8 +43,8 @@ export function ConversationBot({ conversationId, onChanged }: { conversationId:
     if (failures === 0) return <Skeleton className="h-8 w-20" />;
     return (
       <Button variant="secondary" size="sm" onClick={() => void load()} title="We could not check whether a chatbot is running in this chat.">
-        <span className="hidden sm:inline">Bot status unavailable. Try again</span>
-        <span className="sm:hidden">Retry bot</span>
+        <span className="hidden @2xl:inline">Bot status unavailable. Try again</span>
+        <span className="@2xl:hidden">Retry bot</span>
       </Button>
     );
   }
@@ -75,6 +79,20 @@ export function ConversationBot({ conversationId, onChanged }: { conversationId:
     }
   }
 
+  async function resumeAi() {
+    setBusy("resume");
+    try {
+      await apiFetch("/api/ai-agent/resume", { method: "POST", body: { conversationId } });
+      toast.success("The AI agent will answer this customer's next message.");
+      await load();
+      onChanged?.();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "We could not switch the AI agent back on for this chat.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function stop() {
     const ok = await confirm({
       title: "Stop the chatbot?",
@@ -97,6 +115,19 @@ export function ConversationBot({ conversationId, onChanged }: { conversationId:
 
   return (
     <>
+      {state.aiPaused && !running && (
+        <Button
+          variant="secondary"
+          size="sm"
+          loading={busy === "resume"}
+          disabled={busy !== null && busy !== "resume"}
+          title="The AI agent handed this chat to your team and stays quiet here. Let it answer the customer's next message."
+          onClick={() => void resumeAi()}
+        >
+          <span className="hidden @2xl:inline">Let the AI answer again</span>
+          <span className="@2xl:hidden">Let AI reply</span>
+        </Button>
+      )}
       {running && (
         <Badge tone="info" dot>
           <span className="max-w-32 truncate" title={`Chatbot running: ${running.chatbotName}`}>
@@ -105,7 +136,7 @@ export function ConversationBot({ conversationId, onChanged }: { conversationId:
         </Badge>
       )}
       {label && last && (
-        <span className="hidden md:inline-flex">
+        <span className="hidden @2xl:inline-flex">
           <Badge tone={label.tone}>
             <span title={`${last.chatbotName}: ${label.label}`}>Bot: {label.label}</span>
           </Badge>
@@ -125,8 +156,8 @@ export function ConversationBot({ conversationId, onChanged }: { conversationId:
               setOpen(true);
             }}
           >
-            <span className="hidden sm:inline">Run a chatbot</span>
-            <span className="sm:hidden">Bot</span>
+            <span className="hidden @2xl:inline">Run a chatbot</span>
+            <span className="@2xl:hidden">Bot</span>
           </Button>
         )
       )}

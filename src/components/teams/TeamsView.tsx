@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { PageHeader } from "@/components/app/PageHeader";
 import { useApi } from "@/components/contacts/hooks";
 import { RoleGate } from "@/components/team/RoleGate";
@@ -26,13 +26,18 @@ function NameDialog({ team, teams, onClose, onSaved }: { team: TeamRow | null; t
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const nameRef = useRef<HTMLInputElement>(null);
   const problem = tried ? teamNameProblem(name, teams, team?.id) : null;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setTried(true);
     setError("");
-    if (teamNameProblem(name, teams, team?.id)) return;
+    // Like the invite dialog: an invalid name puts the cursor back in the field, so typing goes where the error is.
+    if (teamNameProblem(name, teams, team?.id)) {
+      nameRef.current?.focus();
+      return;
+    }
     setBusy(true);
     try {
       if (team) await apiFetch(`/api/teams/${team.id}`, { method: "PATCH", body: { name } });
@@ -63,7 +68,7 @@ function NameDialog({ team, teams, onClose, onSaved }: { team: TeamRow | null; t
     >
       <form id="team-name-form" onSubmit={submit} noValidate className="space-y-4">
         <FormField label="Team name" error={problem} required>
-          <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} autoComplete="off" data-autofocus="" placeholder="Sales" />
+          <Input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)} maxLength={80} autoComplete="off" data-autofocus="" placeholder="Sales" />
         </FormField>
         {error && <Alert tone="bad">{error}</Alert>}
       </form>

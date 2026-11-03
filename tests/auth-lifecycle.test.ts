@@ -19,6 +19,8 @@ const db = vi.hoisted(() => {
     "phoneNumber", "webhookEvent", "automationRun", "contact", "conversation", "message", "note", "broadcastRecipient", "apiKey", "ruleExecution",
   ];
   const prisma: Record<string, unknown> = Object.fromEntries(names.map((n) => [n, model()]));
+  // promote/forget.ts forgetContact (PRM-11) first looks for the workspace's customer-list audiences on Meta: none here.
+  prisma.adAudience = { findMany: vi.fn(async () => []) };
   prisma.$transaction = (fn: (tx: unknown) => unknown) => fn(prisma);
   return prisma as Record<string, Record<string, ReturnType<typeof vi.fn>>> & { $transaction: unknown };
 });

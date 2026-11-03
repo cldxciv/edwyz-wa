@@ -4,6 +4,7 @@ import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { Alert, Button, Card, EmptyState, ErrorState, FormField, Input, Skeleton, StatusPill, apiFetch, confirm, toast } from "@/components/ui";
 import { PageHeader } from "@/components/app/PageHeader";
 import { canManage, useApi, useRole } from "@/components/contacts/hooks";
+import { ApprovalsPanel } from "@/components/approvals/ApprovalsPanel";
 import { formatMinor } from "@/lib/ads/insights-money";
 import { LinkButton } from "../ads/LinkButton";
 import {
@@ -20,7 +21,9 @@ import {
   rejectCopy,
   revertCopy,
   revertDeadline,
+  settingLabel,
   settingToText,
+  sharedCurrency,
   validateSettings,
   type Money,
 } from "./helpers";
@@ -44,6 +47,27 @@ type Action = "approve" | "reject" | "revert";
 const date = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "");
 
 type CardProps = { p: Proposal; busy: string | null; onAct: (p: Proposal, action: Action) => void; revertDays: number; money: Money };
+
+/**
+ * Asking the client about a suggestion: the approvals panel opens (and loads) only when someone expands it, so a long list
+ * of suggestions does not load one approval list each. The client's answer is advice: nothing changes on Meta until an
+ * owner or admin approves here.
+ */
+export function ClientApproval({ id, title }: { id: string; title: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <details className="mt-4" onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary className="inline-flex min-h-10 cursor-pointer items-center text-sm font-medium">
+        Ask your client first<span className="sr-only"> about {title}</span>
+      </summary>
+      {open && (
+        <div className="mt-2">
+          <ApprovalsPanel subjectType="optimizer_proposal" subjectId={id} headingLevel="h4" description="Send your client a link to approve this suggestion. Their answer shows here; you still make the change yourself." />
+        </div>
+      )}
+    </details>
+  );
+}
 
 const ProposalCard = memo(function ProposalCard({ p, busy, onAct, revertDays, money }: CardProps) {
   const described = describeProposal(p.kind, p.payload, p.rationale, money);
@@ -97,6 +121,7 @@ const ProposalCard = memo(function ProposalCard({ p, busy, onAct, revertDays, mo
               Reject
             </Button>
           </div>
+          {p.status === "proposed" && <ClientApproval id={p.id} title={title} />}
         </>
       )}
       {canRevert(p, revertDays) && (
@@ -174,7 +199,7 @@ function SettingsForm({ data, currency, isOwner, onSaved }: { data: SettingsResp
             <summary className="cursor-pointer text-sm font-medium">Fine-tune the rules (optional)</summary>
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
               {SETTING_SPECS.map((spec) => (
-                <FormField key={spec.key} label={spec.kind === "money" && currency ? `${spec.label} (${currency})` : spec.label} hint={spec.hint} error={errors[spec.key]}>
+                <FormField key={spec.key} label={settingLabel(spec, currency)} hint={spec.hint} error={errors[spec.key]}>
                   <Input inputMode="decimal" value={values[spec.key]} onChange={(e) => setValues({ ...values, [spec.key]: e.target.value })} autoComplete="off" />
                 </FormField>
               ))}
@@ -218,10 +243,15 @@ export function OptimizerView() {
   const applied = useApi<{ proposals: Proposal[] }>("/api/optimizer/proposals?status=applied");
   const settings = useApi<SettingsResponse>("/api/optimizer/settings");
   const caps = useApi<{ caps: { currency: string | null } }>("/api/ads/caps");
+  // Money settings and suggestions are in the ad account's currency. Before an owner sets the limit (which carries one),
+  // take it from the connected ad accounts when they all use the same one.
+  const options = useApi<{ adAccounts: { currency: string | null }[] }>(caps.data && !caps.data.caps.currency ? "/api/ads/options" : null);
   const [busy, setBusy] = useState<string | null>(null);
   const openHeading = useRef<HTMLHeadingElement>(null);
   const appliedHeading = useRef<HTMLHeadingElement>(null);
-  const currency = caps.data?.caps.currency ?? null;
+  const currency = caps.data?.caps.currency ?? sharedCurrency(options.data?.adAccounts);
+  // The settings form waits for the currency, so it does not show amounts and then remount with another unit.
+  const currencyReady = !!caps.error || !!caps.data?.caps.currency || !!options.data || !!options.error;
   const money = useCallback<Money>((n) => formatMinor(n, currency), [currency]);
   const revertDays = Number(settings.data?.settings.revertDays ?? 14);
   const { reload: reloadOpen } = open;
@@ -303,7 +333,7 @@ export function OptimizerView() {
         )}
       </section>
 
-      {settings.data ? (
+      {settings.data && currencyReady ? (
         <SettingsForm key={currency ?? "none"} data={settings.data} currency={currency} isOwner={role === "owner"} onSaved={settings.reload} />
       ) : settings.error ? (
         <Alert tone="bad" action={<Button size="sm" variant="secondary" onClick={settings.retry}>Try again</Button>}>

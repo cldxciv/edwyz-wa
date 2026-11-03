@@ -16,7 +16,7 @@ vi.mock("@/lib/billing", () => ({ assertWithinLimit: async () => undefined }));
 vi.mock("@/lib/inbox/service", () => ({ sendTemplateMessage: vi.fn() }));
 vi.mock("@/lib/integrations/events", () => ({ emitEvent: async () => undefined }));
 
-import { bucketByDay, gridRange, isPastDay, monthGrid, statusColour } from "@/lib/broadcasts/calendar";
+import { bucketByDay, canPlanDay, gridRange, isPastDay, longDate, monthGrid, statusColour } from "@/lib/broadcasts/calendar";
 import { buildFunnel, funnelRate, mergeCounts } from "@/lib/broadcasts/funnel";
 import { meterView, qualityView } from "@/lib/broadcasts/limits";
 import { broadcastFunnel, numberLimits } from "@/lib/broadcasts/overview";
@@ -72,6 +72,19 @@ describe("calendar helpers", () => {
     expect(statusColour("canceled")).toBe("inactive");
     expect(isPastDay(new Date(2026, 0, 1), new Date(2026, 0, 2))).toBe(true);
     expect(isPastDay(new Date(2026, 0, 2, 23), new Date(2026, 0, 2, 1))).toBe(false);
+  });
+  it("offers planning only from today to the last day of the 90-day window", () => {
+    const now = new Date(2026, 9, 30, 15, 0);
+    expect(canPlanDay(new Date(2026, 9, 29), 90, now)).toBe(false);
+    expect(canPlanDay(new Date(2026, 9, 30), 90, now)).toBe(true);
+    expect(canPlanDay(new Date(2027, 0, 28), 90, now)).toBe(true);
+    expect(canPlanDay(new Date(2027, 0, 29), 90, now)).toBe(false);
+    expect(canPlanDay(new Date(2027, 2, 15), 90, now)).toBe(false);
+  });
+  it("names a day in full words, not Date.toDateString", () => {
+    const label = longDate(new Date(2026, 9, 30));
+    expect(label).toContain("2026");
+    expect(label).not.toBe(new Date(2026, 9, 30).toDateString());
   });
 });
 

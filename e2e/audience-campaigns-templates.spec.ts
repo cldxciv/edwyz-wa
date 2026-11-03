@@ -96,8 +96,10 @@ test("templates editor: validation messages, counters, placeholders, preview, bu
   await page.getByLabel("What it does").selectOption("PHONE_NUMBER");
   await page.getByLabel(/^Phone number to call/).fill("12345");
   await page.getByRole("button", { name: "Save as draft" }).click();
-  await expect(page.getByText(/Enter the phone number with country code, like \+919876543210/)).toBeVisible();
-  await page.getByLabel(/^Phone number to call/).fill("+919876543210");
+  await expect(page.getByText(/Enter the phone number with \+ and the country code, like \+91 98765 43210/)).toBeVisible();
+  // spaces are fine: the number is sent as +919876543210
+  await page.getByLabel(/^Phone number to call/).fill("+91 98765 43210");
+  await expect(page.getByText(/Enter the phone number with \+ and the country code/)).toHaveCount(0);
   await expect(preview).toContainText("Track order");
   // max 10 buttons, and Remove keeps focus on a sensible control
   for (let i = 0; i < 9; i++) await page.getByRole("button", { name: "Add button" }).click();
@@ -302,6 +304,56 @@ test("templates: agent view is read-only, and other workspaces cannot reach a te
   } finally {
     await other.close();
   }
+});
+
+test("templates: open a template, copy an approved one, edit the draft, and Meta's fixed login-code format", async ({ page, context }) => {
+  const errors = watchErrors(page);
+  const u = await signupUser(context, "tpl");
+  const fx = await connectFakeNumber(u.tenantId);
+  await seedTemplate(u.tenantId, fx.wabaRef, { name: "order_ready", status: "approved", category: "UTILITY", body: "Hi there, your order is ready." });
+  const rejected = await seedTemplate(u.tenantId, fx.wabaRef, { name: "sale_note", status: "rejected", rejectionReason: "PROMOTIONAL", body: "Big sale today." });
+  await page.goto("/app/templates");
+  // the name opens the template; an approved one is read-only with Make a copy
+  await page.getByRole("link", { name: "order_ready", exact: true }).click(); // not "Download order_ready as a file"
+  await expect(page.getByRole("heading", { level: 1, name: "order_ready" })).toBeVisible();
+  await expect(page.getByText(/Meta approved this wording/)).toBeVisible();
+  await expect(page.getByRole("group", { name: "Preview of your message" })).toContainText("Hi there, your order is ready.");
+  await page.getByRole("button", { name: "Make a copy" }).click();
+  // the copy opens in the editor
+  await expect(page.getByRole("heading", { level: 1, name: "Edit template" })).toBeVisible();
+  await expect(nameField(page)).toHaveValue("order_ready_copy");
+  await expect(bodyField(page)).toHaveValue("Hi there, your order is ready.");
+  await bodyField(page).fill("{{1}} your order is ready");
+  await page.getByRole("button", { name: "Save as draft" }).click();
+  await expect(page.getByText(/does not accept a message that starts or ends with a placeholder/)).toBeVisible();
+  await bodyField(page).fill("Hi there, your order is ready to collect.");
+  await page.getByRole("button", { name: "Save as draft" }).click();
+  await page.waitForURL(/\/app\/templates$/);
+  await expect(page.getByText("Changes saved")).toBeVisible();
+  await expect(page.getByRole("row", { name: /order_ready_copy/ }).getByText("Hi there, your order is ready to collect.")).toBeVisible();
+
+  // a rejected template opens in the editor with Meta's reason
+  await page.getByRole("link", { name: "Edit sale_note" }).click();
+  await page.waitForURL(new RegExp(`/app/templates/${rejected.id}$`));
+  await expect(page.getByText("Meta did not approve this template")).toBeVisible();
+  await expect(page.getByText(/reads like a promotion/)).toBeVisible();
+
+  // Authentication: Meta writes the message, so only its three choices are offered
+  await page.getByLabel("Type of message").selectOption("AUTHENTICATION");
+  await expect(bodyField(page)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Add a header" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Add button" })).toHaveCount(0);
+  await expect(page.getByRole("group", { name: "Preview of your message" }).last()).toContainText("is your verification code.");
+  await page.getByLabel(/^Code expires after/).fill("120");
+  await page.getByRole("button", { name: "Save as draft" }).click();
+  await expect(page.getByText(/whole number of minutes from 1 to 90/)).toBeVisible();
+
+  // an unknown template says so, with a way back
+  await page.goto("/app/templates/does-not-exist");
+  await expect(page.getByRole("heading", { level: 1, name: "Template not found" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Back to templates" })).toBeVisible();
+  const unexpected = errors.filter((e) => !/404/.test(e));
+  expect(unexpected, unexpected.join("\n")).toEqual([]);
 });
 
 test("templates: load error state is plain and recoverable", async ({ page, context }) => {

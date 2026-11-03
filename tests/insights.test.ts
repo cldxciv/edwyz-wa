@@ -16,10 +16,10 @@ type Snap = {
 
 const db = vi.hoisted(() => ({
   snaps: [] as Snap[],
-  campaigns: [] as { id: string; tenantId: string; metaCampaignId: string | null; name: string; status: string; currency: string; dailyBudgetMinor: number }[],
+  campaigns: [] as { id: string; tenantId: string; metaCampaignId: string | null; name: string; status: string; currency: string; dailyBudgetMinor: number; adAccountAssetId?: string }[],
   adSets: [] as { tenantId: string; metaAdSetId: string; name: string }[],
   ads: [] as { tenantId: string; metaAdId: string; name: string }[],
-  assets: [] as { tenantId: string; type: string; status: string; meta: unknown }[],
+  assets: [] as { tenantId: string; type: string; status: string; meta: unknown; id?: string; externalId?: string; name?: string | null }[],
   connections: [] as { tenantId: string; status: string }[],
   settings: new Map<string, unknown>(),
   jobs: [] as unknown[],
@@ -108,8 +108,13 @@ import { MAX_PAGES, exactSpendMinor, fetchLevel, isRateLimit } from "@/lib/ads/i
 import { setLogSink } from "@/lib/log";
 import { toSnapshot, upsertSnapshots } from "@/lib/ads/insights-store";
 import { MANUAL_COOLDOWN_MS, requestManualSync, syncTenant, syncWindow } from "@/lib/ads/insights-sync";
-import { breakdownByLevel, dailySeries, fatigueCandidates, spendPacing, summaryByPeriod, tenantCurrency, topAndBottomAds } from "@/lib/ads/insights-queries";
+import { accountScope, breakdownByLevel, dailySeries, fatigueCandidates, insightAccounts, spendPacing, summaryByCurrency, summaryByPeriod, tenantCurrency, topAndBottomAds } from "@/lib/ads/insights-queries";
+import { BASE_FIELDS, LEVEL_FIELDS } from "@/lib/ads/insights-fetch";
 import { worker } from "@/lib/ads/insights-worker";
+import { BREAKDOWN_FIELDS, BREAKDOWN_FILTER_MAX, RUN_TOTAL_FIELDS, VIDEO_FIELDS, breakdownQuery, fetchBreakdown, type InsightsPace } from "@/lib/ads/insights-fetch";
+import { CHAT_STARTED, RESULT_ACTIONS, leadCount, pickRowResults, resultActionsFor, resultActionsForOptimization, sumActions } from "@/lib/ads/insights-map";
+import { goalRow } from "@/lib/promote/catalog/goals";
+import { PROMOTE_GOAL_KEYS } from "@/lib/promote/flags";
 
 const snap = (o: Omit<Partial<Snap>, "date"> & { entityMetaId: string; date: string }): Snap => ({
   tenantId: "t1",
@@ -428,5 +433,290 @@ describe("queries on fixtures", () => {
     db.assets.push({ tenantId: "t1", type: "ad_account", status: "active", meta: { currency: "USD" } });
     expect(await tenantCurrency("t1")).toEqual({ currency: null, mixed: true });
     expect(await tenantCurrency("t5")).toEqual({ currency: null, mixed: false });
+  });
+});
+
+describe("names, ad accounts and currencies (campaigns made in Ads Manager, mixed currencies)", () => {
+  it("asks Meta for names, the ad account and its currency, and keeps them in raw", async () => {
+    expect(BASE_FIELDS).toEqual(expect.arrayContaining(["account_id", "account_currency"]));
+    expect(LEVEL_FIELDS.campaign).toContain("campaign_name");
+    expect(LEVEL_FIELDS.adset).toEqual(expect.arrayContaining(["adset_name", "campaign_name"]));
+    expect(LEVEL_FIELDS.ad).toEqual(expect.arrayContaining(["ad_name", "adset_name", "campaign_name"]));
+    graph.fetchAs.mockResolvedValueOnce({ data: [] });
+    await fetchLevel("tok", "1", "ad", "2026-10-01", "2026-10-01");
+    expect(graph.fetchAs.mock.calls[0][1].query.fields.split(",")).toEqual(expect.arrayContaining(["ad_name", "account_id", "account_currency"]));
+    const snap = toSnapshot("t1", "ad", { ad_id: "a1", ad_name: " Summer A ", campaign_id: "c1", campaign_name: "Summer", account_id: "act_77", account_currency: "usd", date_start: "2026-10-01", spend: "1" }, 2)!;
+    expect(snap.raw).toMatchObject({ name: "Summer A", campaignName: "Summer", campaignId: "c1", accountId: "77", currency: "USD" });
+    expect(toSnapshot("t1", "campaign", { campaign_id: "c1", date_start: "2026-10-01", spend: "1", account_currency: "rupees" }, 2)!.raw).toMatchObject({ name: null, accountId: null, currency: null });
+  });
+
+  it("shows Meta's name for a campaign made in Ads Manager, and Edwyz's own name first", async () => {
+    db.snaps.push(
+      snap({ entityType: "campaign", entityMetaId: "ext1", date: "2026-10-01", spendMinor: 500, raw: { name: "Old name" } }),
+      snap({ entityType: "campaign", entityMetaId: "ext1", date: "2026-10-02", spendMinor: 500, raw: { name: "Spring sale" } }),
+      snap({ entityType: "campaign", entityMetaId: "own1", date: "2026-10-01", spendMinor: 100, raw: { name: "Meta name" } }),
+      snap({ entityType: "campaign", entityMetaId: "bare", date: "2026-10-01", spendMinor: 50 }),
+    );
+    db.campaigns.push({ id: "k1", tenantId: "t1", metaCampaignId: "own1", name: "Edwyz name", status: "active", currency: "INR", dailyBudgetMinor: 1 });
+    const rows = await breakdownByLevel("t1", "campaign", "2026-10-01", "2026-10-02");
+    expect(rows.map((r) => [r.entityMetaId, r.name])).toEqual([["ext1", "Spring sale"], ["own1", "Edwyz name"], ["bare", "bare"]]);
+  });
+
+  const twoAccounts = () => {
+    db.assets.push(
+      { tenantId: "t1", type: "ad_account", status: "active", id: "accIN", externalId: "act_100", name: "India", meta: { currency: "INR" } },
+      { tenantId: "t1", type: "ad_account", status: "active", id: "accUS", externalId: "200", name: "US", meta: { currency: "USD" } },
+    );
+    db.campaigns.push({ id: "k1", tenantId: "t1", metaCampaignId: "old1", name: "Legacy", status: "paused", currency: "INR", dailyBudgetMinor: 1000, adAccountAssetId: "accIN" });
+    db.snaps.push(
+      snap({ entityType: "campaign", entityMetaId: "in1", date: "2026-10-01", spendMinor: 1000, results: 2, raw: { accountId: "100", currency: "INR" } }),
+      // Stored before the sync kept the account: matched through Edwyz's own campaign of that account.
+      snap({ entityType: "campaign", entityMetaId: "old1", date: "2026-10-02", spendMinor: 300, results: 1, raw: {} }),
+      snap({ entityType: "campaign", entityMetaId: "us1", date: "2026-10-01", spendMinor: 700, results: 7, raw: { accountId: "200", currency: "USD" } }),
+      snap({ entityType: "ad", entityMetaId: "adUS", date: "2026-10-01", spendMinor: 700, results: 7, raw: { accountId: "200", campaignId: "us1", name: "US ad" } }),
+      snap({ entityType: "ad", entityMetaId: "adIN", date: "2026-10-01", spendMinor: 900, results: 3, raw: { campaignId: "old1" } }),
+    );
+  };
+
+  it("filters every query by ad account, matching old snapshots through Edwyz's campaigns", async () => {
+    twoAccounts();
+    const india = await accountScope("t1", "accIN");
+    expect(india).toMatchObject({ assetId: "accIN", externalId: "100", currency: "INR" });
+    expect((await summaryByPeriod("t1", "2026-10-01", "2026-10-02", india)).current).toMatchObject({ spendMinor: 1300, results: 3 });
+    const us = await accountScope("t1", "accUS");
+    expect((await summaryByPeriod("t1", "2026-10-01", "2026-10-02", us)).current).toMatchObject({ spendMinor: 700, results: 7 });
+    expect((await dailySeries("t1", "2026-10-01", "2026-10-02", india)).map((d) => d.spendMinor)).toEqual([1000, 300]);
+    const ads = await breakdownByLevel("t1", "ad", "2026-10-01", "2026-10-02", 100, india);
+    expect(ads.map((r) => [r.entityMetaId, r.currency])).toEqual([["adIN", "INR"]]);
+    expect((await topAndBottomAds("t1", "2026-10-01", "2026-10-02", 5, us)).top.map((r) => r.name)).toEqual(["US ad"]);
+    await expect(accountScope("t1", "nope")).rejects.toMatchObject({ status: 404 });
+    await expect(accountScope("t2", "accIN")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("totals each currency on its own, and every ad row carries its currency", async () => {
+    twoAccounts();
+    const split = await summaryByCurrency("t1", "2026-10-01", "2026-10-02");
+    expect(split.map((g) => [g.currency, g.current.spendMinor, g.current.results])).toEqual([
+      ["INR", 1300, 3],
+      ["USD", 700, 7],
+    ]);
+    const ads = await breakdownByLevel("t1", "ad", "2026-10-01", "2026-10-02");
+    expect(Object.fromEntries(ads.map((r) => [r.entityMetaId, r.currency]))).toEqual({ adIN: "INR", adUS: "USD" });
+    expect(await insightAccounts("t1")).toEqual([
+      { id: "accIN", name: "India", currency: "INR" },
+      { id: "accUS", name: "US", currency: "USD" },
+    ]);
+  });
+
+  it("pacing rows carry their currency and follow the account filter", async () => {
+    twoAccounts();
+    db.campaigns.push({ id: "k2", tenantId: "t1", metaCampaignId: "us1", name: "US live", status: "active", currency: "usd", dailyBudgetMinor: 1000, adAccountAssetId: "accUS" });
+    expect((await spendPacing("t1", "2026-10-02")).map((r) => [r.name, r.currency])).toEqual([["US live", "USD"]]);
+    expect(await spendPacing("t1", "2026-10-02", await accountScope("t1", "accIN"))).toEqual([]);
+  });
+
+  it("the summary route filters by ?adAccount= and splits mixed currencies when it is not given", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/auth", () => ({ getActor: async () => ({ userId: "u1", tenantId: "t1", role: "admin" }) }));
+    const { GET } = await import("@/app/api/ads/insights/summary/route");
+    twoAccounts();
+    db.connections.push({ tenantId: "t1", status: "active" });
+    const all = await (await GET(new Request("https://wa.edwyz.com/api/ads/insights/summary?from=2026-10-01&to=2026-10-02"))).json();
+    expect(all).toMatchObject({ mixed: true, currency: null, adAccount: null });
+    expect(all.byCurrency.map((g: { currency: string }) => g.currency)).toEqual(["INR", "USD"]);
+    expect(all.accounts).toHaveLength(2);
+    const one = await (await GET(new Request("https://wa.edwyz.com/api/ads/insights/summary?from=2026-10-01&to=2026-10-02&adAccount=accUS"))).json();
+    expect(one).toMatchObject({ mixed: false, currency: "USD", adAccount: "accUS", byCurrency: null, current: { spendMinor: 700 } });
+    expect((await GET(new Request("https://wa.edwyz.com/api/ads/insights/summary?from=2026-10-01&to=2026-10-02&adAccount=other"))).status).toBe(404);
+    vi.doUnmock("@/lib/auth");
+  });
+});
+
+describe("extra metrics, results per goal and the breakdown reads (docs/IG-PAGE-ADS-SPEC.md 4.2, 4.4, PRM-12)", () => {
+  const VIDEO = (n: string) => [{ action_type: "video_view", value: n }];
+
+  it("level reads ask Meta for reach, link clicks, ThruPlays and the video quartiles", async () => {
+    expect(BASE_FIELDS).toEqual(expect.arrayContaining(["reach", "inline_link_clicks", ...VIDEO_FIELDS]));
+    graph.fetchAs.mockResolvedValueOnce({ data: [] });
+    await fetchLevel("tok", "1", "campaign", "2026-10-01", "2026-10-01");
+    const fields = graph.fetchAs.mock.calls[0][1].query.fields.split(",");
+    for (const f of ["reach", "inline_link_clicks", "video_thruplay_watched_actions", "video_p25_watched_actions", "video_p50_watched_actions", "video_p75_watched_actions", "video_p100_watched_actions"]) expect(fields).toContain(f);
+  });
+
+  it("level rows store reach, link clicks, ThruPlays, the quartiles and messaging starts", async () => {
+    const row = {
+      ad_id: "a1",
+      date_start: "2026-10-01",
+      spend: "10",
+      impressions: "1000",
+      clicks: "30",
+      reach: "640",
+      inline_link_clicks: "22",
+      objective: "OUTCOME_ENGAGEMENT",
+      actions: [{ action_type: CHAT_STARTED, value: "9" }, { action_type: "post_engagement", value: "50" }],
+      video_thruplay_watched_actions: VIDEO("120"),
+      video_p25_watched_actions: VIDEO("300"),
+      video_p50_watched_actions: VIDEO("200"),
+      video_p75_watched_actions: VIDEO("150"),
+      video_p100_watched_actions: VIDEO("90"),
+    };
+    const s = toSnapshot("t1", "ad", row, 2)!;
+    const metrics = { reach: 640, linkClicks: 22, thruplays: 120, videoP25: 300, videoP50: 200, videoP75: 150, videoP100: 90, messagingStarts: 9 };
+    expect(s).toMatchObject({ ...metrics, results: 9 });
+    await upsertSnapshots([s]);
+    expect(db.snaps).toHaveLength(1);
+    expect(db.snaps[0]).toMatchObject(metrics);
+    // A day without video or chats counts zero; a row without reach keeps it null rather than guessing.
+    expect(toSnapshot("t1", "campaign", { campaign_id: "c1", date_start: "2026-10-01", spend: "1" }, 2)).toMatchObject({
+      reach: null,
+      linkClicks: null,
+      thruplays: 0,
+      videoP25: 0,
+      videoP100: 0,
+      messagingStarts: 0,
+    });
+  });
+
+  it("RESULT_ACTIONS covers every goal and picks the right result for each, as the goal catalog says", () => {
+    const actions = [
+      { action_type: CHAT_STARTED, value: "7" },
+      { action_type: "lead", value: "5" },
+      { action_type: "landing_page_view", value: "11" },
+      { action_type: "link_click", value: "40" },
+      { action_type: "offsite_conversion.fb_pixel_purchase", value: "3" },
+      { action_type: "post_engagement", value: "90" },
+      { action_type: "like", value: "13" },
+    ];
+    const row = { actions, reach: "2500", video_thruplay_watched_actions: VIDEO("321") };
+    const expected: Record<string, [number, string | null]> = {
+      whatsapp_chats: [7, CHAT_STARTED],
+      instagram_dms: [7, CHAT_STARTED],
+      messenger_chats: [7, CHAT_STARTED],
+      any_chat: [7, CHAT_STARTED],
+      lead_form: [5, "lead"],
+      website_visits: [11, "landing_page_view"],
+      website_sales: [3, "offsite_conversion.fb_pixel_purchase"],
+      engagement: [90, "post_engagement"],
+      video_views: [321, "video_thruplay_watched_actions"],
+      awareness: [2500, "reach"],
+      page_likes: [13, "like"],
+      // VERIFY V-P17: no action is counted until the runbook records Meta's profile-visit action.
+      profile_visits: [0, null],
+    };
+    for (const goal of PROMOTE_GOAL_KEYS) {
+      expect(Object.prototype.hasOwnProperty.call(RESULT_ACTIONS, goal), goal).toBe(true);
+      expect(pickRowResults(goal, row), goal).toEqual({ results: expected[goal][0], actionType: expected[goal][1] });
+      expect(RESULT_ACTIONS[goal][0] ?? null, goal).toBe(goalRow(goal).resultAction);
+    }
+    // Website visits without a pixel: landing page views stay zero and link clicks count.
+    expect(pickRowResults("website_visits", { actions: [{ action_type: "link_click", value: "40" }] })).toEqual({ results: 40, actionType: "link_click" });
+    // Old-wizard rows still count by objective; an unknown key never reads the object prototype.
+    expect(pickRowResults("OUTCOME_LEADS", row).actionType).toBe("lead");
+    expect(resultActionsFor("constructor")).toEqual(resultActionsFor(undefined));
+    expect(pickResults("constructor", actions).actionType).toBe("lead");
+    expect(leadCount([{ action_type: "onsite_conversion.lead_grouped", value: "4" }])).toBe(4);
+    expect(sumActions([{ value: "2" }, { value: "x" }, { value: "3" }])).toBe(5);
+  });
+
+  const IDS = ["120200000000001", "120200000000002"];
+  const DAYS = { since: "2026-10-02", until: "2026-10-31" };
+
+  it("builds the R3, R3a, R4 and R5 reads: Edwyz's ids only, daily rows except the run total", () => {
+    const r3 = breakdownQuery({ dimension: "placement", ...DAYS, campaignIds: IDS });
+    expect(r3).toMatchObject({ level: "ad", time_increment: "1", breakdowns: "publisher_platform,platform_position" });
+    expect(JSON.parse(r3.filtering)).toEqual([{ field: "campaign.id", operator: "IN", value: IDS }]);
+    expect(JSON.parse(r3.time_range)).toEqual(DAYS);
+    expect(r3.fields.split(",")).toEqual([...BREAKDOWN_FIELDS.ad]);
+    expect(r3.fields.split(",")).toEqual(expect.arrayContaining(["ad_id", "adset_id", "campaign_id", "spend", "impressions", "reach", "clicks", "actions", "cost_per_action_type", ...VIDEO_FIELDS]));
+
+    const r3a = breakdownQuery({ dimension: "run_total", since: "2026-10-20", until: "2026-10-31", campaignIds: IDS });
+    expect(r3a.level).toBe("campaign");
+    expect(r3a.time_increment).toBeUndefined();
+    expect(r3a.breakdowns).toBeUndefined();
+    expect(JSON.parse(r3a.time_range)).toEqual({ since: "2026-10-20", until: "2026-10-31" });
+    expect(r3a.fields.split(",")).toEqual([...RUN_TOTAL_FIELDS]);
+    expect(r3a.fields.split(",")).toEqual(expect.arrayContaining(["campaign_id", "reach", "frequency"]));
+
+    for (const [dimension, breakdowns] of [
+      ["asset_body", "body_asset"],
+      ["asset_title", "title_asset"],
+      ["asset_image", "image_asset"],
+      ["asset_video", "video_asset"],
+      ["asset_cta", "call_to_action_asset"],
+    ] as const) {
+      const q = breakdownQuery({ dimension, ...DAYS, adIds: ["120200000000101"] });
+      expect(q, dimension).toMatchObject({ level: "ad", breakdowns, time_increment: "1" });
+      expect(JSON.parse(q.filtering), dimension).toEqual([{ field: "ad.id", operator: "IN", value: ["120200000000101"] }]);
+    }
+    expect(breakdownQuery({ dimension: "age_gender", ...DAYS, campaignIds: IDS })).toMatchObject({ level: "campaign", breakdowns: "age,gender", time_increment: "1" });
+    expect(breakdownQuery({ dimension: "region", ...DAYS, campaignIds: IDS })).toMatchObject({ level: "campaign", breakdowns: "region", time_increment: "1" });
+    expect(breakdownQuery({ dimension: "region", ...DAYS, campaignIds: IDS }).fields.split(",")).not.toContain("ad_id");
+
+    // Never an unfiltered read: no ids, too many, a non-numeric id, a bad range, or R4 without ad ids is refused before any call.
+    expect(() => breakdownQuery({ dimension: "placement", ...DAYS, campaignIds: [] })).toThrow(RangeError);
+    expect(() => breakdownQuery({ dimension: "placement", ...DAYS, campaignIds: Array.from({ length: BREAKDOWN_FILTER_MAX + 1 }, (_, i) => String(i + 1)) })).toThrow(RangeError);
+    expect(() => breakdownQuery({ dimension: "placement", ...DAYS, campaignIds: ["1 OR 1"] })).toThrow(RangeError);
+    expect(() => breakdownQuery({ dimension: "placement", since: "2026-10-31", until: "2026-10-01", campaignIds: IDS })).toThrow(RangeError);
+    expect(() => breakdownQuery({ dimension: "asset_body", ...DAYS, campaignIds: IDS })).toThrow(RangeError);
+  });
+
+  it("reads a version's run total per ad set (R3a at ad set level): still filtered to the campaigns, no time_increment", () => {
+    const q = breakdownQuery({ dimension: "run_total", since: "2026-10-20", until: "2026-10-31", campaignIds: IDS, level: "adset" });
+    expect(q.level).toBe("adset");
+    expect(q.time_increment).toBeUndefined();
+    expect(q.breakdowns).toBeUndefined();
+    expect(JSON.parse(q.filtering)).toEqual([{ field: "campaign.id", operator: "IN", value: IDS }]);
+    expect(q.fields.split(",")).toEqual([...RUN_TOTAL_FIELDS, "adset_id"]);
+    // Only the run total is read per ad set.
+    expect(() => breakdownQuery({ dimension: "placement", ...DAYS, campaignIds: IDS, level: "adset" })).toThrow(RangeError);
+    expect(() => breakdownQuery({ dimension: "run_total", ...DAYS, campaignIds: IDS, level: "campaign" as never })).toThrow(RangeError);
+  });
+
+  it("website visits count the action the ad set optimises for, never link clicks on a landing-page-views row", () => {
+    const clicksOnly = { actions: [{ action_type: "link_click", value: "5" }] };
+    const both = { actions: [{ action_type: "landing_page_view", value: "3" }, { action_type: "link_click", value: "9" }] };
+    expect(resultActionsForOptimization("website_visits", "LANDING_PAGE_VIEWS")).toEqual(["landing_page_view"]);
+    expect(resultActionsForOptimization("website_visits", "LINK_CLICKS")).toEqual(["link_click"]);
+    // 0 landing page views and 5 link clicks in a landing-page-views campaign: 0 visits.
+    expect(pickRowResults("website_visits", clicksOnly, resultActionsForOptimization("website_visits", "LANDING_PAGE_VIEWS"))).toEqual({ results: 0, actionType: null });
+    expect(pickRowResults("website_visits", both, resultActionsForOptimization("website_visits", "LANDING_PAGE_VIEWS"))).toEqual({ results: 3, actionType: "landing_page_view" });
+    expect(pickRowResults("website_visits", both, resultActionsForOptimization("website_visits", "LINK_CLICKS"))).toEqual({ results: 9, actionType: "link_click" });
+    // Old-wizard traffic campaigns follow the same rule.
+    expect(resultActionsForOptimization("OUTCOME_TRAFFIC", "LANDING_PAGE_VIEWS")).toEqual(["landing_page_view"]);
+    // An unknown or deciding-nothing optimisation keeps the goal's list.
+    expect(resultActionsForOptimization("website_visits", null)).toEqual(RESULT_ACTIONS.website_visits);
+    expect(resultActionsForOptimization("website_visits", "constructor")).toEqual(RESULT_ACTIONS.website_visits);
+    expect(resultActionsForOptimization("whatsapp_chats", "CONVERSATIONS")).toEqual([CHAT_STARTED]);
+    expect(resultActionsForOptimization("lead_form", "LINK_CLICKS")).toEqual(RESULT_ACTIONS.lead_form);
+  });
+
+  it("breakdown reads are paced: the pace runs before each page and sees headers and Meta's rate limit; a held pace calls nothing", async () => {
+    const order: string[] = [];
+    const pace: InsightsPace = { before: vi.fn(async () => void order.push("before")), onHeaders: vi.fn(), onError: vi.fn(async () => void order.push("error")) };
+    const req = { dimension: "placement" as const, since: "2026-10-30", until: "2026-10-31", campaignIds: ["123"] };
+    graph.fetchAs.mockResolvedValueOnce({ data: [{ ad_id: "1" }], paging: { cursors: { after: "A" }, next: "https://next" } }).mockResolvedValueOnce({ data: [{ ad_id: "2" }] });
+    expect(await fetchBreakdown("tok", "999", req, { pace })).toEqual({ rows: [{ ad_id: "1" }, { ad_id: "2" }], truncated: false });
+    expect(pace.before).toHaveBeenCalledTimes(2);
+    expect(graph.fetchAs.mock.calls[0][1].path).toBe("act_999/insights");
+    expect(graph.fetchAs.mock.calls[1][1].query.after).toBe("A");
+    expect(typeof graph.fetchAs.mock.calls[0][2].onHeaders).toBe("function");
+
+    // A row cap cuts the read and says so.
+    graph.fetchAs.mockResolvedValueOnce({ data: [{ ad_id: "1" }, { ad_id: "2" }, { ad_id: "3" }] });
+    expect(await fetchBreakdown("tok", "999", req, { maxRows: 2 })).toEqual({ rows: [{ ad_id: "1" }, { ad_id: "2" }], truncated: true });
+
+    graph.fetchAs.mockRejectedValueOnce(new GraphError("limit", 400, 17));
+    await expect(fetchBreakdown("tok", "999", req, { pace })).rejects.toThrow("rate limit");
+    expect(pace.onError).toHaveBeenCalledWith(expect.objectContaining({ code: 17 }));
+    expect(order.slice(-2)).toEqual(["before", "error"]);
+
+    graph.fetchAs.mockClear();
+    const held: InsightsPace = {
+      before: async () => {
+        throw new Error("Meta is busy right now.");
+      },
+    };
+    await expect(fetchBreakdown("tok", "999", req, { pace: held })).rejects.toThrow("busy");
+    expect(graph.fetchAs).not.toHaveBeenCalled();
   });
 });

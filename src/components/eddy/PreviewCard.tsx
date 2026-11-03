@@ -36,6 +36,11 @@ import { CardStatusChip, type CardChipState } from "./StatusChip";
 export const CONNECT_PATH = "/app/settings/connect?from=eddy";
 export const RECONNECT_PATH = "/app/settings/connect?from=eddy&reconnect=1";
 export const SPENDING_PATH = "/app/settings/spending";
+/**
+ * The longest fact a card shows (an ad's primary text, IG-PAGE-ADS-SPEC 6.5): a card shows what it confirms in full, so a link
+ * or text the material covers is never cut before the tap. The server caps each fact already (u()).
+ */
+export const CARD_FACT_MAX_GRAPHEMES = 2200;
 
 const isUntrusted = (v: unknown): v is UntrustedText => !!v && typeof v === "object" && typeof (v as UntrustedText).$untrusted === "string" && typeof (v as UntrustedText).text === "string";
 
@@ -390,7 +395,7 @@ function Facts({ lang, preview }: { lang: EddyLang; preview: Preview }) {
     });
   }
   for (const f of preview.facts ?? []) {
-    rows.push({ label: translateKey(lang, f.labelKey, {}, f.labelKey.replace(/^fact\./, "")), value: <Untrusted value={typeof f.value === "string" ? f.value : { ...f.value, text: cutGraphemes(f.value.text, 300) }} />, mono: f.mono });
+    rows.push({ label: translateKey(lang, f.labelKey, {}, f.labelKey.replace(/^fact\./, "")), value: <Untrusted value={typeof f.value === "string" ? f.value : { ...f.value, text: cutGraphemes(f.value.text, CARD_FACT_MAX_GRAPHEMES) }} />, mono: f.mono });
   }
   if (rows.length === 0) return null;
   return (

@@ -8,7 +8,8 @@ export default function manifest(): MetadataRoute.Manifest {
     id: "/app",
     name: "Edwyz WA",
     short_name: "Edwyz WA",
-    description: "Team inbox, broadcasts, chatbots and ads for your WhatsApp Business number.",
+    // No ads here: Instagram and Facebook ads are still coming soon (see the landing page).
+    description: "Team inbox, broadcasts, chatbots and AI replies for your WhatsApp Business number.",
     start_url: "/app?source=twa",
     scope: "/",
     display: "standalone",

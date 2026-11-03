@@ -1,9 +1,10 @@
 import { prisma } from "@/lib/db";
 import { sendText } from "@/lib/inbox/service";
-import { isStopMessage } from "@/lib/webhooks/payload";
+import { isStopMessage, stopSourceOf } from "@/lib/webhooks/payload";
+import { mayReceive } from "@/lib/contacts/opt-out";
 import { isWithinOpenHours, matchesKeywords, parseSchedule } from "./match";
 import { answerWithHolidayMode } from "./v2/holiday";
-import { fireRulesSafely, type RuleRow } from "./v2/run";
+import { busyReason, fireRulesSafely, type RuleRow } from "./v2/run";
 
 export type RuleLike = {
   id: string;
@@ -71,6 +72,8 @@ export type InboundInput = {
   receivedAt: Date;
   /** Kind of the incoming message: text, image, audio and so on. Defaults to text. */
   messageType?: string;
+  /** Id of the tapped reply button or list row. Its title, like a template button's text, is the business's wording, not a STOP (stopSourceOf). */
+  replyId?: string;
   /** True when a chatbot or the AI agent already answered this message. */
   botHandled?: boolean;
 };
@@ -89,13 +92,14 @@ type StoredRuleLike = RuleLike & { version?: number };
  */
 export async function runAutomationsForInbound(input: InboundInput): Promise<AutomationResult> {
   const { tenantId, conversationId, contactId } = input;
-  if (isStopMessage(input.text)) return { replied: false, skipped: "opt-out message" };
+  if (isStopMessage(input.text, [], stopSourceOf(input.messageType, input.replyId))) return { replied: false, skipped: "opt-out message" };
 
   const [contact, conversation] = await Promise.all([
     prisma.contact.findFirst({ where: { id: contactId, tenantId }, select: { optedOutAt: true, createdAt: true } }),
-    prisma.conversation.findFirst({ where: { id: conversationId, tenantId }, select: { status: true } }),
+    prisma.conversation.findFirst({ where: { id: conversationId, tenantId }, select: { status: true, assignedToId: true } }),
   ]);
-  if (!contact || contact.optedOutAt) return { replied: false, skipped: "contact opted out" };
+  // Rules here answer the message the customer just sent, which an opt-out never blocks; a marketing template step is refused per action (v2/actions.ts).
+  if (!contact || !mayReceive(contact, "service")) return { replied: false, skipped: "contact opted out" };
   if (conversation?.status === "blocked") return { replied: false, skipped: "conversation is blocked" };
 
   const rules = (await prisma.automationRule.findMany({ where: { tenantId, enabled: true } })) as StoredRuleLike[];
@@ -142,6 +146,9 @@ export async function runAutomationsForInbound(input: InboundInput): Promise<Aut
     select: { id: true },
   });
   if (recent) return { replied: false, skipped: "automatic reply sent moments ago" };
+  // Like rules v2: no classic auto-reply while a chatbot is talking or a teammate who owns the chat replied in the last minutes.
+  const busy = await busyReason(tenantId, { id: conversationId, assignedToId: conversation?.assignedToId ?? null }, now);
+  if (busy) return { replied: false, skipped: busy };
 
   const ctx: MatchContext = { text: input.text, receivedAt: input.receivedAt, silentMinutes };
 

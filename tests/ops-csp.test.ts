@@ -1,5 +1,9 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { buildCsp, buildLegacyCsp, cspHeaders, cspMode, generateNonce } from "@/lib/security/csp";
+import { THEME_INIT_SCRIPT } from "@/components/app/theme-core";
+import { buildCsp, buildLegacyCsp, cspHeaders, cspMode, generateNonce, THEME_INIT_SCRIPT_HASH } from "@/lib/security/csp";
 import { extractDirectives, flushCspCounts, recordCspReport } from "@/lib/security/csp-report";
 import { setLogSink } from "@/lib/log";
 
@@ -74,11 +78,90 @@ describe("strict policy", () => {
   });
 });
 
+describe("Meta's ad preview iframes (docs/IG-PAGE-ADS-SPEC.md 7.4, D18, PRM-08; host VERIFY V-P5)", () => {
+  const policies = { strict: buildCsp("N0NCE"), strictDev: buildCsp("N0NCE", { dev: true }), legacy: buildLegacyCsp(), legacyDev: buildLegacyCsp({ dev: true }) };
+
+  it("frames business.facebook.com and www.facebook.com in every policy", () => {
+    for (const [name, policy] of Object.entries(policies)) {
+      const frames = directive(policy, "frame-src");
+      expect(frames, name).toContain("https://business.facebook.com");
+      expect(frames, name).toContain("https://www.facebook.com");
+      expect(policy.match(/frame-src/g), name).toHaveLength(1);
+    }
+  });
+
+  it("allows the host for frames only: no script, connect or wildcard entry", () => {
+    for (const [name, policy] of Object.entries(policies)) {
+      expect(directive(policy, "script-src"), name).not.toContain("business.facebook.com");
+      expect(directive(policy, "connect-src"), name).not.toContain("business.facebook.com");
+      expect(directive(policy, "frame-src"), name).not.toMatch(/\*|https:(\s|$)/);
+    }
+  });
+
+  it("reaches the browser in both CSP modes", () => {
+    const reportOnly = cspHeaders("report-only", "N0NCE").response;
+    const enforce = cspHeaders("enforce", "N0NCE").response;
+    for (const header of [reportOnly["Content-Security-Policy"], reportOnly["Content-Security-Policy-Report-Only"], enforce["Content-Security-Policy"]]) {
+      expect(directive(header, "frame-src")).toContain("https://business.facebook.com");
+    }
+  });
+});
+
 describe("legacy baseline", () => {
   it("is the previous inline-friendly policy", () => {
     const legacy = buildLegacyCsp();
     expect(directive(legacy, "script-src")).toContain("'unsafe-inline'");
     expect(legacy).toContain("frame-ancestors 'none'");
+  });
+
+  it("never carries a hash or nonce in script-src, which would make browsers ignore 'unsafe-inline'", () => {
+    for (const legacy of [buildLegacyCsp(), buildLegacyCsp({ dev: true })]) {
+      expect(directive(legacy, "script-src")).not.toMatch(/'sha256-|'nonce-/);
+    }
+  });
+});
+
+describe("the root layout's inline theme script under the strict policy", () => {
+  const sha256 = (text: string) => `'sha256-${createHash("sha256").update(text, "utf8").digest("base64")}'`;
+
+  it("THEME_INIT_SCRIPT_HASH is the sha256 of THEME_INIT_SCRIPT (update the constant in csp.ts when the script changes)", () => {
+    expect(THEME_INIT_SCRIPT_HASH, `set THEME_INIT_SCRIPT_HASH to ${sha256(THEME_INIT_SCRIPT)}`).toBe(sha256(THEME_INIT_SCRIPT));
+  });
+
+  it("is allowed by its hash next to the nonce, in production and development, so CSP_MODE=enforce does not block it", () => {
+    for (const policy of [buildCsp("N0NCE"), buildCsp("N0NCE", { dev: true }), cspHeaders("enforce", "N0NCE").response["Content-Security-Policy"]]) {
+      const script = directive(policy, "script-src");
+      expect(script).toContain(THEME_INIT_SCRIPT_HASH);
+      expect(script).toContain("'nonce-N0NCE'");
+      expect(script).not.toContain("'unsafe-inline'");
+    }
+  });
+
+  it("the layout renders exactly that script as the element's whole content, with nothing that would change the hash", () => {
+    const layout = readFileSync(path.join(__dirname, "..", "src/app/layout.tsx"), "utf8");
+    expect(layout).toContain("<script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />");
+    expect(THEME_INIT_SCRIPT).not.toMatch(/<\/script|\r/);
+  });
+});
+
+describe("media and image sources the inbox needs", () => {
+  it("both policies let video, audio and voice notes load from the app, blob: and https links", () => {
+    for (const policy of [buildCsp("N0NCE"), buildLegacyCsp(), buildCsp("N0NCE", { dev: true }), buildLegacyCsp({ dev: true })]) {
+      expect(directive(policy, "media-src")).toBe("media-src 'self' blob: https:");
+      expect(policy.match(/media-src/g)).toHaveLength(1);
+    }
+  });
+
+  it("the enforced legacy policy allows the composer's blob: preview of a picked image, like the strict one", () => {
+    expect(directive(buildLegacyCsp(), "img-src")).toBe("img-src 'self' data: blob: https:");
+    expect(directive(buildCsp("N0NCE"), "img-src")).toBe("img-src 'self' data: blob: https:");
+  });
+
+  it("reaches the browser in both CSP modes", () => {
+    const reportOnly = cspHeaders("report-only", "N0NCE").response;
+    expect(reportOnly["Content-Security-Policy"]).toContain("media-src 'self' blob: https:");
+    expect(reportOnly["Content-Security-Policy-Report-Only"]).toContain("media-src 'self' blob: https:");
+    expect(cspHeaders("enforce", "N0NCE").response["Content-Security-Policy"]).toContain("media-src 'self' blob: https:");
   });
 });
 

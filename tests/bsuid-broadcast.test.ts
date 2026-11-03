@@ -37,7 +37,7 @@ beforeEach(() => {
 describe("broadcast audience", () => {
   it("does not filter on phone, so opted-in BSUID-only contacts are in the audience", () => {
     const where = audienceWhere("t1", []);
-    expect(where).toEqual({ tenantId: "t1", optIn: true, optedOutAt: null });
+    expect(where).toEqual({ tenantId: "t1", optIn: true, optedOutAt: null, conversations: { none: { status: "blocked" } } });
     expect(JSON.stringify(where)).not.toContain("phone");
   });
 

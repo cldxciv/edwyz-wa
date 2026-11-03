@@ -80,11 +80,21 @@ describe("throttle", () => {
 describe("audience", () => {
   beforeEach(() => vi.resetAllMocks());
 
-  it("selects opted-in, not opted-out contacts matching ANY tag", () => {
-    expect(audienceWhere("t1", ["a", "b"])).toEqual({ tenantId: "t1", optIn: true, optedOutAt: null, tags: { hasSome: ["a", "b"] } });
+  const notBlocked = { conversations: { none: { status: "blocked" } } };
+  it("selects opted-in, not opted-out, not blocked contacts matching ANY tag", () => {
+    expect(audienceWhere("t1", ["a", "b"])).toEqual({ tenantId: "t1", optIn: true, optedOutAt: null, ...notBlocked, tags: { hasSome: ["a", "b"] } });
   });
-  it("empty tags means all opted-in contacts", () => {
-    expect(audienceWhere("t1", [])).toEqual({ tenantId: "t1", optIn: true, optedOutAt: null });
+  it("empty tags means all opted-in contacts that nobody blocked", () => {
+    expect(audienceWhere("t1", [])).toEqual({ tenantId: "t1", optIn: true, optedOutAt: null, ...notBlocked });
+    // The opt-out filter is the marketing one unless the template's kind is passed (lib/contacts/opt-out.ts).
+    expect(audienceWhere("t1", [], "utility")).toEqual({ tenantId: "t1", optIn: true, ...notBlocked });
+  });
+  it("counting and freezing never include a blocked contact", async () => {
+    db.contact.count.mockResolvedValue(3);
+    db.contact.findMany.mockResolvedValue([{ id: "c1" }]);
+    db.broadcastRecipient.count.mockResolvedValue(1);
+    await freezeAudience("t1", "b1", []);
+    expect(db.contact.findMany.mock.calls[0][0].where).toMatchObject(notBlocked);
   });
   it("freezes the audience into recipient rows", async () => {
     db.contact.findMany.mockResolvedValue([{ id: "c1" }, { id: "c2" }]);
@@ -281,6 +291,19 @@ describe("processBroadcast", () => {
     await processBroadcast("b1", now);
     expect(inbox.sendTemplateMessage).toHaveBeenCalledTimes(1);
     expect(db.broadcastRecipient.update.mock.calls[0][0].data).toEqual({ status: "skipped" });
+  });
+
+  it("an opt-out skips a marketing broadcast (or one whose category is unknown) but not a utility one; a broadcast still needs an opt-in", async () => {
+    db.broadcast.findUnique.mockResolvedValue(broadcast({ template: { name: "promo", language: "en", category: "MARKETING", components: [{ type: "BODY", text: "Hello" }] } }));
+    setup({ pending: [recipient("1", { optedOutAt: new Date() })] });
+    await processBroadcast("b1", now);
+    expect(inbox.sendTemplateMessage).not.toHaveBeenCalled();
+
+    db.broadcast.findUnique.mockResolvedValue(broadcast({ template: { name: "notice", language: "en", category: "UTILITY", components: [{ type: "BODY", text: "Hello" }] } }));
+    setup({ pending: [recipient("2", { optedOutAt: new Date() }), recipient("3", { optIn: false, optedOutAt: new Date() })] });
+    await processBroadcast("b1", now);
+    expect(inbox.sendTemplateMessage).toHaveBeenCalledTimes(1);
+    expect(inbox.sendTemplateMessage.mock.calls[0][0]).toMatchObject({ contactId: "c2" });
   });
 
   it("syncRecipientFromMessage is tenant-scoped through the recipient and ignores unsettled messages", async () => {

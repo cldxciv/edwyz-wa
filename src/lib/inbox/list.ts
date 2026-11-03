@@ -1,6 +1,7 @@
 import type { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
 import { campaignConversationIds, flagsFor, markedConversationIds, type ConversationFlags } from "./marks";
+import { MIN_TEXT_SEARCH } from "./search";
 import { expiredWhere, statusWhere } from "./status";
 import { SERVICE_WINDOW_MS } from "./window";
 
@@ -29,10 +30,12 @@ export type ConversationLabel = "new" | "campaign";
 
 const clampLimit = (limit: number | undefined, fallback = 30) => Math.min(Math.max(Math.trunc(limit ?? fallback), 1), 100);
 
-/** Message-text search starts at three characters and looks at the newest matches only, so it stays cheap on large workspaces. */
-export const MIN_TEXT_SEARCH = 3;
+// Message-text search starts at MIN_TEXT_SEARCH characters (in ./search, which the search box reads too).
+export { MIN_TEXT_SEARCH };
 export const MESSAGE_HIT_LIMIT = 300;
 const NO_MATCH = { id: { in: [] as string[] } };
+/** Every list but Blocked leaves blocked chats out, and so does the unread badge (countUnreadConversations in ./stream). */
+export const NOT_BLOCKED = { status: { not: "blocked" } };
 
 export function searchDigits(text: string): string | null {
   const stripped = text.replace(/[\s\-().+]/g, "");
@@ -109,6 +112,8 @@ export async function listConversations(tenantId: string, params: ListConversati
     const extra = await viewWhere(tenantId, params.viewerId, params.view, now);
     if (extra) and.push(extra);
   }
+  // Blocked chats are spam the team chose to silence: they only show when the Blocked status is asked for.
+  if (!params.status) and.push(NOT_BLOCKED);
 
   const rows = await prisma.conversation.findMany({
     where: {

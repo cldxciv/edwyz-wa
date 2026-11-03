@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  connectedPageCount,
   buildTimeline,
   describeStep,
   fieldLabel,
@@ -19,6 +20,7 @@ import {
   toMinutes,
   MAX_DELAY_MINUTES,
 } from "@/components/leads/helpers";
+import { findFormsMessage } from "@/components/leads/FormsView";
 
 const NOW = new Date("2026-03-01T12:00:00Z").getTime();
 const ago = (seconds: number) => new Date(NOW - seconds * 1000).toISOString();
@@ -49,6 +51,20 @@ describe("responseHighlight", () => {
   });
   it("does not nag about old leads that were handled outside the product", () => {
     expect(responseHighlight({ status: "won", createdAt: ago(99999), responseSeconds: null }, NOW)).toMatchObject({ tone: "neutral", attention: false });
+  });
+});
+
+describe("connectedPageCount", () => {
+  it("counts active Pages on live connections only", () => {
+    const page = (status = "active") => ({ type: "page", status });
+    expect(connectedPageCount([])).toBe(0);
+    expect(
+      connectedPageCount([
+        { status: "active", assets: [page(), page("removed"), { type: "ad_account", status: "active" }] },
+        { status: "revoked", assets: [page()] },
+        { status: "expired", assets: [page()] },
+      ]),
+    ).toBe(2);
   });
 });
 
@@ -145,5 +161,13 @@ describe("friendlyError", () => {
     expect(friendlyError(new Error("Lead not found."))).toBe("Lead not found.");
     expect(friendlyError(new TypeError("Failed to fetch"))).toMatch(/check your connection/i);
     expect(friendlyError(null, "Oops")).toBe("Oops");
+  });
+});
+
+describe("finding lead forms on Facebook Pages", () => {
+  it("says what was found, and which Pages could not be read", () => {
+    expect(findFormsMessage(0, [])).toEqual({ tone: "warn", text: "No lead forms were found on your Facebook Pages." });
+    expect(findFormsMessage(1, [])).toEqual({ tone: "good", text: "Found 1 lead form on your Facebook Pages." });
+    expect(findFormsMessage(3, ["Old page: Meta did not give this workspace permission."])).toEqual({ tone: "warn", text: "Found 3 lead forms on your Facebook Pages. Some Pages could not be read: Old page: Meta did not give this workspace permission." });
   });
 });

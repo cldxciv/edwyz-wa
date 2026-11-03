@@ -3,16 +3,16 @@
  * inline in PUT /api/inbox/conversations/[id]/assign and /tags; both routes now call these functions, and so do the Eddy
  * definitions, so the rules are written once:
  * - assignAsActor: agents may only take an unassigned chat for themselves or release their own; admins and owners may
- *   assign anyone in the chat's team pool.
+ *   assign anyone in the chat's team pool. The write is routing's applyAssignment, the same one the routing route and bulk
+ *   assign use: a disabled account is refused, round-robin sees the assignment and a routing.assign row is written.
  * - setTagsAsActor: a diff ({add, remove}) applied with a compare-and-set on the stored tags, so an edit made at the same
  *   moment by someone else is kept, never overwritten. `{set}` keeps the route's replace-the-list contract.
  */
 import type { Conversation } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
 import { emitTagChanges } from "@/lib/automation/v2/emit";
-import { assign } from "@/lib/inbox/service";
 import { assertCanActOnConversation, canActOn } from "@/lib/inbox/status";
-import { assertInTeamPool } from "@/lib/teams/pool";
+import { applyAssignment } from "@/lib/routing";
 import { assertConversationVisible } from "@/lib/teams/visibility";
 import { HttpError, type Actor } from "@/lib/tenancy";
 
@@ -32,13 +32,13 @@ export async function assignAsActor(actor: Actor, conversationId: string, to: As
   const userId = to === null || to === "none" ? null : to === "me" ? actor.userId : to;
   if (userId !== null && (typeof userId !== "string" || !userId)) throw new HttpError(400, "userId must be a string or null.");
   await assertConversationVisible(actor, conversationId);
-  const current = await prisma.conversation.findFirst({ where: { id: conversationId, tenantId: actor.tenantId }, select: { assignedToId: true, teamId: true } });
+  const current = await prisma.conversation.findFirst({ where: { id: conversationId, tenantId: actor.tenantId }, select: { id: true, assignedToId: true, teamId: true } });
   if (!current) throw new HttpError(404, "Conversation not found.");
   if (actor.role === "agent" && (!canActOn(actor, current.assignedToId) || (userId !== null && userId !== actor.userId))) {
     throw new HttpError(403, AGENT_ASSIGN_MESSAGE);
   }
-  if (userId !== null) await assertInTeamPool(actor.tenantId, current.teamId, userId);
-  const conversation = await assign(actor.tenantId, conversationId, userId);
+  await applyAssignment(actor, current, userId);
+  const conversation = await prisma.conversation.findFirst({ where: { id: conversationId, tenantId: actor.tenantId } });
   return { conversation, previousAssigneeId: current.assignedToId ?? null, assigneeId: userId };
 }
 

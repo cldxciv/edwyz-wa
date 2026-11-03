@@ -5,7 +5,7 @@ import { assertSameOrigin } from "@/lib/auth/csrf";
 import { email, jsonWithCookies, password, readJson } from "@/lib/auth/http";
 import { hashPassword, needsRehash, verifyPassword } from "@/lib/auth/password";
 import { checkLoginLimits, clearLoginLimit, clientIp } from "@/lib/auth/ratelimit";
-import { createSession, hashToken, signAccessToken } from "@/lib/auth/tokens";
+import { ACCOUNT_DISABLED, createSession, hashToken, signAccessToken } from "@/lib/auth/tokens";
 import { prisma } from "@/lib/db";
 import { HttpError, errorResponse } from "@/lib/tenancy";
 
@@ -29,7 +29,14 @@ export async function POST(request: Request) {
       throw new HttpError(401, BAD);
     }
 
-    const membership = await prisma.membership.findFirst({ where: { userId: user.id }, orderBy: { createdAt: "asc" } });
+    // Checked only after the password matched, so it does not tell a stranger which emails have accounts. Without this a disabled
+    // account got cookies that every page then refused, and the app bounced between /app and /api/auth/continue for ever.
+    if (user.disabledAt) {
+      await audit({ userId: user.id, action: "auth.login_refused", meta: { reason: "disabled" } });
+      throw new HttpError(403, ACCOUNT_DISABLED);
+    }
+    // The oldest workspace that still exists: a deleted one must not pin the session where every request is refused.
+    const membership = await prisma.membership.findFirst({ where: { userId: user.id, tenant: { deletedAt: null } }, orderBy: { createdAt: "asc" } });
     if (!membership) throw new HttpError(403, "This account is not part of a workspace yet. Ask a workspace owner for an invite.");
 
     await clearLoginLimit(mail, ip);

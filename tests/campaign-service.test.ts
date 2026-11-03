@@ -5,7 +5,7 @@ const db = vi.hoisted(() => ({
   phoneNumber: { findFirst: vi.fn() },
   segment: { findFirst: vi.fn() },
   contact: { findMany: vi.fn(), count: vi.fn() },
-  broadcast: { create: vi.fn(), findFirst: vi.fn(), update: vi.fn(), count: vi.fn() },
+  broadcast: { create: vi.fn(), findFirst: vi.fn(), update: vi.fn(), count: vi.fn(), deleteMany: vi.fn() },
   broadcastRecipient: { createMany: vi.fn(), count: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn(), updateMany: vi.fn(), groupBy: vi.fn() },
   platformSetting: { findUnique: vi.fn(), deleteMany: vi.fn() },
 }));
@@ -20,7 +20,7 @@ vi.mock("@/lib/broadcasts/portfolio", () => ({ portfolioUsage: async () => ({ ..
 import { freezeAudience } from "@/lib/broadcasts/audience";
 import { createFollowUp, followUpTemplates, parseOutcome } from "@/lib/broadcasts/followup";
 import { broadcastReportCsv } from "@/lib/broadcasts/report";
-import { createBroadcast, estimateBroadcast, getBroadcast, startBroadcast } from "@/lib/broadcasts/service";
+import { createBroadcast, deleteDraftBroadcast, estimateBroadcast, getBroadcast, startBroadcast } from "@/lib/broadcasts/service";
 import { errorCodeText } from "@/lib/broadcasts/errors";
 
 const actor = { userId: "u1", tenantId: "t1", role: "admin" as const };
@@ -70,7 +70,15 @@ describe("createBroadcast with an audience and a value mapping", () => {
     expect(ok.id).toBe("b1");
   });
   it("needs the media header to be mapped", async () => {
-    await expect(createBroadcast(actor, { name: "x", phoneNumberId: "p1", templateId: "tpl1" })).rejects.toThrow(/Header image link/);
+    await expect(createBroadcast(actor, { name: "x", phoneNumberId: "p1", templateId: "tpl1" })).rejects.toThrow(/Header image/);
+  });
+  it("accepts a header file uploaded for the sending number, and refuses one uploaded for another number", async () => {
+    const upload = { source: "upload", value: "1234567890", filename: "offer.jpg", uploadedAt: new Date().toISOString(), phoneNumberId: "p1" };
+    await createBroadcast(actor, { name: "x", phoneNumberId: "p1", templateId: "tpl1", variableMap: { ...variableMap, header: upload } });
+    expect(db.broadcast.create.mock.calls[0][0].data.variableMap.header).toEqual(upload);
+    await expect(createBroadcast(actor, { name: "x", phoneNumberId: "p1", templateId: "tpl1", variableMap: { ...variableMap, header: { ...upload, phoneNumberId: "p2" } } })).rejects.toThrow(/another WhatsApp number/);
+    const old = new Date(Date.now() - 31 * 86_400_000).toISOString();
+    await expect(createBroadcast(actor, { name: "x", phoneNumberId: "p1", templateId: "tpl1", variableMap: { ...variableMap, header: { ...upload, uploadedAt: old } } })).rejects.toThrow(/Upload it again/);
   });
   it("rejects a segment of another workspace", async () => {
     db.template.findFirst.mockResolvedValue({ ...template, components: [{ type: "BODY", text: "Hello" }] });
@@ -162,6 +170,50 @@ describe("startBroadcast", () => {
   it("refuses when the template is no longer approved", async () => {
     db.broadcast.findFirst.mockResolvedValue(draft({ template: { ...template, status: "paused" } }));
     await expect(startBroadcast(actor, "b1")).rejects.toThrow(/no longer approved/);
+  });
+  it("refuses to start with an uploaded header file WhatsApp no longer keeps, and keeps no recipients", async () => {
+    const old = new Date(Date.now() - 31 * 86_400_000).toISOString();
+    const header = { source: "upload", value: "123", uploadedAt: old, phoneNumberId: "p1" };
+    db.broadcast.findFirst.mockResolvedValue(draft({ phoneNumberId: "p1", template, variableMap: { ...variableMap, header } }));
+    db.contact.count.mockResolvedValue(1);
+    db.contact.findMany.mockResolvedValue([{ id: "c1" }]);
+    db.broadcastRecipient.count.mockResolvedValue(1);
+    await expect(startBroadcast(actor, "b1")).rejects.toThrow(/30 days/);
+    expect(db.broadcastRecipient.deleteMany).toHaveBeenCalledWith({ where: { tenantId: "t1", broadcastId: "b1", status: "pending" } });
+    expect(db.broadcast.update).not.toHaveBeenCalled();
+  });
+  it("wakes a scheduled broadcast with an uploaded file early enough to upload it again before WhatsApp drops it", async () => {
+    const uploadedAt = new Date(Date.now() - 2 * 86_400_000).toISOString();
+    const scheduledAt = new Date(Date.now() + 60 * 86_400_000);
+    db.broadcast.findFirst.mockResolvedValue(draft({ phoneNumberId: "p1", template, scheduledAt, variableMap: { ...variableMap, header: { source: "upload", value: "123", uploadedAt, phoneNumberId: "p1" } } }));
+    db.contact.count.mockResolvedValue(1);
+    db.contact.findMany.mockResolvedValue([{ id: "c1", phone: "+919800000001" }]);
+    db.broadcastRecipient.count.mockResolvedValue(1);
+    db.broadcast.update.mockImplementation(async ({ data }: { data: object }) => data);
+    await startBroadcast(actor, "b1");
+    const runAt = (queue.enqueue.mock.calls[0][2] as { runAt: Date }).runAt;
+    expect(runAt).toEqual(new Date(Date.parse(uploadedAt) + 20 * 86_400_000));
+  });
+});
+
+describe("deleteDraftBroadcast", () => {
+  it("deletes a draft that never started, tenant scoped", async () => {
+    db.broadcast.findFirst.mockResolvedValue({ id: "b1", tenantId: "t1", status: "draft", template });
+    db.broadcastRecipient.count.mockResolvedValue(0);
+    db.broadcast.deleteMany.mockResolvedValue({ count: 1 });
+    await deleteDraftBroadcast(actor, "b1");
+    expect(db.broadcast.findFirst.mock.calls[0][0].where).toEqual({ id: "b1", tenantId: "t1" });
+    expect(db.broadcast.deleteMany).toHaveBeenCalledWith({ where: { id: "b1", tenantId: "t1", status: "draft" } });
+  });
+  it("refuses a broadcast that started or already has people, so its report is kept", async () => {
+    db.broadcast.findFirst.mockResolvedValue({ id: "b1", tenantId: "t1", status: "canceled", template });
+    await expect(deleteDraftBroadcast(actor, "b1")).rejects.toMatchObject({ status: 409 });
+    db.broadcast.findFirst.mockResolvedValue({ id: "b1", tenantId: "t1", status: "draft", template });
+    db.broadcastRecipient.count.mockResolvedValue(3);
+    await expect(deleteDraftBroadcast(actor, "b1")).rejects.toMatchObject({ status: 409 });
+    expect(db.broadcast.deleteMany).not.toHaveBeenCalled();
+    db.broadcast.findFirst.mockResolvedValue(null);
+    await expect(deleteDraftBroadcast(actor, "other")).rejects.toMatchObject({ status: 404 });
   });
 });
 

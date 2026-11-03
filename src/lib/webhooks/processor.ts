@@ -17,7 +17,7 @@ import { emitEvent } from "@/lib/integrations/events";
 import { normalizeTier } from "@/lib/messaging-limit";
 import { contactOptedOutPayload, messageReceivedPayload, messageStatusPayload, templateStatusPayload } from "@/lib/integrations/payloads";
 import { assignConversation } from "@/lib/routing";
-import { normalizeIdentity } from "@/lib/contacts/identity";
+import { normalizeIdentity, phoneFromWaId } from "@/lib/contacts/identity";
 import { learnIdentityFromStatus, resolveInboundContact } from "@/lib/contacts/resolve";
 import { describeError } from "@/lib/safe-error";
 import { applyAccountUpdate, applyTemplateQuality, normalizeQualityRating } from "@/lib/spend/messaging/quality";
@@ -25,7 +25,8 @@ import { normalizeCategory } from "@/lib/spend/messaging/origin";
 import { handleOwnerKeyword, handleOwnerReply } from "@/lib/spend/notify/inbound";
 import { mapMetaStatus } from "@/lib/templates/status";
 import { wireModules } from "@/lib/wiring";
-import { asArr, asJsonArr, asRec, describeMessage, INTERACTIVE_PLACEHOLDER, extractChanges, isStartMessage, isStopMessage, parsePricing, str, type Change, type ParsedMessage, type Rec } from "./payload";
+import { POSSIBLE_OPT_OUT_NOTE } from "@/lib/contacts/opt-out";
+import { asArr, asJsonArr, asRec, describeMessage, INTERACTIVE_PLACEHOLDER, extractChanges, isOptOutButton, isStartMessage, isStopMessage, mightBeOptOutRequest, mightBeStopWord, NOT_CUSTOMER_MESSAGE_TYPES, parsePricing, stopSourceOf, str, type Change, type ParsedMessage, type Rec, type StopSource } from "./payload";
 
 type Target = { tenantId: string; phoneRowId: string; metaPhoneId?: string };
 export type Profile = { name?: string; username?: string; waId?: string; bsuid?: string };
@@ -34,21 +35,36 @@ const STATUS_RANK: Record<string, number> = { received: 0, queued: 1, sent: 2, d
 /**
  * Meta's template events to our status (docs/SPEND-CONTROLS-SPEC.md 6.3). FLAGGED is its own status now (marketing broadcasts
  * and assistants stop using it, other senders continue); REINSTATED and UNPAUSE put a template back to approved, followed by a
- * re-read of the template from Meta.
+ * re-read of the template from Meta. A template deleted or archived in WhatsApp Manager can no longer be sent, so it is disabled
+ * (and its broadcasts pause) instead of staying approved; an appeal is back under review; LIMIT_EXCEEDED (the account is at its
+ * template limit) is not usable and can be fixed like a rejected one. Every event that is also a template status maps exactly as a
+ * sync does (templates/status.ts), so a webhook and the next sync never disagree; tests/webhook-processor.test.ts checks this.
  */
 const TEMPLATE_EVENTS: Record<string, string> = {
   APPROVED: "approved",
   REJECTED: "rejected",
   PENDING: "pending",
   IN_REVIEW: "pending",
+  IN_APPEAL: "pending",
   PAUSED: "paused",
   DISABLED: "disabled",
+  DELETED: "disabled",
+  PENDING_DELETION: "disabled",
+  ARCHIVED: "disabled",
+  LIMIT_EXCEEDED: "rejected",
   FLAGGED: "flagged",
   REINSTATED: "approved",
   UNPAUSE: "approved",
   UNPAUSED: "approved",
 };
 const RESTORING_EVENTS = new Set(["REINSTATED", "UNPAUSE", "UNPAUSED"]);
+/**
+ * Events that carry no status. LOCKED means the template can no longer be edited; it can still be sent, so nothing changes.
+ * UNARCHIVED puts the template back to the status it had before it was archived, which only Meta knows, so it is read back from
+ * Meta (until then it stays disabled, which is safe).
+ */
+const LOCKED_EVENT = "LOCKED";
+const UNARCHIVED_EVENT = "UNARCHIVED";
 
 export type ProcessResult = { handled: number; notes: string[] };
 type Outcome = { tenantId?: string; phoneNumberId?: string; note?: string };
@@ -145,6 +161,22 @@ export function senderIdentity(message: Rec, profiles: Map<string, Profile>) {
   return { identity, name: profile?.name };
 }
 
+/**
+ * What an inbound row is. A customer message counts as unread, moves the chat up the list, reopens a solved chat, is routed and
+ * reaches bots, the AI agent and rules. A reaction (an emoji on an earlier message) and a notice (WhatsApp saying the customer's
+ * number or security code changed) are stored and shown in the chat, and nothing else runs for them.
+ */
+export type InboundKind = "message" | "reaction" | "notice";
+
+/** Built from NOT_CUSTOMER_MESSAGE_TYPES, the list the bots, the AI agent and rules use to leave these rows out of their counts. */
+export function inboundKind(type: string): InboundKind {
+  if (!NOT_CUSTOMER_MESSAGE_TYPES.includes(type)) return "message";
+  return type === "reaction" ? "reaction" : "notice";
+}
+
+/** Message types with nothing a rule can read: they still reach the team, but never start an automatic reply. */
+const NO_RULES_TYPES = new Set(["unsupported"]);
+
 export async function handleInboundMessage(target: Target, message: Rec, profiles: Map<string, Profile>) {
   const wamid = str(message.id);
   if (!wamid) return;
@@ -158,21 +190,29 @@ export async function handleInboundMessage(target: Target, message: Rec, profile
   const contact = await resolveInboundContact(tenantId, { ...identity, name });
   if (!contact) return;
   const phone = contact.phone;
+  const at = eventTime(message.timestamp);
+  // A new chat starts at the message's own time. The column default (the moment we store it) is a little later than WhatsApp's
+  // whole-second timestamp, which would read as "the business wrote last" (dashboard waiting list, "customer has not replied" rules).
   const conversation = await prisma.conversation.upsert({
     where: { phoneNumberId_contactId: { phoneNumberId: phoneRowId, contactId: contact.id } },
-    create: { tenantId, phoneNumberId: phoneRowId, contactId: contact.id },
+    create: { tenantId, phoneNumberId: phoneRowId, contactId: contact.id, lastMessageAt: at },
     update: {},
   });
 
   const parsed = describeMessage(message);
-  const at = eventTime(message.timestamp);
+  const kind = inboundKind(parsed.type);
 
   // An interactive message without a tapped button or row (a form reply, for example) carries no words, so bots, the AI and rules never read its placeholder text.
   const textual = ["text", "button"].includes(parsed.type) || (parsed.type === "interactive" && parsed.body !== INTERACTIVE_PLACEHOLDER);
-  // The title of a tapped reply button or list row is the business's own wording (a menu may offer "Cancel" or "End"), not the customer's words.
-  const tappedReply = parsed.type === "interactive" && Boolean(parsed.replyId);
-  const isStop = textual && !tappedReply && isStopMessage(parsed.body);
+  // The title of a tapped reply button or list row is the business's own wording (a menu may offer "Cancel" or "End"), not the
+  // customer's words, and so is a template's quick-reply button: a "Cancel" button on a booking template is not a STOP (stopSourceOf).
+  const stopSource = stopSourceOf(parsed.type, parsed.replyId);
+  const tappedReply = stopSource === "tapped_choice";
+  // A STOP word (the whole message), or a tap on the template's marketing opt-out button ("Stop promotions").
+  const isStop = textual && !tappedReply && (isOptOutButton(parsed) || (await isWorkspaceStop(tenantId, parsed.body, stopSource)));
   const isStart = textual && !tappedReply && !isStop && !!contact.optedOutAt && isStartMessage(parsed.body);
+  // "stop please" is not a STOP (only the whole message counts), but it may be one: the team gets a note and the AI agent leaves it to them.
+  const possibleOptOut = !isStop && !isStart && parsed.type === "text" && !contact.optedOutAt && mightBeOptOutRequest(parsed.body);
   // Consent is applied before the message row is stored. The row is what makes a webhook retry stop early, so a crash between the
   // two steps can never leave a stored STOP or START that was not acted on. Every step here is safe to run again.
   if (isStop) {
@@ -185,6 +225,7 @@ export async function handleInboundMessage(target: Target, message: Rec, profile
   // In the platform's notifier workspace, STOP turns off every owner channel with this phone and START only its own (7.4 item 5).
   if ((isStop || isStart) && (await notifierTenantId()) === tenantId) await ownerKeyword(tenantId, str(message.from) ?? identity.phone ?? "", isStop ? "stop" : "start");
 
+  const body = kind === "reaction" ? await reactionBody(tenantId, parsed) : parsed.body;
   try {
     await prisma.message.create({
       data: {
@@ -193,7 +234,7 @@ export async function handleInboundMessage(target: Target, message: Rec, profile
         wamid,
         direction: "inbound",
         type: parsed.type,
-        body: parsed.body,
+        body,
         mediaUrl: parsed.mediaId ? `meta-media:${parsed.mediaId}` : null,
         mediaMime: parsed.mediaMime ?? null,
         status: "received",
@@ -206,14 +247,11 @@ export async function handleInboundMessage(target: Target, message: Rec, profile
     throw error;
   }
 
-  await prisma.conversation.updateMany({
-    where: { id: conversation.id, tenantId },
-    data: { lastInboundAt: at, lastMessageAt: at, unreadCount: { increment: 1 } },
-  });
+  if (kind === "message") await touchConversation(tenantId, conversation, at);
 
   // An owner's quick reply to a spending notice (Decline, or the opt-in "Yes"): only in the platform's notifier workspace, and
   // nothing else runs for it (no bots, rules or routing). Anywhere else the same payload is an ordinary button tap.
-  const ownerPayload = !isStop && !isStart ? ownerReplyPayload(parsed) : null;
+  const ownerPayload = kind === "message" && !isStop && !isStart ? ownerReplyPayload(parsed) : null;
   if (ownerPayload && (await notifierTenantId()) === tenantId) {
     const waId = (str(message.from) ?? identity.phone ?? "").replace(/\D/g, "");
     await handleOwnerReply({ tenantId, waId, payload: ownerPayload, messageId: wamid }).catch((error) => console.error("[spend] could not handle an owner's quick reply:", describeError(error)));
@@ -224,7 +262,7 @@ export async function handleInboundMessage(target: Target, message: Rec, profile
     if (!contact.optedOutAt) await sendConsentReply(tenantId, conversation.id, "optOutReply");
   } else if (isStart) {
     await sendConsentReply(tenantId, conversation.id, "optInReply");
-  } else {
+  } else if (kind === "message") {
     await onInboundFromContact(tenantId, contact.id).catch(() => console.error("[leads] could not stop lead sequences after a reply"));
   }
 
@@ -232,21 +270,31 @@ export async function handleInboundMessage(target: Target, message: Rec, profile
   await emitEvent(
     tenantId,
     "message.received",
-    messageReceivedPayload({
-      conversationId: conversation.id,
-      channel: target.metaPhoneId ?? null,
-      assignedTo: conversation.assignedToId ?? null,
-      contact: { ...contact, name: name ?? contact.name ?? null },
-      message: { id: wamid, type: parsed.type, text: parsed.body, mediaId: parsed.mediaId ?? null, mimeType: parsed.mediaMime ?? null, timestamp: at },
-      referral,
-    }),
+    withMessageDetails(
+      messageReceivedPayload({
+        conversationId: conversation.id,
+        channel: target.metaPhoneId ?? null,
+        assignedTo: conversation.assignedToId ?? null,
+        contact: { ...contact, name: name ?? contact.name ?? null },
+        message: { id: wamid, type: parsed.type, text: body, mediaId: parsed.mediaId ?? null, mimeType: parsed.mediaMime ?? null, timestamp: at },
+        referral,
+      }),
+      parsed,
+    ),
   );
 
+  if (kind !== "message") {
+    if (parsed.system?.event === "number_changed") await linkChangedNumber(tenantId, conversation.id, contact, parsed.system.newWaId);
+    return;
+  }
+
   if (referral) await captureReferral(tenantId, conversation.id, referral).catch(() => console.error("[conversions] could not store a click-to-WhatsApp referral"));
+  if (possibleOptOut) await notePossibleOptOut(tenantId, conversation.id);
 
   const reopened = await reopenOnInbound(tenantId, conversation.id, at).catch(() => false);
   wireModules();
-  const inboundInput = { tenantId, phoneNumberId: phoneRowId, conversationId: conversation.id, contactId: contact.id, text: textual ? parsed.body : "", receivedAt: at, replyId: parsed.replyId };
+  // messageType and replyId tell the bots, the AI agent and rules where the words came from, so they read STOP words the same way (stopSourceOf).
+  const inboundInput = { tenantId, phoneNumberId: phoneRowId, conversationId: conversation.id, contactId: contact.id, text: textual ? parsed.body : "", receivedAt: at, replyId: parsed.replyId, messageType: parsed.type };
   const chatbotHandled = isStop || isStart
     ? false
     : await handleInboundForChatbots(inboundInput).catch(() => {
@@ -254,7 +302,7 @@ export async function handleInboundMessage(target: Target, message: Rec, profile
         return false;
       });
   const aiHandled =
-    isStop || isStart || chatbotHandled
+    isStop || isStart || chatbotHandled || possibleOptOut
       ? false
       : await handleInboundForAiAgent(inboundInput).catch(() => {
           console.error("[ai-agent] could not run the AI agent for an inbound message");
@@ -265,13 +313,121 @@ export async function handleInboundMessage(target: Target, message: Rec, profile
     await assignConversation(tenantId, conversation.id).catch(() => console.error("[routing] could not assign a conversation"));
   }
 
-  if (!isStop && !isStart) {
-    await runAutomationsForInbound({ tenantId, phoneNumberId: phoneRowId, conversationId: conversation.id, contactId: contact.id, text: textual ? parsed.body : "", receivedAt: at, messageType: parsed.type, botHandled }).catch(() =>
+  if (!isStop && !isStart && !NO_RULES_TYPES.has(parsed.type)) {
+    await runAutomationsForInbound({ tenantId, phoneNumberId: phoneRowId, conversationId: conversation.id, contactId: contact.id, text: textual ? parsed.body : "", receivedAt: at, messageType: parsed.type, replyId: parsed.replyId, botHandled }).catch(() =>
       console.error("[automation] could not run automations for an inbound message"),
     );
   }
 }
 
+/**
+ * Only the newest customer message moves the chat's timestamps: webhook jobs can run out of order and Meta retries, so an older
+ * message handled late must not rewind the 24-hour window or the list order. The newest one sets lastMessageAt to the same time as
+ * lastInboundAt, even when a business message was stored in the meantime (an auto-reply to the customer's previous message, sent
+ * before this one arrived): the customer is waiting for an answer to it, and the dashboard's waiting list and the "customer has not
+ * replied" rules read lastMessageAt <= lastInboundAt that way. The unread count goes up on its own. A blocked chat stores the
+ * message quietly: its unread count and its place in the list stay as they are.
+ */
+async function touchConversation(tenantId: string, conversation: { id: string; status?: string | null }, at: Date): Promise<void> {
+  const where = { id: conversation.id, tenantId };
+  const blocked = conversation.status === "blocked";
+  await prisma.conversation.updateMany({
+    where: { ...where, OR: [{ lastInboundAt: null }, { lastInboundAt: { lt: at } }] },
+    data: blocked ? { lastInboundAt: at } : { lastInboundAt: at, lastMessageAt: at },
+  });
+  if (!blocked) await prisma.conversation.updateMany({ where, data: { unreadCount: { increment: 1 } } });
+}
+
+const QUOTE_MAX = 60;
+
+/** `[reaction] <emoji> to "Your order is on its way"`: the message reacted to is quoted, so the chat reads on its own. */
+async function reactionBody(tenantId: string, parsed: ParsedMessage): Promise<string> {
+  const target = parsed.reaction?.messageId;
+  if (!target) return parsed.body;
+  let quoted = "";
+  try {
+    const row = await prisma.message.findFirst({ where: { tenantId, wamid: target }, select: { body: true } });
+    quoted = (row?.body ?? "").replace(/\s+/g, " ").trim();
+  } catch {
+    quoted = "";
+  }
+  if (!quoted) return parsed.body;
+  const excerpt = quoted.length > QUOTE_MAX ? `${quoted.slice(0, QUOTE_MAX - 3).trimEnd()}...` : quoted;
+  return `${parsed.body} ${parsed.reaction?.emoji ? "to" : "from"} "${excerpt}"`;
+}
+
+/** message.received carries the structured part of an order, shared contact cards or a reaction next to the readable text. */
+export function withMessageDetails<T extends { message: Record<string, unknown> }>(payload: T, parsed: ParsedMessage): T {
+  const details = { ...(parsed.order ? { order: parsed.order } : {}), ...(parsed.contacts ? { contacts: parsed.contacts } : {}), ...(parsed.reaction ? { reaction: parsed.reaction } : {}) };
+  return Object.keys(details).length ? { ...payload, message: { ...payload.message, ...details } } : payload;
+}
+
+const SYSTEM_AUTHOR = "system";
+const NUMBER_LINKED_NOTE = "The customer changed their WhatsApp number. This contact now has the new number, so your replies go there.";
+const NUMBER_TAKEN_NOTE =
+  "The customer changed their WhatsApp number, but another contact already has the new number, so the two were not combined. Replies from this chat still go to the old number.";
+
+/**
+ * The customer changed their WhatsApp number (system notice user_changed_number): the contact moves to the new number and keeps
+ * its chats, consent and history, so their next message lands in the same chat. When another contact already holds the new number
+ * the two are not combined (the number may have been someone else's before). Either way a private note tells the team; neither the
+ * note nor the audit row carries a phone number, because some teammates only see masked numbers. Best effort: the notice itself is
+ * already stored.
+ */
+async function linkChangedNumber(tenantId: string, conversationId: string, contact: { id: string; phone: string | null }, newWaId: string | null): Promise<void> {
+  const next = phoneFromWaId(newWaId);
+  if (!next || contact.phone === next) return;
+  try {
+    const holder = await prisma.contact.findFirst({ where: { tenantId, phone: next }, select: { id: true } });
+    let linked = !holder || holder.id === contact.id;
+    if (linked) {
+      try {
+        await prisma.contact.updateMany({ where: { id: contact.id, tenantId }, data: { phone: next, waId: next.slice(1) } });
+      } catch (error) {
+        // Another contact took the number in the meantime.
+        if ((error as { code?: string }).code !== "P2002") throw error;
+        linked = false;
+      }
+    }
+    await prisma.note.create({ data: { tenantId, conversationId, authorId: SYSTEM_AUTHOR, body: linked ? NUMBER_LINKED_NOTE : NUMBER_TAKEN_NOTE } });
+    await prisma.auditLog.create({ data: { tenantId, action: "contact.number_changed", target: contact.id, meta: { linked } } });
+  } catch (error) {
+    console.error("[webhooks] could not move a contact to their new WhatsApp number:", describeError(error));
+  }
+}
+
+/**
+ * Whether the whole message is a STOP word of this workspace: a default (DEFAULT_STOP_WORDS) or one the workspace added in Inbox
+ * settings. The workspace's words are read only for a message short enough to be one, and an unreadable setting means defaults only.
+ * `source` is where the words came from: on a template button, cancel, end and quit do not count (stopSourceOf).
+ */
+export async function isWorkspaceStop(tenantId: string, body: string, source: StopSource = "typed"): Promise<boolean> {
+  if (isStopMessage(body, [], source)) return true;
+  if (source === "tapped_choice" || !mightBeStopWord(body)) return false;
+  try {
+    const settings = await getInboxSettings(tenantId);
+    return isStopMessage(body, settings?.stopWords, source);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A private note on the chat for a message that may be an opt-out request but is not a STOP word ("stop please"). Best effort: the
+ * message itself is already stored.
+ */
+async function notePossibleOptOut(tenantId: string, conversationId: string): Promise<void> {
+  try {
+    await prisma.note.create({ data: { tenantId, conversationId, authorId: SYSTEM_AUTHOR, body: POSSIBLE_OPT_OUT_NOTE } });
+  } catch (error) {
+    console.error("[inbox] could not add the possible opt-out note:", describeError(error));
+  }
+}
+
+/**
+ * An opt-out stops marketing only (src/lib/contacts/opt-out.ts): order updates, login codes and replies to the customer's own
+ * messages still go. optIn is cleared because the marketing consent is withdrawn; only START (or a new message) brings offers back.
+ */
 async function applyOptOut(tenantId: string, contact: { id: string; phone: string | null; bsuid?: string | null; waId?: string | null; username?: string | null; name: string | null }) {
   const optedOutAt = new Date();
   await prisma.contact.updateMany({ where: { id: contact.id, tenantId }, data: { optedOutAt, optIn: false } });
@@ -455,20 +611,45 @@ const knownTemplate = (where: { tenantId: string; wabaRefId: string }, v: Rec) =
 };
 
 /**
- * After REINSTATED or UNPAUSE, reads the template back from Meta so its status and category match what Meta now says (6.3
- * "plus a template re-sync"). Best effort: the event's own status was already stored.
+ * After REINSTATED, UNPAUSE or UNARCHIVED, reads the template back from Meta so its status and category match what Meta now says
+ * (6.3 "plus a template re-sync"). Best effort: returns the status read back, or null when there was none or Meta could not be
+ * reached (the event's own status, if any, was already stored).
  */
-async function resyncTemplate(tenantId: string, template: { id: string; metaTemplateId?: string | null } | null): Promise<void> {
-  if (!template?.metaTemplateId) return;
+async function resyncTemplate(tenantId: string, template: { id: string; metaTemplateId?: string | null } | null): Promise<string | null> {
+  if (!template?.metaTemplateId) return null;
   try {
     const t = await graphFetch<{ status?: string; category?: string }>({ tenantId, path: template.metaTemplateId, query: { fields: "status,category" } });
+    const status = t.status ? mapMetaStatus(t.status) : null;
     await prisma.template.updateMany({
       where: { id: template.id, tenantId },
-      data: { ...(t.status ? { status: mapMetaStatus(t.status) } : {}), ...(t.category ? { category: String(t.category).toUpperCase() } : {}) },
+      data: { ...(status ? { status } : {}), ...(t.category ? { category: String(t.category).toUpperCase() } : {}) },
     });
+    return status;
   } catch (error) {
-    console.warn("[webhooks] could not re-read a reinstated template from Meta:", describeError(error));
+    console.warn("[webhooks] could not re-read a reinstated or unarchived template from Meta:", describeError(error));
+    return null;
   }
+}
+
+/** UNARCHIVED: the template is read back from Meta, and template.status goes out once the restored status is known. */
+async function restoreUnarchived(tenantId: string, where: { tenantId: string; wabaRefId: string }, v: Rec): Promise<Outcome> {
+  const known = await knownTemplate(where, v);
+  const status = await resyncTemplate(tenantId, known);
+  if (!status) return { tenantId };
+  await emitEvent(
+    tenantId,
+    "template.status",
+    templateStatusPayload({
+      templateId: known?.id ?? null,
+      name: str(v.message_template_name) ?? null,
+      language: str(v.message_template_language) ?? null,
+      category: known?.category?.toLowerCase() ?? null,
+      status,
+      reason: null,
+      timestamp: new Date(),
+    }),
+  );
+  return { tenantId };
 }
 
 async function processTemplateStatus(change: Change): Promise<Outcome> {
@@ -476,11 +657,13 @@ async function processTemplateStatus(change: Change): Promise<Outcome> {
   if (!waba) return { note: `unknown waba ${change.wabaId ?? "(missing)"}` };
   const v = change.value;
   const event = (str(v.event) ?? "").toUpperCase();
+  const where = { tenantId: waba.tenantId, wabaRefId: waba.id };
+  if (event === LOCKED_EVENT) return { tenantId: waba.tenantId };
+  if (event === UNARCHIVED_EVENT) return restoreUnarchived(waba.tenantId, where, v);
   let status = TEMPLATE_EVENTS[event];
   if (!status) return { tenantId: waba.tenantId, note: `unhandled template event ${str(v.event)}` };
 
   const reason = str(v.reason);
-  const where = { tenantId: waba.tenantId, wabaRefId: waba.id };
   const dataFor = (s: string) => ({ status: s as never, rejectionReason: s === "rejected" && reason && reason !== "NONE" ? reason : null });
   try {
     await updateTemplateRow(where, v, dataFor(status));

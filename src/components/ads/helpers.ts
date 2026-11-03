@@ -1,4 +1,5 @@
 import type { Tone } from "@/components/ui/status";
+import { isLegacyTemplate, PLACEMENTS as PLACEMENT_KEYS, type Placement } from "@/lib/ads/types";
 
 export type StatusView = { label: string; tone: Tone };
 
@@ -49,7 +50,11 @@ export function categoryName(key: string): string {
 export const CATEGORY_RULES =
   "Meta treats these ads as sensitive. To protect people, it limits who you can aim at: no narrowing by age or gender, no detailed interests and no lookalike audiences, and you target a wider area around a place. We apply these limits for you in the next step.";
 
-export const PLACEMENTS: { key: string; label: string }[] = [
+/**
+ * The old wizard's placement choices: exactly the valid simple keys of docs/IG-PAGE-ADS-SPEC.md 4.5 (a test compares them
+ * with promote/catalog/placements.ts). messenger_inbox is not offered: Meta changed Messenger placements (D10).
+ */
+export const PLACEMENTS: { key: Placement; label: string }[] = [
   { key: "facebook_feed", label: "Facebook feed" },
   { key: "facebook_stories", label: "Facebook stories" },
   { key: "facebook_reels", label: "Facebook reels" },
@@ -57,6 +62,77 @@ export const PLACEMENTS: { key: string; label: string }[] = [
   { key: "instagram_stories", label: "Instagram stories" },
   { key: "instagram_reels", label: "Instagram reels" },
 ];
+
+/** A saved messenger_inbox, as the member sees it when the draft reopens (the words of lib/ads/targeting MESSENGER_CHANGED; a test checks). */
+export const MESSENGER_PLACEMENT_NOTE = "Pick where your ad shows again: Meta changed Messenger placements";
+export const UNKNOWN_PLACEMENT_NOTE = "A place your ad showed in no longer exists, so we removed it. Check where your ad appears.";
+
+const OFFERED: ReadonlySet<string> = new Set(PLACEMENTS.map((p) => p.key));
+const isPlacementKey = (v: string) => (PLACEMENT_KEYS as readonly string[]).includes(v);
+
+/**
+ * A saved draft's placements as the wizard can show them, so every stored key can be unticked: messenger_inbox (never
+ * valid again, D10) and keys Meta no longer has are dropped, each with a note the member sees. Valid keys the wizard
+ * doesn't offer are kept, and draftEditProblem stops the wizard from opening such a draft instead.
+ */
+export function wizardPlacements(stored: unknown): { placements: string[]; notes: string[] } {
+  const placements: string[] = [];
+  const notes: string[] = [];
+  for (const raw of Array.isArray(stored) ? stored : []) {
+    if (typeof raw !== "string") continue;
+    if (raw !== "messenger_inbox" && isPlacementKey(raw)) {
+      if (!placements.includes(raw)) placements.push(raw);
+      continue;
+    }
+    const note = raw === "messenger_inbox" ? MESSENGER_PLACEMENT_NOTE : UNKNOWN_PLACEMENT_NOTE;
+    if (!notes.includes(note)) notes.push(note);
+  }
+  return { placements, notes };
+}
+
+/** The reopened draft's notes as one message, with where to fix them. */
+export function draftNotesText(notes: readonly string[]): string {
+  const sentences = notes.map((n) => (/[.!?]$/.test(n) ? n : `${n}.`));
+  return [...sentences, "Change it in step 3, Who should see it, under More targeting options."].join(" ");
+}
+
+export const DRAFT_ON_META = "This campaign is already on Meta, so it cannot be edited here. Change its budget or end date on its own page.";
+export const DRAFT_NEW_CHOICES =
+  "This draft uses choices this page can't show, like a newer goal, a place on the map, postal codes, saved audiences or more places for your ad. Saving it here would lose them, so create it on Meta from its campaign page instead.";
+
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+const someItems = (v: unknown) => Array.isArray(v) && v.length > 0;
+
+/**
+ * Why the old wizard can't edit a saved draft without losing or widening what it can't show, or null when it can: a goal
+ * other than its four, a pin, a postal code, an audience to include or leave out (lookalikes too), "Let Meta find people",
+ * or a valid place it doesn't offer. Its save rebuilds targeting from its own fields, so a draft aimed only at a pin would
+ * otherwise be saved as all of India.
+ */
+export function draftEditProblem(c: { template: string; targeting: unknown }): string | null {
+  if (!isLegacyTemplate(c.template)) return DRAFT_NEW_CHOICES;
+  const t = isRecord(c.targeting) ? c.targeting : {};
+  const geo = isRecord(t.geo) ? t.geo : {};
+  if (someItems(geo.customLocations) || someItems(geo.zips)) return DRAFT_NEW_CHOICES;
+  if (someItems(t.customAudienceIds) || someItems(t.excludedAudienceIds) || someItems(t.lookalikeAudienceIds) || t.advantageAudience === true) return DRAFT_NEW_CHOICES;
+  if (wizardPlacements(t.placements).placements.some((p) => !OFFERED.has(p))) return DRAFT_NEW_CHOICES;
+  return null;
+}
+
+/** draftEditProblem over every ad set of a campaign. */
+export function campaignEditProblem(c: { template: string; adSets: { targeting: unknown }[] }): string | null {
+  for (const s of c.adSets.length ? c.adSets : [{ targeting: null }]) {
+    const problem = draftEditProblem({ template: c.template, targeting: s.targeting });
+    if (problem) return problem;
+  }
+  return null;
+}
+
+/** The note shown when "Edit draft" can't open a campaign in the wizard (campaign-edit.ts draftToForm returned null). */
+export function draftBlockedText(c: { status: string; editable?: boolean; template: string; adSets: { targeting: unknown }[] }): string {
+  if (c.editable === false || (c.status !== "draft" && c.status !== "error")) return DRAFT_ON_META;
+  return campaignEditProblem(c) ?? DRAFT_ON_META;
+}
 
 function fractionDigits(currency: string): number {
   try {
@@ -165,6 +241,14 @@ export function isMetaLoginProblem(message: string | null | undefined): boolean 
 }
 
 export const META_LOGIN_FIX = "Meta no longer accepts the saved Facebook login. Reconnect under Meta connections and try again.";
+
+/**
+ * The server's 404 answer for a record ("Campaign not found.", "Brief not found."): it was deleted, belongs to another
+ * workspace, or the link is wrong. Trying again cannot help, so pages show a not-found state with a way back instead.
+ */
+export function isNotFoundError(message: string | null | undefined): boolean {
+  return /\bnot found\.?$/i.test((message ?? "").trim());
+}
 
 /** Rewrites the few server messages that mention internal field names or units into words a shop owner can act on. */
 export function friendlyAdsError(message: string | null | undefined): string {

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { Button, PageHeader } from "@/components/ui";
+import { useEddyStatus } from "@/components/eddy/useEddyStatus";
 import type { SetupStep } from "@/lib/setup/checklist";
 import { actionLinkClass, EmptyState } from "./EmptyState";
 import { ProgressRing } from "./ProgressRing";
@@ -41,7 +42,7 @@ function Hero({ data }: { data: SetupResponse }) {
         ) : (
           <>
             <h2 className="text-lg font-semibold">
-              {summary.remaining} {summary.remaining === 1 ? "step" : "steps"} to go
+              {summary.remaining} {summary.remaining === 1 ? "step" : "steps"}{" "}to go
             </h2>
             <p className="mt-1 text-sm text-muted">About {summary.minutesLeft} minutes in total. You can do them in any order and come back anytime.</p>
           </>
@@ -65,6 +66,7 @@ function Section({
   data,
   busy,
   dismiss,
+  eddyReady,
 }: {
   title: string;
   intro?: string;
@@ -74,6 +76,7 @@ function Section({
   data: SetupResponse;
   busy: string | null;
   dismiss: (id: SetupStep["id"], v: boolean) => void;
+  eddyReady: boolean;
 }) {
   if (steps.length === 0) return null;
   return (
@@ -90,6 +93,7 @@ function Section({
             canDismiss={data.canDismiss}
             busy={busy === s.id}
             onDismiss={(v) => dismiss(s.id, v)}
+            eddyReady={eddyReady}
           />
         ))}
       </ol>
@@ -99,6 +103,8 @@ function Section({
 
 export function GettingStarted() {
   const { data, error, loading, reload, dismiss, busy, actionError } = useSetup();
+  // The shell keeps Eddy's status fresh; the steps offer "Do this with Eddy" only while Eddy can actually chat.
+  const eddyReady = useEddyStatus().status?.state === "ready";
 
   return (
     <>
@@ -116,19 +122,19 @@ export function GettingStarted() {
             </p>
           )}
           {!data.canDismiss && <p className="mb-6 text-sm text-muted">You can see how setup is going. Ask a workspace admin to complete or set aside the steps.</p>}
-          <GroupedSteps data={data} busy={busy} dismiss={dismiss} />
+          <GroupedSteps data={data} busy={busy} dismiss={dismiss} eddyReady={eddyReady} />
         </>
       )}
     </>
   );
 }
 
-function GroupedSteps({ data, busy, dismiss }: { data: SetupResponse; busy: string | null; dismiss: (id: SetupStep["id"], v: boolean) => void }) {
+function GroupedSteps({ data, busy, dismiss, eddyReady }: { data: SetupResponse; busy: string | null; dismiss: (id: SetupStep["id"], v: boolean) => void; eddyReady: boolean }) {
   const active = data.steps.filter((s) => !s.dismissed);
   const launch = active.filter((s) => s.group === "launch");
   const grow = active.filter((s) => s.group === "grow");
   const aside = data.steps.filter((s) => s.dismissed);
-  const shared = { all: data.steps, data, busy, dismiss };
+  const shared = { all: data.steps, data, busy, dismiss, eddyReady };
   return (
     <>
       <Section title="Get ready to message customers" intro="These four steps take you from nothing to your first message." steps={launch} start={0} {...shared} />

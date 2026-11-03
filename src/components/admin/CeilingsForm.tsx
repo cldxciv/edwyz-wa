@@ -143,7 +143,7 @@ function CeilingTable({ cells, scope, title, description }: { cells: CeilingCell
               <div className="min-w-0 flex-1 basis-56 text-sm">
                 <p className="font-medium">{name}</p>
                 <p className="tabular-nums">
-                  {c.dailyText} a day, {c.monthlyText} a month
+                  {c.dailyText} a day, {c.monthlyText}{" "}a month
                 </p>
                 {c.note && <p className="text-xs text-muted">{c.note}</p>}
                 {c.updatedAt && <p className="text-xs text-muted">Changed {when(c.updatedAt)}{c.reason ? `. Why: ${c.reason}` : ""}</p>}
@@ -197,7 +197,7 @@ export function CeilingsForm({ view }: { view: SpendSettingsView }) {
               <li key={r.currency} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-3 text-sm">
                 <span className="min-w-0 flex-1 basis-56">
                   <span className="font-medium tabular-nums">
-                    1 {r.currency} = {r.rate} INR
+                    1 {r.currency} = {r.rate}{" "}INR
                   </span>{" "}
                   <Badge tone={r.fresh ? "good" : "warn"}>{r.status}</Badge>
                   <span className="block text-xs text-muted">Updated {when(r.updatedAt)}</span>
@@ -284,7 +284,7 @@ export function CeilingsForm({ view }: { view: SpendSettingsView }) {
           <div>
             <dt className="text-xs font-medium text-muted">Meta limit changes a day</dt>
             <dd>
-              {d.metaCapRoutinePerDay} routine, {d.metaCapEmergencyReserve} kept for emergencies, at most {d.metaCapRaisesPerDay} raises. Meta allows 10 a day on each ad account.
+              {d.metaCapRoutinePerDay} routine, {d.metaCapEmergencyReserve} kept for emergencies, at most {d.metaCapRaisesPerDay}{" "}raises. Meta allows 10 a day on each ad account.
             </dd>
           </div>
         </dl>

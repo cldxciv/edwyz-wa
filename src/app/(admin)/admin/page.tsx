@@ -135,9 +135,9 @@ export default async function AdminDashboard() {
             ))}
           </dl>
         </Card>
-        <Card title="Recent failed webhook events" description="Updates from WhatsApp that we could not process.">
+        <Card title="Recent failed webhook events" description="Updates from WhatsApp that we could not process in the last 7 days.">
           {m.failedEvents.length === 0 ? (
-            <EmptyState compact title="Nothing has failed" body="Incoming WhatsApp events are being processed normally." />
+            <EmptyState compact title="Nothing has failed" body="Incoming WhatsApp events in the last 7 days were all processed." />
           ) : (
             <ul className="space-y-2 text-sm">
               {m.failedEvents.map((e) => (

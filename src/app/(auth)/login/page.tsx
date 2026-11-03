@@ -10,10 +10,8 @@ export const metadata = pageMetadata({ title: "Sign in", description: "Sign in t
 
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ next?: string }> }) {
   const [{ next }, user] = await Promise.all([searchParams, signedInUser()]);
-  return (
+  const form = (
     <>
-      <AuthTitle title="Welcome back" intro="Sign in to your Edwyz WA workspace." />
-      {user && <SignedInNotice email={user.email} next={safeNext(next)} hint="To use a different account, sign out first." />}
       <div className="mt-8">
         <AuthForm
           url="/api/auth/login"
@@ -43,6 +41,19 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
           Start your free trial
         </Link>
       </p>
+    </>
+  );
+  return (
+    <>
+      <AuthTitle title="Welcome back" intro="Sign in to your Edwyz WA workspace." />
+      {/* Signed in already: only the notice, and the form (with its autofocus) appears after "Sign in as someone else". */}
+      {user ? (
+        <SignedInNotice email={user.email} next={safeNext(next)} switchLabel="Sign in as someone else" switchNote="Signing in below switches this browser to that account.">
+          {form}
+        </SignedInNotice>
+      ) : (
+        form
+      )}
     </>
   );
 }

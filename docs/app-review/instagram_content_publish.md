@@ -1,9 +1,9 @@
 # instagram_content_publish (with instagram_basic)
 
 Phase: B
-Feature built: **NOT BUILT**
+Feature built: **Built**: the content calendar at /app/content (`{ig}/media`, `media_publish`; `src/lib/content`). Not yet exercised against live Meta with the review user.
 
-> DO NOT SUBMIT until built. Phase A routes under /app/ads, /app/leads and /app/settings/connections do not exist in the repo as of 2026-10-27. Reviewers reject demos of flows that do not exist. The text below is the plan; re-check against the final UI.
+> Built; needs a live test and a screencast. Before submitting: run the flow below with the review user on the test assets, record the screencast, make the API test calls in the App Dashboard, and re-check the text against the final UI. The request is a draft (1799953447868194, not submitted) and **does not include this permission yet**: add it to the app's Instagram use case, then to the draft. State in `status.md`.
 
 VERIFY: permission names and the Instagram family (Facebook Login vs Instagram Login) in the App Dashboard permissions list at submission time.
 

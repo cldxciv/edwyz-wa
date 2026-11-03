@@ -57,7 +57,7 @@ export default async function TenantDetailPage({ params }: { params: Promise<{ i
       )}
       {suspended && (
         <Alert tone="bad" title="This workspace is suspended" className="mb-6">
-          {tenant.suspendedReason ?? "No reason was recorded."} Sending and changes are blocked until you unsuspend it.
+          {tenant.suspendedReason ?? "No reason was recorded."}{" "}Sending and changes are blocked until you unsuspend it.
         </Alert>
       )}
 

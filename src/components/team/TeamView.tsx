@@ -7,7 +7,7 @@ import { BusyButton } from "@/components/integrations/BusyButton";
 import { Alert, Badge, Button, DataTable, EmptyState, ErrorState, Select, StatusPill, apiFetch, confirm, toast, type Column } from "@/components/ui";
 import { InviteDialog } from "./InviteDialog";
 import { TransferOwnershipDialog } from "./TransferOwnershipDialog";
-import { ROLE_INFO, canRemoveMember, describeExpiry, removeConfirm, roleChangeConfirm, roleLabel, type Role } from "./helpers";
+import { ONLY_OWNER_NOTE, ROLE_INFO, canRemoveMember, describeExpiry, isOnlyOwner, noTransferNote, removeConfirm, roleChangeConfirm, roleLabel, type Role } from "./helpers";
 
 type Me = { user: { id: string }; role: Role };
 type Member = { userId: string; email: string; name: string; role: Role };
@@ -76,6 +76,7 @@ export function TeamView({ openInviteOnLoad = false }: { openInviteOnLoad?: bool
   const canManage = me?.role === "owner" || me?.role === "admin";
   const isOwner = me?.role === "owner";
   const person = useMemo(() => (me ? { userId: me.user.id, role: me.role } : null), [me]);
+  const transferCandidates = (members ?? []).filter((m) => m.userId !== me?.user.id && m.role !== "owner");
 
   const load = useCallback(async () => {
     try {
@@ -184,8 +185,13 @@ export function TeamView({ openInviteOnLoad = false }: { openInviteOnLoad?: bool
       {
         key: "role",
         header: "Role",
+        // The only owner's role can't change (the server keeps one owner), so it shows as text, not a picker.
         cell: (m) =>
-          isOwner ? <RoleCell member={m} busy={busyId === m.userId} onApply={(next) => changeRole(m, next)} /> : <Badge tone={m.role === "agent" ? "neutral" : "info"}>{roleLabel(m.role)}</Badge>,
+          isOwner && !isOnlyOwner(members, m.userId) ? (
+            <RoleCell member={m} busy={busyId === m.userId} onApply={(next) => changeRole(m, next)} />
+          ) : (
+            <Badge tone={m.role === "agent" ? "neutral" : "info"}>{roleLabel(m.role)}</Badge>
+          ),
       },
       ...(canManage
         ? [
@@ -195,7 +201,7 @@ export function TeamView({ openInviteOnLoad = false }: { openInviteOnLoad?: bool
               srOnlyHeader: true,
               align: "right" as const,
               cell: (m: Member) =>
-                person && canRemoveMember(person, m) ? (
+                person && canRemoveMember(person, m, members ?? undefined) ? (
                   <BusyButton variant="secondary" size="sm" className={touch} busy={busyId === m.userId} onClick={() => void remove(m)}>
                     {m.userId === me?.user.id ? "Leave workspace" : "Remove"}
                     {m.userId !== me?.user.id && <span className="sr-only"> {m.name}</span>}
@@ -205,7 +211,7 @@ export function TeamView({ openInviteOnLoad = false }: { openInviteOnLoad?: bool
           ]
         : []),
     ],
-    [me, isOwner, canManage, busyId, person, changeRole, remove],
+    [me, members, isOwner, canManage, busyId, person, changeRole, remove],
   );
 
   const inviteColumns = useMemo<Column<Invite>[]>(
@@ -278,6 +284,7 @@ export function TeamView({ openInviteOnLoad = false }: { openInviteOnLoad?: bool
           People in this workspace
         </h2>
         {isOwner && <p className="-mt-1 mb-3 text-sm text-muted">To change someone&apos;s role, pick a new role, then select Change role.</p>}
+        {isOwner && me && isOnlyOwner(members, me.user.id) && <p className="-mt-1 mb-3 text-sm text-muted">{ONLY_OWNER_NOTE}</p>}
         <DataTable caption="People in this workspace" columns={memberColumns} rows={members ?? []} rowKey={(m) => m.userId} loading={loading} skeletonRows={3} />
       </section>
 
@@ -325,15 +332,19 @@ export function TeamView({ openInviteOnLoad = false }: { openInviteOnLoad?: bool
         <section aria-labelledby="transfer-heading" className="rounded-lg border border-border p-4">
           <h2 id="transfer-heading" className="text-lg font-semibold">Hand over this workspace</h2>
           <p className="mt-1 text-sm text-muted">Make someone else the owner. You will become an admin unless you choose to stay an owner too.</p>
-          <div className="mt-3 flex flex-wrap items-end gap-2">
-            <Select aria-label="New owner" value={transferTo} className="max-w-64" onChange={(e) => setTransferTo(e.target.value)}>
-              <option value="">Choose a teammate</option>
-              {(members ?? []).filter((m) => m.userId !== me?.user.id && m.role !== "owner").map((m) => (
-                <option key={m.userId} value={m.userId}>{m.name}</option>
-              ))}
-            </Select>
-            <Button variant="secondary" className={touch} disabled={!transferTo} onClick={() => setTransferOpen(true)}>Transfer ownership</Button>
-          </div>
+          {members && me && noTransferNote(members, me.user.id) ? (
+            <p className="mt-3 text-sm">{noTransferNote(members, me.user.id)}</p>
+          ) : (
+            <div className="mt-3 flex flex-wrap items-end gap-2">
+              <Select aria-label="New owner" value={transferTo} className="max-w-64" onChange={(e) => setTransferTo(e.target.value)}>
+                <option value="">Choose a teammate</option>
+                {transferCandidates.map((m) => (
+                  <option key={m.userId} value={m.userId}>{m.name}</option>
+                ))}
+              </Select>
+              <Button variant="secondary" className={touch} disabled={!transferTo} onClick={() => setTransferOpen(true)}>Transfer ownership</Button>
+            </div>
+          )}
         </section>
       )}
 

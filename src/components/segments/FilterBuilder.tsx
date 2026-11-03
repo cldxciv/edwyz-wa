@@ -1,6 +1,6 @@
 "use client";
 
-import { useId } from "react";
+import { useId, useState } from "react";
 import { Button, Input, Select, cn } from "@/components/ui";
 import { isAttributeField, attributeKey, attributeField, kindOf } from "@/lib/segments/filter";
 import {
@@ -24,7 +24,7 @@ type Props = {
   onChange: (next: Draft) => void;
   attributeKeys: readonly string[];
   tags: readonly string[];
-  /** Show the red "fill in" messages (after the person tried to continue). */
+  /** Show every rule's red "fill in" message (after the person tried to continue). Without it a rule shows its message once the person leaves its value. */
   showProblems?: boolean;
   idPrefix?: string;
 };
@@ -33,13 +33,17 @@ const selectClass = "min-w-0";
 
 /**
  * A stack of plain-language rules ("Tag is tagged vip", "Last message from them in the last (days) 30"). The person chooses whether
- * contacts must match all of the rules or any of them. Works at 360 px: each rule becomes a small card.
+ * contacts must match all of the rules or any of them. Works at 360 px: each rule becomes a small card. The columns follow the
+ * width of the builder, not the window, so a rule inside a dialog gets two rows instead of four cramped selects.
  */
 export function FilterBuilder({ value, onChange, attributeKeys, tags, showProblems, idPrefix }: Props) {
   const auto = useId();
   const prefix = idPrefix ?? auto;
   const groups = fieldOptions(attributeKeys).reduce<Record<string, ReturnType<typeof fieldOptions>>>((acc, o) => ((acc[o.group] ??= []).push(o), acc), {});
   const setRule = (i: number, next: Draft["rules"][number]) => onChange({ ...value, rules: value.rules.map((r, idx) => (idx === i ? next : r)) });
+  // Rules whose value the person has left, so a new, empty rule is not red before they have typed anything.
+  const [left, setLeft] = useState<ReadonlySet<number>>(new Set());
+  const leave = (i: number) => setLeft((prev) => (prev.has(i) ? prev : new Set(prev).add(i)));
 
   return (
     <div className="space-y-3">
@@ -55,15 +59,15 @@ export function FilterBuilder({ value, onChange, attributeKeys, tags, showProble
         </div>
       )}
 
-      <ul className="space-y-3">
+      <ul className="@container space-y-3">
         {value.rules.map((rule, i) => {
           const kind = kindOf(rule.field);
-          const problem = showProblems ? ruleProblem(rule) : null;
+          const problem = showProblems || left.has(i) ? ruleProblem(rule) : null;
           const selected = selectValueFor(rule.field, attributeKeys);
           const id = `${prefix}-r${i}`;
           return (
             <li key={i} className="rounded-control border border-border bg-surface p-3">
-              <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_auto] sm:items-end">
+              <div className="grid gap-2 @md:grid-cols-2 @md:items-end @3xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_auto]">
                 <div className={selectClass}>
                   <label htmlFor={`${id}-field`} className="mb-1 block text-xs font-medium text-muted">
                     Rule {i + 1}: about
@@ -98,7 +102,7 @@ export function FilterBuilder({ value, onChange, attributeKeys, tags, showProble
                       <label htmlFor={`${id}-value`} className="mb-1 block text-xs font-medium text-muted">
                         Value
                       </label>
-                      <ValueInput id={`${id}-value`} rule={rule} tags={tags} invalid={!!problem} onChange={(next) => setRule(i, next)} />
+                      <ValueInput id={`${id}-value`} rule={rule} tags={tags} invalid={!!problem} onChange={(next) => setRule(i, next)} onBlur={() => leave(i)} />
                     </>
                   ) : (
                     <p className="pb-2 text-sm text-muted">No value needed.</p>
@@ -108,10 +112,14 @@ export function FilterBuilder({ value, onChange, attributeKeys, tags, showProble
                   type="button"
                   size="sm"
                   variant="ghost"
-                  className="max-sm:min-h-10 sm:mb-0.5"
+                  className="max-sm:min-h-10 @md:mb-0.5 @md:justify-self-end @3xl:justify-self-auto"
                   aria-label={`Remove rule ${i + 1}`}
                   disabled={value.rules.length === 1 && !value.rules[0].value}
-                  onClick={() => onChange({ ...value, rules: value.rules.length === 1 ? [blankRule()] : value.rules.filter((_, idx) => idx !== i) })}
+                  onClick={() => {
+                    // Positions shift after a removal, so the "left" marks move with the rules that stay.
+                    setLeft((prev) => new Set([...prev].filter((n) => n !== i).map((n) => (n > i ? n - 1 : n))));
+                    onChange({ ...value, rules: value.rules.length === 1 ? [blankRule()] : value.rules.filter((_, idx) => idx !== i) });
+                  }}
                 >
                   Remove
                 </Button>
@@ -149,13 +157,13 @@ export function FilterBuilder({ value, onChange, attributeKeys, tags, showProble
   );
 }
 
-function ValueInput({ id, rule, tags, invalid, onChange }: { id: string; rule: Draft["rules"][number]; tags: readonly string[]; invalid: boolean; onChange: (r: Draft["rules"][number]) => void }) {
+function ValueInput({ id, rule, tags, invalid, onChange, onBlur }: { id: string; rule: Draft["rules"][number]; tags: readonly string[]; invalid: boolean; onChange: (r: Draft["rules"][number]) => void; onBlur: () => void }) {
   const kind = kindOf(rule.field);
   const set = (value: string) => onChange({ ...rule, value });
   const value = rule.value ?? "";
   if (kind === "country") {
     return (
-      <Select id={id} value={value} aria-invalid={invalid || undefined} onChange={(e) => set(e.target.value)}>
+      <Select id={id} value={value} aria-invalid={invalid || undefined} onChange={(e) => set(e.target.value)} onBlur={onBlur}>
         <option value="">Choose a country</option>
         {countryOptions().map((o) => (
           <option key={o.value} value={o.value}>
@@ -166,15 +174,15 @@ function ValueInput({ id, rule, tags, invalid, onChange }: { id: string; rule: D
     );
   }
   if (rule.op === "within_days" || rule.op === "older_than_days") {
-    return <Input id={id} type="number" inputMode="numeric" min={1} max={3650} value={value} aria-invalid={invalid || undefined} onChange={(e) => set(e.target.value)} placeholder="30" />;
+    return <Input id={id} type="number" inputMode="numeric" min={1} max={3650} value={value} aria-invalid={invalid || undefined} onChange={(e) => set(e.target.value)} onBlur={onBlur} placeholder="30" />;
   }
-  if (rule.op === "before" || rule.op === "after") return <Input id={id} type="date" value={value} aria-invalid={invalid || undefined} onChange={(e) => set(e.target.value)} />;
-  if (rule.op === "greater_than" || rule.op === "less_than") return <Input id={id} type="number" inputMode="decimal" value={value} aria-invalid={invalid || undefined} onChange={(e) => set(e.target.value)} />;
+  if (rule.op === "before" || rule.op === "after") return <Input id={id} type="date" value={value} aria-invalid={invalid || undefined} onChange={(e) => set(e.target.value)} onBlur={onBlur} />;
+  if (rule.op === "greater_than" || rule.op === "less_than") return <Input id={id} type="number" inputMode="decimal" value={value} aria-invalid={invalid || undefined} onChange={(e) => set(e.target.value)} onBlur={onBlur} />;
   if (kind === "tag") {
     const list = `${id}-tags`;
     return (
       <>
-        <Input id={id} value={value} list={list} aria-invalid={invalid || undefined} onChange={(e) => set(e.target.value)} maxLength={60} autoComplete="off" placeholder="for example vip" />
+        <Input id={id} value={value} list={list} aria-invalid={invalid || undefined} onChange={(e) => set(e.target.value)} onBlur={onBlur} maxLength={60} autoComplete="off" placeholder="for example vip" />
         <datalist id={list}>
           {tags.map((t) => (
             <option key={t} value={t} />
@@ -183,5 +191,5 @@ function ValueInput({ id, rule, tags, invalid, onChange }: { id: string; rule: D
       </>
     );
   }
-  return <Input id={id} value={value} aria-invalid={invalid || undefined} onChange={(e) => set(e.target.value)} maxLength={200} autoComplete="off" />;
+  return <Input id={id} value={value} aria-invalid={invalid || undefined} onChange={(e) => set(e.target.value)} onBlur={onBlur} maxLength={200} autoComplete="off" />;
 }

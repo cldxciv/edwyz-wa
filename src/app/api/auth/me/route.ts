@@ -7,8 +7,9 @@ export async function GET(request: Request) {
     const actor = await getActor(request);
     const [user, memberships] = await Promise.all([
       prisma.user.findUnique({ where: { id: actor.userId }, select: { id: true, email: true, name: true, emailVerifiedAt: true } }),
+      // Deleted workspaces are left out of the switcher: switching into one would only be refused.
       prisma.membership.findMany({
-        where: { userId: actor.userId },
+        where: { userId: actor.userId, tenant: { deletedAt: null } },
         orderBy: { createdAt: "asc" },
         include: { tenant: { select: { id: true, name: true, slug: true } } },
       }),

@@ -38,6 +38,12 @@ export type LeadMinAggregateOutputType = {
   assignedToId: string | null
   firstResponseAt: Date | null
   createdAt: Date | null
+  source: string | null
+  platform: string | null
+  adsetMetaId: string | null
+  isOrganic: boolean | null
+  isTest: boolean | null
+  conversationId: string | null
 }
 
 export type LeadMaxAggregateOutputType = {
@@ -54,6 +60,12 @@ export type LeadMaxAggregateOutputType = {
   assignedToId: string | null
   firstResponseAt: Date | null
   createdAt: Date | null
+  source: string | null
+  platform: string | null
+  adsetMetaId: string | null
+  isOrganic: boolean | null
+  isTest: boolean | null
+  conversationId: string | null
 }
 
 export type LeadCountAggregateOutputType = {
@@ -71,6 +83,12 @@ export type LeadCountAggregateOutputType = {
   assignedToId: number
   firstResponseAt: number
   createdAt: number
+  source: number
+  platform: number
+  adsetMetaId: number
+  isOrganic: number
+  isTest: number
+  conversationId: number
   _all: number
 }
 
@@ -89,6 +107,12 @@ export type LeadMinAggregateInputType = {
   assignedToId?: true
   firstResponseAt?: true
   createdAt?: true
+  source?: true
+  platform?: true
+  adsetMetaId?: true
+  isOrganic?: true
+  isTest?: true
+  conversationId?: true
 }
 
 export type LeadMaxAggregateInputType = {
@@ -105,6 +129,12 @@ export type LeadMaxAggregateInputType = {
   assignedToId?: true
   firstResponseAt?: true
   createdAt?: true
+  source?: true
+  platform?: true
+  adsetMetaId?: true
+  isOrganic?: true
+  isTest?: true
+  conversationId?: true
 }
 
 export type LeadCountAggregateInputType = {
@@ -122,6 +152,12 @@ export type LeadCountAggregateInputType = {
   assignedToId?: true
   firstResponseAt?: true
   createdAt?: true
+  source?: true
+  platform?: true
+  adsetMetaId?: true
+  isOrganic?: true
+  isTest?: true
+  conversationId?: true
   _all?: true
 }
 
@@ -212,6 +248,12 @@ export type LeadGroupByOutputType = {
   assignedToId: string | null
   firstResponseAt: Date | null
   createdAt: Date
+  source: string
+  platform: string | null
+  adsetMetaId: string | null
+  isOrganic: boolean | null
+  isTest: boolean
+  conversationId: string | null
   _count: LeadCountAggregateOutputType | null
   _min: LeadMinAggregateOutputType | null
   _max: LeadMaxAggregateOutputType | null
@@ -250,6 +292,12 @@ export type LeadWhereInput = {
   assignedToId?: Prisma.StringNullableFilter<"Lead"> | string | null
   firstResponseAt?: Prisma.DateTimeNullableFilter<"Lead"> | Date | string | null
   createdAt?: Prisma.DateTimeFilter<"Lead"> | Date | string
+  source?: Prisma.StringFilter<"Lead"> | string
+  platform?: Prisma.StringNullableFilter<"Lead"> | string | null
+  adsetMetaId?: Prisma.StringNullableFilter<"Lead"> | string | null
+  isOrganic?: Prisma.BoolNullableFilter<"Lead"> | boolean | null
+  isTest?: Prisma.BoolFilter<"Lead"> | boolean
+  conversationId?: Prisma.StringNullableFilter<"Lead"> | string | null
   leadForm?: Prisma.XOR<Prisma.LeadFormNullableScalarRelationFilter, Prisma.LeadFormWhereInput> | null
   runs?: Prisma.LeadSequenceRunListRelationFilter
 }
@@ -269,6 +317,12 @@ export type LeadOrderByWithRelationInput = {
   assignedToId?: Prisma.SortOrderInput | Prisma.SortOrder
   firstResponseAt?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  source?: Prisma.SortOrder
+  platform?: Prisma.SortOrderInput | Prisma.SortOrder
+  adsetMetaId?: Prisma.SortOrderInput | Prisma.SortOrder
+  isOrganic?: Prisma.SortOrderInput | Prisma.SortOrder
+  isTest?: Prisma.SortOrder
+  conversationId?: Prisma.SortOrderInput | Prisma.SortOrder
   leadForm?: Prisma.LeadFormOrderByWithRelationInput
   runs?: Prisma.LeadSequenceRunOrderByRelationAggregateInput
 }
@@ -292,6 +346,12 @@ export type LeadWhereUniqueInput = Prisma.AtLeast<{
   assignedToId?: Prisma.StringNullableFilter<"Lead"> | string | null
   firstResponseAt?: Prisma.DateTimeNullableFilter<"Lead"> | Date | string | null
   createdAt?: Prisma.DateTimeFilter<"Lead"> | Date | string
+  source?: Prisma.StringFilter<"Lead"> | string
+  platform?: Prisma.StringNullableFilter<"Lead"> | string | null
+  adsetMetaId?: Prisma.StringNullableFilter<"Lead"> | string | null
+  isOrganic?: Prisma.BoolNullableFilter<"Lead"> | boolean | null
+  isTest?: Prisma.BoolFilter<"Lead"> | boolean
+  conversationId?: Prisma.StringNullableFilter<"Lead"> | string | null
   leadForm?: Prisma.XOR<Prisma.LeadFormNullableScalarRelationFilter, Prisma.LeadFormWhereInput> | null
   runs?: Prisma.LeadSequenceRunListRelationFilter
 }, "id" | "tenantId_leadgenId">
@@ -311,6 +371,12 @@ export type LeadOrderByWithAggregationInput = {
   assignedToId?: Prisma.SortOrderInput | Prisma.SortOrder
   firstResponseAt?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  source?: Prisma.SortOrder
+  platform?: Prisma.SortOrderInput | Prisma.SortOrder
+  adsetMetaId?: Prisma.SortOrderInput | Prisma.SortOrder
+  isOrganic?: Prisma.SortOrderInput | Prisma.SortOrder
+  isTest?: Prisma.SortOrder
+  conversationId?: Prisma.SortOrderInput | Prisma.SortOrder
   _count?: Prisma.LeadCountOrderByAggregateInput
   _max?: Prisma.LeadMaxOrderByAggregateInput
   _min?: Prisma.LeadMinOrderByAggregateInput
@@ -334,6 +400,12 @@ export type LeadScalarWhereWithAggregatesInput = {
   assignedToId?: Prisma.StringNullableWithAggregatesFilter<"Lead"> | string | null
   firstResponseAt?: Prisma.DateTimeNullableWithAggregatesFilter<"Lead"> | Date | string | null
   createdAt?: Prisma.DateTimeWithAggregatesFilter<"Lead"> | Date | string
+  source?: Prisma.StringWithAggregatesFilter<"Lead"> | string
+  platform?: Prisma.StringNullableWithAggregatesFilter<"Lead"> | string | null
+  adsetMetaId?: Prisma.StringNullableWithAggregatesFilter<"Lead"> | string | null
+  isOrganic?: Prisma.BoolNullableWithAggregatesFilter<"Lead"> | boolean | null
+  isTest?: Prisma.BoolWithAggregatesFilter<"Lead"> | boolean
+  conversationId?: Prisma.StringNullableWithAggregatesFilter<"Lead"> | string | null
 }
 
 export type LeadCreateInput = {
@@ -350,6 +422,12 @@ export type LeadCreateInput = {
   assignedToId?: string | null
   firstResponseAt?: Date | string | null
   createdAt?: Date | string
+  source?: string
+  platform?: string | null
+  adsetMetaId?: string | null
+  isOrganic?: boolean | null
+  isTest?: boolean
+  conversationId?: string | null
   leadForm?: Prisma.LeadFormCreateNestedOneWithoutLeadsInput
   runs?: Prisma.LeadSequenceRunCreateNestedManyWithoutLeadInput
 }
@@ -369,6 +447,12 @@ export type LeadUncheckedCreateInput = {
   assignedToId?: string | null
   firstResponseAt?: Date | string | null
   createdAt?: Date | string
+  source?: string
+  platform?: string | null
+  adsetMetaId?: string | null
+  isOrganic?: boolean | null
+  isTest?: boolean
+  conversationId?: string | null
   runs?: Prisma.LeadSequenceRunUncheckedCreateNestedManyWithoutLeadInput
 }
 
@@ -386,6 +470,12 @@ export type LeadUpdateInput = {
   assignedToId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   firstResponseAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  source?: Prisma.StringFieldUpdateOperationsInput | string
+  platform?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  adsetMetaId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  isOrganic?: Prisma.NullableBoolFieldUpdateOperationsInput | boolean | null
+  isTest?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  conversationId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   leadForm?: Prisma.LeadFormUpdateOneWithoutLeadsNestedInput
   runs?: Prisma.LeadSequenceRunUpdateManyWithoutLeadNestedInput
 }
@@ -405,6 +495,12 @@ export type LeadUncheckedUpdateInput = {
   assignedToId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   firstResponseAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  source?: Prisma.StringFieldUpdateOperationsInput | string
+  platform?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  adsetMetaId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  isOrganic?: Prisma.NullableBoolFieldUpdateOperationsInput | boolean | null
+  isTest?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  conversationId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   runs?: Prisma.LeadSequenceRunUncheckedUpdateManyWithoutLeadNestedInput
 }
 
@@ -423,6 +519,12 @@ export type LeadCreateManyInput = {
   assignedToId?: string | null
   firstResponseAt?: Date | string | null
   createdAt?: Date | string
+  source?: string
+  platform?: string | null
+  adsetMetaId?: string | null
+  isOrganic?: boolean | null
+  isTest?: boolean
+  conversationId?: string | null
 }
 
 export type LeadUpdateManyMutationInput = {
@@ -439,6 +541,12 @@ export type LeadUpdateManyMutationInput = {
   assignedToId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   firstResponseAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  source?: Prisma.StringFieldUpdateOperationsInput | string
+  platform?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  adsetMetaId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  isOrganic?: Prisma.NullableBoolFieldUpdateOperationsInput | boolean | null
+  isTest?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  conversationId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
 }
 
 export type LeadUncheckedUpdateManyInput = {
@@ -456,6 +564,12 @@ export type LeadUncheckedUpdateManyInput = {
   assignedToId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   firstResponseAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  source?: Prisma.StringFieldUpdateOperationsInput | string
+  platform?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  adsetMetaId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  isOrganic?: Prisma.NullableBoolFieldUpdateOperationsInput | boolean | null
+  isTest?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  conversationId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
 }
 
 export type LeadListRelationFilter = {
@@ -488,6 +602,12 @@ export type LeadCountOrderByAggregateInput = {
   assignedToId?: Prisma.SortOrder
   firstResponseAt?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  source?: Prisma.SortOrder
+  platform?: Prisma.SortOrder
+  adsetMetaId?: Prisma.SortOrder
+  isOrganic?: Prisma.SortOrder
+  isTest?: Prisma.SortOrder
+  conversationId?: Prisma.SortOrder
 }
 
 export type LeadMaxOrderByAggregateInput = {
@@ -504,6 +624,12 @@ export type LeadMaxOrderByAggregateInput = {
   assignedToId?: Prisma.SortOrder
   firstResponseAt?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  source?: Prisma.SortOrder
+  platform?: Prisma.SortOrder
+  adsetMetaId?: Prisma.SortOrder
+  isOrganic?: Prisma.SortOrder
+  isTest?: Prisma.SortOrder
+  conversationId?: Prisma.SortOrder
 }
 
 export type LeadMinOrderByAggregateInput = {
@@ -520,6 +646,12 @@ export type LeadMinOrderByAggregateInput = {
   assignedToId?: Prisma.SortOrder
   firstResponseAt?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  source?: Prisma.SortOrder
+  platform?: Prisma.SortOrder
+  adsetMetaId?: Prisma.SortOrder
+  isOrganic?: Prisma.SortOrder
+  isTest?: Prisma.SortOrder
+  conversationId?: Prisma.SortOrder
 }
 
 export type LeadScalarRelationFilter = {
@@ -597,6 +729,12 @@ export type LeadCreateWithoutLeadFormInput = {
   assignedToId?: string | null
   firstResponseAt?: Date | string | null
   createdAt?: Date | string
+  source?: string
+  platform?: string | null
+  adsetMetaId?: string | null
+  isOrganic?: boolean | null
+  isTest?: boolean
+  conversationId?: string | null
   runs?: Prisma.LeadSequenceRunCreateNestedManyWithoutLeadInput
 }
 
@@ -614,6 +752,12 @@ export type LeadUncheckedCreateWithoutLeadFormInput = {
   assignedToId?: string | null
   firstResponseAt?: Date | string | null
   createdAt?: Date | string
+  source?: string
+  platform?: string | null
+  adsetMetaId?: string | null
+  isOrganic?: boolean | null
+  isTest?: boolean
+  conversationId?: string | null
   runs?: Prisma.LeadSequenceRunUncheckedCreateNestedManyWithoutLeadInput
 }
 
@@ -661,6 +805,12 @@ export type LeadScalarWhereInput = {
   assignedToId?: Prisma.StringNullableFilter<"Lead"> | string | null
   firstResponseAt?: Prisma.DateTimeNullableFilter<"Lead"> | Date | string | null
   createdAt?: Prisma.DateTimeFilter<"Lead"> | Date | string
+  source?: Prisma.StringFilter<"Lead"> | string
+  platform?: Prisma.StringNullableFilter<"Lead"> | string | null
+  adsetMetaId?: Prisma.StringNullableFilter<"Lead"> | string | null
+  isOrganic?: Prisma.BoolNullableFilter<"Lead"> | boolean | null
+  isTest?: Prisma.BoolFilter<"Lead"> | boolean
+  conversationId?: Prisma.StringNullableFilter<"Lead"> | string | null
 }
 
 export type LeadCreateWithoutRunsInput = {
@@ -677,6 +827,12 @@ export type LeadCreateWithoutRunsInput = {
   assignedToId?: string | null
   firstResponseAt?: Date | string | null
   createdAt?: Date | string
+  source?: string
+  platform?: string | null
+  adsetMetaId?: string | null
+  isOrganic?: boolean | null
+  isTest?: boolean
+  conversationId?: string | null
   leadForm?: Prisma.LeadFormCreateNestedOneWithoutLeadsInput
 }
 
@@ -695,6 +851,12 @@ export type LeadUncheckedCreateWithoutRunsInput = {
   assignedToId?: string | null
   firstResponseAt?: Date | string | null
   createdAt?: Date | string
+  source?: string
+  platform?: string | null
+  adsetMetaId?: string | null
+  isOrganic?: boolean | null
+  isTest?: boolean
+  conversationId?: string | null
 }
 
 export type LeadCreateOrConnectWithoutRunsInput = {
@@ -727,6 +889,12 @@ export type LeadUpdateWithoutRunsInput = {
   assignedToId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   firstResponseAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  source?: Prisma.StringFieldUpdateOperationsInput | string
+  platform?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  adsetMetaId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  isOrganic?: Prisma.NullableBoolFieldUpdateOperationsInput | boolean | null
+  isTest?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  conversationId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   leadForm?: Prisma.LeadFormUpdateOneWithoutLeadsNestedInput
 }
 
@@ -745,6 +913,12 @@ export type LeadUncheckedUpdateWithoutRunsInput = {
   assignedToId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   firstResponseAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  source?: Prisma.StringFieldUpdateOperationsInput | string
+  platform?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  adsetMetaId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  isOrganic?: Prisma.NullableBoolFieldUpdateOperationsInput | boolean | null
+  isTest?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  conversationId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
 }
 
 export type LeadCreateManyLeadFormInput = {
@@ -761,6 +935,12 @@ export type LeadCreateManyLeadFormInput = {
   assignedToId?: string | null
   firstResponseAt?: Date | string | null
   createdAt?: Date | string
+  source?: string
+  platform?: string | null
+  adsetMetaId?: string | null
+  isOrganic?: boolean | null
+  isTest?: boolean
+  conversationId?: string | null
 }
 
 export type LeadUpdateWithoutLeadFormInput = {
@@ -777,6 +957,12 @@ export type LeadUpdateWithoutLeadFormInput = {
   assignedToId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   firstResponseAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  source?: Prisma.StringFieldUpdateOperationsInput | string
+  platform?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  adsetMetaId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  isOrganic?: Prisma.NullableBoolFieldUpdateOperationsInput | boolean | null
+  isTest?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  conversationId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   runs?: Prisma.LeadSequenceRunUpdateManyWithoutLeadNestedInput
 }
 
@@ -794,6 +980,12 @@ export type LeadUncheckedUpdateWithoutLeadFormInput = {
   assignedToId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   firstResponseAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  source?: Prisma.StringFieldUpdateOperationsInput | string
+  platform?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  adsetMetaId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  isOrganic?: Prisma.NullableBoolFieldUpdateOperationsInput | boolean | null
+  isTest?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  conversationId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   runs?: Prisma.LeadSequenceRunUncheckedUpdateManyWithoutLeadNestedInput
 }
 
@@ -811,6 +1003,12 @@ export type LeadUncheckedUpdateManyWithoutLeadFormInput = {
   assignedToId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   firstResponseAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  source?: Prisma.StringFieldUpdateOperationsInput | string
+  platform?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  adsetMetaId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  isOrganic?: Prisma.NullableBoolFieldUpdateOperationsInput | boolean | null
+  isTest?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  conversationId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
 }
 
 
@@ -859,6 +1057,12 @@ export type LeadSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = r
   assignedToId?: boolean
   firstResponseAt?: boolean
   createdAt?: boolean
+  source?: boolean
+  platform?: boolean
+  adsetMetaId?: boolean
+  isOrganic?: boolean
+  isTest?: boolean
+  conversationId?: boolean
   leadForm?: boolean | Prisma.Lead$leadFormArgs<ExtArgs>
   runs?: boolean | Prisma.Lead$runsArgs<ExtArgs>
   _count?: boolean | Prisma.LeadCountOutputTypeDefaultArgs<ExtArgs>
@@ -879,6 +1083,12 @@ export type LeadSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extensio
   assignedToId?: boolean
   firstResponseAt?: boolean
   createdAt?: boolean
+  source?: boolean
+  platform?: boolean
+  adsetMetaId?: boolean
+  isOrganic?: boolean
+  isTest?: boolean
+  conversationId?: boolean
   leadForm?: boolean | Prisma.Lead$leadFormArgs<ExtArgs>
 }, ExtArgs["result"]["lead"]>
 
@@ -897,6 +1107,12 @@ export type LeadSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensio
   assignedToId?: boolean
   firstResponseAt?: boolean
   createdAt?: boolean
+  source?: boolean
+  platform?: boolean
+  adsetMetaId?: boolean
+  isOrganic?: boolean
+  isTest?: boolean
+  conversationId?: boolean
   leadForm?: boolean | Prisma.Lead$leadFormArgs<ExtArgs>
 }, ExtArgs["result"]["lead"]>
 
@@ -915,9 +1131,15 @@ export type LeadSelectScalar = {
   assignedToId?: boolean
   firstResponseAt?: boolean
   createdAt?: boolean
+  source?: boolean
+  platform?: boolean
+  adsetMetaId?: boolean
+  isOrganic?: boolean
+  isTest?: boolean
+  conversationId?: boolean
 }
 
-export type LeadOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "tenantId" | "leadFormId" | "leadgenId" | "contactId" | "fields" | "campaignMetaId" | "adMetaId" | "consentText" | "consentAt" | "status" | "assignedToId" | "firstResponseAt" | "createdAt", ExtArgs["result"]["lead"]>
+export type LeadOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "tenantId" | "leadFormId" | "leadgenId" | "contactId" | "fields" | "campaignMetaId" | "adMetaId" | "consentText" | "consentAt" | "status" | "assignedToId" | "firstResponseAt" | "createdAt" | "source" | "platform" | "adsetMetaId" | "isOrganic" | "isTest" | "conversationId", ExtArgs["result"]["lead"]>
 export type LeadInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   leadForm?: boolean | Prisma.Lead$leadFormArgs<ExtArgs>
   runs?: boolean | Prisma.Lead$runsArgs<ExtArgs>
@@ -951,6 +1173,12 @@ export type $LeadPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs =
     assignedToId: string | null
     firstResponseAt: Date | null
     createdAt: Date
+    source: string
+    platform: string | null
+    adsetMetaId: string | null
+    isOrganic: boolean | null
+    isTest: boolean
+    conversationId: string | null
   }, ExtArgs["result"]["lead"]>
   composites: {}
 }
@@ -1390,6 +1618,12 @@ export interface LeadFieldRefs {
   readonly assignedToId: Prisma.FieldRef<"Lead", 'String'>
   readonly firstResponseAt: Prisma.FieldRef<"Lead", 'DateTime'>
   readonly createdAt: Prisma.FieldRef<"Lead", 'DateTime'>
+  readonly source: Prisma.FieldRef<"Lead", 'String'>
+  readonly platform: Prisma.FieldRef<"Lead", 'String'>
+  readonly adsetMetaId: Prisma.FieldRef<"Lead", 'String'>
+  readonly isOrganic: Prisma.FieldRef<"Lead", 'Boolean'>
+  readonly isTest: Prisma.FieldRef<"Lead", 'Boolean'>
+  readonly conversationId: Prisma.FieldRef<"Lead", 'String'>
 }
     
 

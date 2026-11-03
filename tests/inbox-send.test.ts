@@ -268,6 +268,16 @@ describe("processSendJob through the spend gate", () => {
     expect([reservedNow(), spentNow()]).toEqual([0n, 0n]);
   });
 
+  it("a STOP that arrives while a utility template waits does not stop it: an opt-out blocks marketing only (owner default 1)", async () => {
+    h.db.rows("template")[0].category = "UTILITY";
+    const { message, job } = await queueTemplate();
+    expect(stored(message.id)).toMatchObject({ pricingCategory: "UTILITY" });
+    h.db.rows("contact")[0].optedOutAt = new Date();
+    await processSendJob(job);
+    expect(h.network).toHaveBeenCalledTimes(1);
+    expect(stored(message.id)).toMatchObject({ status: "sent" });
+  });
+
   it("a frozen workspace holds an automation's message 15 minutes at a time and fails it after 24 hours (free-form)", async () => {
     h.db.rows("spendControl")[0].freeze = "all";
     const message = await sendText({ tenantId: T, conversationId: "cv1", body: "Auto reply", origin: "automation" });

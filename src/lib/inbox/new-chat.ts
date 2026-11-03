@@ -108,7 +108,7 @@ export async function startChat(actor: Actor, input: StartChatInput, opts: { ori
   const existing = await prisma.conversation.findFirst({ where: { tenantId, phoneNumberId, contactId: contact.id }, select: { id: true, assignedToId: true } });
   if (existing) await assertConversationVisible(actor, existing.id);
 
-  if (input.confirmOptIn === true && contact.optedOutAt) throw new HttpError(422, "This contact has opted out of messages. They can subscribe again by replying START.");
+  if (input.confirmOptIn === true && contact.optedOutAt) throw new HttpError(422, "This contact opted out of marketing messages. Only they can opt in again, by sending START. You can still send them a utility template, like an order update.");
   const confirmedAt = input.confirmOptIn === true && !contact.optIn ? new Date() : null;
   if (confirmedAt) await prisma.contact.updateMany({ where: { id: contact.id, tenantId }, data: { optIn: true, optInSource: "agent_confirmed", optInAt: confirmedAt } });
   const revertOptIn = async () => {

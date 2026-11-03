@@ -4,6 +4,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import { emitAttributeChanges, emitAutomationEvent, emitTagChanges } from "@/lib/automation/v2/emit";
 import { assertWithinLimit } from "@/lib/billing";
 import { prisma } from "@/lib/db";
+import { forgetContact } from "@/lib/promote/forget";
 import { type Actor, HttpError, requireRole } from "@/lib/tenancy";
 import { contactWhereForSegment } from "@/lib/segments/service";
 import { identitySearchFilter } from "./identity";
@@ -86,9 +87,11 @@ export async function updateContact(actor: Actor, id: string, patch: ContactPatc
   if (patch.optIn === true) {
     requireRole(actor, "admin");
     if (!patch.optInSource) throw new HttpError(400, "optInSource is required when optIn is true.");
-    if (contact.optedOutAt) throw new HttpError(409, "This contact opted out and can only opt in again by messaging you.");
+    if (contact.optedOutAt) throw new HttpError(409, "This contact opted out of marketing messages. Only they can opt in again, by sending START to your WhatsApp number.");
     if (!contact.optIn) Object.assign(data, { optIn: true, optInSource: patch.optInSource, optInAt: now });
   } else if (patch.optIn === false) {
+    // An opt-out, not only a withdrawn marketing consent: like STOP, optedOutAt stops marketing until the customer sends START.
+    // Order updates (utility templates), login codes and replies to their own messages still go (lib/contacts/opt-out.ts).
     Object.assign(data, { optIn: false, optedOutAt: contact.optedOutAt ?? now });
   }
   const { count } = await prisma.contact.updateMany({ where: { id: contact.id, tenantId: actor.tenantId }, data: data as Prisma.ContactUpdateManyMutationInput });
@@ -106,6 +109,9 @@ export async function updateContact(actor: Actor, id: string, patch: ContactPatc
 }
 
 export async function deleteContact(actor: Actor, id: string) {
+  // Out of the workspace's customer-list audiences on Meta first, while the email and phone can still be read; a failure stops
+  // the delete so it can run again (docs/IG-PAGE-ADS-SPEC.md 5.5, promote/forget.ts).
+  await forgetContact(actor.tenantId, id);
   const result = await prisma.contact.deleteMany({ where: { id, tenantId: actor.tenantId } });
   if (result.count === 0) throw new HttpError(404, "Contact not found.");
 }

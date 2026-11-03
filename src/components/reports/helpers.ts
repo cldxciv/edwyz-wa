@@ -27,6 +27,11 @@ export function describeSeries(name: string, days: string[], values: number[]): 
   return total === 0 ? `${name}: none in this period.` : `${name}: ${total.toLocaleString()} in total, busiest on ${formatDay(days[peakIndex], true)} with ${values[peakIndex].toLocaleString()}.`;
 }
 
+/** "1 conversation", "3 conversations": a count with its noun, in the user's number format. */
+export function plural(count: number, noun: string, many = `${noun}s`): string {
+  return `${count.toLocaleString()} ${count === 1 ? noun : many}`;
+}
+
 export function formatPercent(value: number | null): string {
   return value === null ? "No data" : `${value}%`;
 }

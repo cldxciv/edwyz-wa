@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/app/PageHeader";
 import { canManage, useApi, useRole } from "@/components/contacts/hooks";
 import type { Funnel } from "@/lib/broadcasts/funnel";
 import { FunnelChart } from "./OverviewPanels";
+import { LinkButton } from "./LinkButton";
 import { audienceLabel, broadcastStatusView, errorCodeText, formatWhen, friendlyError, handledCount, isLive, progressPercent, recipientStatusView, scheduleBounds, startCopy, validateSchedule } from "./helpers";
 
 type Recipient = { id: string; status: string; errorCode: string | null; sentAt: string | null; contact: { phone: string | null; bsuid?: string | null; username?: string | null; name: string | null } };
@@ -93,7 +94,9 @@ export function BroadcastDetail({ id }: { id: string }) {
   const admin = canManage(role);
   const [pollMs, setPollMs] = useState<number | undefined>(3000);
   const { data, error, loading, reload } = useApi<Detail>(`/api/broadcasts/${id}`, pollMs);
-  const funnel = useApi<{ funnel: Funnel }>(`/api/broadcasts/${id}/funnel`, 15_000);
+  // A wrong or deleted id answers 404 "Broadcast not found.": say so plainly and stop asking every few seconds.
+  const missing = !data && !!error && /not found/i.test(error);
+  const funnel = useApi<{ funnel: Funnel }>(missing ? null : `/api/broadcasts/${id}/funnel`, 15_000);
   const [when, setWhen] = useState("");
   const [whenError, setWhenError] = useState<string | null>(null);
   const [extra, setExtra] = useState<Recipient[]>([]);
@@ -117,8 +120,8 @@ export function BroadcastDetail({ id }: { id: string }) {
 
   const status = data?.broadcast.status;
   useEffect(() => {
-    setPollMs(status && !isLive(status) ? undefined : 3000);
-  }, [status]);
+    setPollMs(missing || (status && !isLive(status)) ? undefined : 3000);
+  }, [status, missing]);
 
   const recipients = data?.recipients;
   const rows = useMemo(() => {
@@ -202,6 +205,14 @@ export function BroadcastDetail({ id }: { id: string }) {
     }
   }
 
+  if (missing) {
+    return (
+      <div>
+        <PageHeader title="Broadcast not found" breadcrumbs={[{ label: "Broadcasts", href: "/app/broadcasts" }, { label: "Not found" }]} />
+        <EmptyState title="This broadcast does not exist" body="It may have been deleted, or the link is wrong." action={<LinkButton href="/app/broadcasts">Back to broadcasts</LinkButton>} />
+      </div>
+    );
+  }
   if (error && !data) {
     return (
       <div>

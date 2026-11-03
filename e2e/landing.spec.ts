@@ -69,6 +69,62 @@ test.describe("landing page", () => {
     await expect(page.locator("main").getByText("Coming soon", { exact: true })).toHaveCount(5);
   });
 
+  test("anchor jumps land just below the sticky header, not a second header height lower", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" }); // no smooth scroll to wait for
+    await page.goto("/");
+    const header = await page.getByRole("banner").boundingBox();
+    for (const [link, id] of [
+      [page.getByRole("main").getByRole("link", { name: "See how it works" }), "how-it-works"],
+      [page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Features" }), "features"],
+    ] as const) {
+      await link.click();
+      await expect(page).toHaveURL(new RegExp(`#${id}$`));
+      // html { scroll-padding-top: 5rem } alone: the section starts about 80px down, just under the 64px header.
+      await expect.poll(() => page.locator(`#${id}`).evaluate((el) => Math.round(el.getBoundingClientRect().top)), id).toBeLessThanOrEqual(96);
+      const top = await page.locator(`#${id}`).evaluate((el) => el.getBoundingClientRect().top);
+      expect(top, id).toBeGreaterThanOrEqual(header!.height);
+      await page.evaluate(() => window.scrollTo(0, 0));
+    }
+  });
+
+  test("the skip link shows above the sticky header while it has focus", async ({ page }) => {
+    await page.goto("/");
+    await page.keyboard.press("Tab");
+    const skip = page.getByRole("link", { name: "Skip to content" });
+    await expect(skip).toBeFocused();
+    const box = await skip.boundingBox();
+    expect(box && box.width).toBeGreaterThan(20);
+    const onTop = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest("a")?.textContent?.trim() ?? "", { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 });
+    expect(onTop).toBe("Skip to content");
+  });
+
+  test("the header marks the page being read, and the docs menu marks the docs page", async ({ page }) => {
+    await page.goto("/pricing");
+    const main = page.getByRole("navigation", { name: "Main" });
+    await expect(main.getByRole("link", { name: "Pricing" })).toHaveAttribute("aria-current", "page");
+    await expect(main.getByRole("link", { name: "Docs" })).not.toHaveAttribute("aria-current", /.+/);
+    await page.goto("/docs/endpoints");
+    await expect(main.getByRole("link", { name: "Docs" })).toHaveAttribute("aria-current", "true");
+    const docs = page.getByRole("navigation", { name: "API documentation" });
+    await expect(docs.getByRole("link", { name: "Endpoints" })).toHaveAttribute("aria-current", "page");
+    await expect(docs.locator("[aria-current]")).toHaveCount(1);
+  });
+
+  test("the header stays on one line at 320px @mobile", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 640 });
+    await page.goto("/");
+    await noHorizontalOverflow(page, "/ (320px)");
+    const banner = page.getByRole("banner");
+    const logo = await banner.getByRole("link", { name: "Edwyz WA home" }).boundingBox();
+    const cta = banner.getByRole("link", { name: "Free trial" });
+    await expect(cta).toBeVisible();
+    const ctaBox = await cta.boundingBox();
+    // One line of text each: the logo is no taller than its 28px mark, the button no taller than one line plus its padding.
+    expect(logo!.height).toBeLessThanOrEqual(30);
+    expect(ctaBox!.height).toBeLessThanOrEqual(40);
+    expect(ctaBox!.x + ctaBox!.width).toBeLessThanOrEqual(320);
+  });
+
   test("FAQ answers open from the keyboard", async ({ page }) => {
     await page.goto("/");
     const first = page.locator("#faq summary").first();

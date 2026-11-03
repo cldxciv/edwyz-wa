@@ -79,7 +79,7 @@ export default function WebhooksPage() {
       <p>Answer with any 2xx status within 10 seconds. Redirects are not followed. Failed deliveries are retried, so deduplicate on the id in the body.</p>
       <h2>Events</h2>
       <p>
-        The <code>data</code> object of each event is shown below. Fields that can be missing are null, never absent. A person who messages you through a WhatsApp username has
+        The <code>data</code>{" "}object of each event is shown below. Fields that can be missing are null, never absent. A person who messages you through a WhatsApp username has
         no phone number: use the contact&apos;s bsuid to recognise them.
       </p>
       <div className="space-y-4">

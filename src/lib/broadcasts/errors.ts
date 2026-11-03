@@ -21,6 +21,7 @@ const CODE_TEXT: Record<string, string> = {
   no_recipient: "This contact has no phone number or WhatsApp user id, so there was nobody to send to.",
   no_message_id: "WhatsApp did not confirm that the message was accepted.",
   send_failed: "The message could not be sent.",
+  blocked: "Someone in your team blocked this contact, so the broadcast skipped them.",
 };
 
 /** Plain-language reason for a failed or skipped recipient. The raw code stays available for a Details line. */

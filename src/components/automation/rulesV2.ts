@@ -2,9 +2,12 @@ import { describeRule as describeV2, type NameLookup } from "@/lib/automation/v2
 import {
   checkCompatibility,
   emptyFilters,
+  flattenConditions,
   MESSAGE_ONLY_CONDITIONS,
   NO_CHAT_TRIGGERS,
+  parseAction,
   parseActions,
+  parseCondition,
   parseFilters,
   parseTrigger,
   type Action,
@@ -33,16 +36,51 @@ export type RuleRow = Rule & {
   runs30d: number;
 };
 
+/** What a template's Send template step fills in besides the text values (getBuilderOptions). Older answers leave it out. */
+export type TemplateNeeds = { headerText: boolean; headerMedia: "image" | "video" | "document" | null; buttonValue: boolean };
+
 export type Options = {
-  templates: { id: string; name: string; language: string; category: string; variables: number }[];
+  templates: { id: string; name: string; language: string; category: string; variables: number; wabaRefId?: string | null; needs?: TemplateNeeds }[];
   chatbots: { id: string; name: string }[];
   sequences: { id: string; name: string }[];
   teams: { id: string; name: string }[];
   members: { userId: string; name: string }[];
   segments: { id: string; name: string }[];
   materials: { id: string; name: string; kind: string }[];
-  phoneNumbers: { id: string; displayPhone: string; verifiedName: string | null }[];
+  phoneNumbers: { id: string; displayPhone: string; verifiedName: string | null; wabaRefId?: string | null }[];
 };
+
+type TemplateOption = Options["templates"][number];
+
+/**
+ * The templates a rule on this number can send: only those of the number's WhatsApp Business account (a template is approved for
+ * one account, and Meta refuses a send from a number of another). All numbers, or a number of unknown account, lists them all.
+ */
+export function templatesForNumber(options: Pick<Options, "templates" | "phoneNumbers">, phoneNumberId: string | null | undefined): TemplateOption[] {
+  const account = phoneNumberId ? options.phoneNumbers.find((p) => p.id === phoneNumberId)?.wabaRefId : null;
+  if (!account) return options.templates;
+  return options.templates.filter((t) => !t.wabaRefId || t.wabaRefId === account);
+}
+
+const MEDIA_WORD = { image: "picture", video: "video", document: "file" } as const;
+
+/**
+ * A Send template step that cannot work with the chosen template, keyed by the field it is about: a template of another number's
+ * account, or a heading or button value the template needs and the step leaves empty. The server refuses the same on save.
+ */
+export function templateFillProblem(a: Action, options: Pick<Options, "templates" | "phoneNumbers">, phoneNumberId: string | null | undefined): FieldProblem | null {
+  if (a.type !== "send_template" || !a.templateId) return null;
+  const template = options.templates.find((t) => t.id === a.templateId);
+  if (!template) return null;
+  if (!templatesForNumber(options, phoneNumberId).some((t) => t.id === template.id)) {
+    return { field: "template", message: `"${template.name}" belongs to a different WhatsApp Business account than this rule's number. Choose a template of that account, or another number.` };
+  }
+  const needs = template.needs;
+  if (needs?.headerMedia && !a.headerMediaUrl?.trim()) return { field: "headerMediaUrl", message: `Add the link to the ${MEDIA_WORD[needs.headerMedia]} at the top of this template.` };
+  if (needs?.headerText && !a.headerVariable?.trim()) return { field: "headerVariable", message: "Fill in the value for the template's heading." };
+  if (needs?.buttonValue && !a.buttonVariable?.trim()) return { field: "buttonVariable", message: "Fill in the value for the template's button link." };
+  return null;
+}
 
 export const EMPTY_OPTIONS: Options = { templates: [], chatbots: [], sequences: [], teams: [], members: [], segments: [], materials: [], phoneNumbers: [] };
 
@@ -290,6 +328,110 @@ export function validateDraftV2(d: RuleDraftV2): DraftProblems {
 }
 
 export const hasProblems = (p: DraftProblems) => Object.keys(p).length > 0;
+
+/** A problem and the field it is about, so the form can show it under that field and mark the field as wrong. */
+export type FieldProblem = { field: string; message: string };
+
+const firstError = (r: { ok: true } | { ok: false; error: string }) => (r.ok ? undefined : r.error);
+
+/** Which field of one step a problem is about. Uses the same checks as the server (parseAction), so the two never disagree. */
+export function actionProblem(a: Action): FieldProblem | null {
+  const message = firstError(parseAction(a));
+  if (!message) return null;
+  switch (a.type) {
+    case "send_text":
+      return { field: "text", message };
+    case "send_template": {
+      // When leaving a value out makes the problem go away, that value was the problem.
+      const fixedBy = (key: "headerVariable" | "headerMediaUrl" | "buttonVariable") => firstError(parseAction({ ...a, [key]: undefined })) !== message;
+      const field = a.templateId ? (["headerMediaUrl", "headerVariable", "buttonVariable"] as const).find(fixedBy) : undefined;
+      return { field: field ?? "template", message };
+    }
+    case "send_material":
+      return { field: "material", message };
+    case "assign_user":
+      return { field: "user", message };
+    case "assign_team":
+      return { field: "team", message };
+    case "start_chatbot":
+      return { field: "chatbot", message };
+    case "start_lead_sequence":
+      return { field: "sequence", message };
+    case "update_attribute":
+      // when a correct detail name makes the problem go away (or change), the name was the problem
+      return { field: firstError(parseAction({ ...a, name: "city" })) === message ? "value" : "name", message };
+    case "add_tag":
+    case "remove_tag":
+      return { field: "tag", message };
+    case "set_status":
+      return { field: "status", message };
+    case "notify":
+      return { field: a.target === "user" && !a.userId ? "user" : "note", message };
+    default:
+      return { field: "type", message };
+  }
+}
+
+/** Which field of one condition a problem is about (see actionProblem). */
+export function conditionProblem(c: Condition): FieldProblem | null {
+  const message = firstError(parseCondition(c));
+  if (!message) return null;
+  const still = (patch: Partial<Condition>) => firstError(parseCondition({ ...c, ...patch })) === message;
+  switch (c.type) {
+    case "keyword":
+      return { field: "keywords", message };
+    case "time_window":
+      return { field: !still({ days: [1] }) ? "days" : !still({ days: [1], start: "09:00", end: "17:00" }) ? "times" : "timezone", message };
+    case "attribute":
+      return { field: !still({ name: "city" }) ? "name" : "value", message };
+    case "phone":
+      return { field: "value", message };
+    case "assignment":
+      return { field: "user", message };
+    case "message_type":
+      return { field: "types", message };
+    default:
+      // quiet_for (minutes), tag, segment: one field each, named after the condition
+      return { field: c.type, message };
+  }
+}
+
+/** Which field of the start a problem is about, or null when it has no field of its own and stays at the bottom of the When card. */
+export function triggerProblem(t: Trigger): FieldProblem | null {
+  const message = firstError(parseTrigger(t));
+  if (!message) return null;
+  switch (t.type) {
+    case "no_customer_response":
+      return { field: "minutes", message };
+    case "tag_added":
+    case "tag_removed":
+      return { field: "tag", message };
+    case "attribute_changed":
+      return { field: "attribute", message };
+    case "scheduled": {
+      const still = (patch: Partial<Trigger>) => firstError(parseTrigger({ ...t, ...patch })) === message;
+      if (!still({ time: "09:00" })) return { field: "time", message };
+      if (!still({ time: "09:00", timezone: "UTC" })) return { field: "timezone", message };
+      return t.repeat === "once" ? { field: "date", message } : t.repeat === "weekly" ? { field: "days", message } : null;
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * The messages for the bottom of the When, If and Then cards: only problems that are not already shown under a field,
+ * such as "Add at least one thing for the rule to do" or a step that does not fit the chosen start.
+ */
+export function cardProblems(d: RuleDraftV2, p: DraftProblems): { trigger?: string; filters?: string; actions?: string } {
+  const atConditions = new Set(flattenConditions(d.filters.root).map((c) => conditionProblem(c)?.message));
+  const atActions = new Set(d.actions.map((a) => actionProblem(a)?.message));
+  return {
+    trigger: p.trigger && !triggerProblem(d.trigger) ? p.trigger : undefined,
+    filters: p.filters && !atConditions.has(p.filters) ? p.filters : undefined,
+    actions: (p.actions && !atActions.has(p.actions) ? p.actions : undefined) ?? p.combo,
+  };
+}
 
 /** Conditions that fit the chosen trigger: word, first-message and message-type checks need an incoming message. */
 export function conditionsFor(trigger: Trigger) {

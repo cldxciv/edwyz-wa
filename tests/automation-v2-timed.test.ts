@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const db = vi.hoisted(() => {
   const model = () => ({ findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), deleteMany: vi.fn(), groupBy: vi.fn(), count: vi.fn() });
-  return { automationRule: model(), conversation: model(), contact: model(), platformSetting: model(), ruleExecution: model(), membership: model(), plan: model(), segment: model() };
+  // conversation.fields: Prisma's column references, used to compare two columns of a chat in SQL.
+  return { automationRule: model(), conversation: { ...model(), fields: { lastMessageAt: "ref:lastMessageAt" } }, contact: model(), platformSetting: model(), ruleExecution: model(), membership: model(), plan: model(), segment: model(), template: model() };
 });
 const fire = vi.hoisted(() => vi.fn());
 const enqueue = vi.hoisted(() => vi.fn());
@@ -15,7 +16,8 @@ vi.mock("@/lib/email", () => ({ queueEmail: email }));
 vi.mock("@/lib/billing/status", () => ({ getBillingStatus: billing }));
 
 import { highestThreshold, readLimit, resetMeteringCache, sendQuotaAlerts } from "@/lib/automation/v2/metering";
-import { audienceWhere, dueRunKey, MAX_AUDIENCE, MAX_SCAN, purgeOld, scanNoResponse, scanScheduled, scheduledJobHandler, SCHEDULE_QUEUE } from "@/lib/automation/v2/timed";
+import { audienceWhere, dueRunKey, MAX_AUDIENCE, MAX_CHATS_PER_RULE, MAX_SCAN, purgeOld, scanNoResponse, scanScheduled, scheduledJobHandler, scheduledOptOutWhere, SCHEDULE_QUEUE } from "@/lib/automation/v2/timed";
+import { parseDefinition } from "@/lib/automation/v2/model";
 import { worker } from "@/lib/automation/worker";
 import { eventJobHandler } from "@/lib/automation/v2/event-handler";
 import { EVENT_QUEUE } from "@/lib/automation/v2/emit";
@@ -98,13 +100,14 @@ describe("schedules", () => {
     expect(db.platformSetting.create).not.toHaveBeenCalled();
   });
 
-  it("works through the audience in chunks, scoped to the tenant and skipping opted-out people", async () => {
+  it("works through the audience in chunks, scoped to the tenant; a rule that sends no marketing walks opted-out people too", async () => {
     db.automationRule.findFirst.mockResolvedValue(row(daily));
     const people = Array.from({ length: 50 }, (_, i) => ({ id: `c${i}` }));
     db.contact.findMany.mockResolvedValue(people);
     db.conversation.findFirst.mockImplementation(async ({ where }) => (where.contactId === "c0" ? { id: "cv0" } : null));
     await scheduledJobHandler({ tenantId: "t1", ruleId: "r1", startedAt: NOW.toISOString(), cursor: null, processed: 0 }, ctx);
-    expect(db.contact.findMany.mock.calls[0][0].where).toEqual({ AND: [{ tenantId: "t1", optedOutAt: null }, {}] });
+    // The rule only tags: an opt-out stops marketing only (owner default 1), so nobody is left out for it.
+    expect(db.contact.findMany.mock.calls[0][0].where).toEqual({ AND: [{ tenantId: "t1" }, {}] });
     expect(db.automationRule.findFirst).toHaveBeenCalledWith({ where: { id: "r1", tenantId: "t1", enabled: true, version: 2 } });
     expect(fire).toHaveBeenCalledTimes(50);
     expect(fire.mock.calls[0][0]).toMatchObject({ type: "scheduled", contactId: "c0", conversationId: "cv0", ruleId: "r1", dedupeSince: NOW });
@@ -303,5 +306,81 @@ describe("scheduled runs and the WhatsApp limit (docs/SPEND-CONTROLS-SPEC.md 4.9
     db.automationRule.findMany.mockResolvedValue([row(daily, { actions: [{ type: "send_template", templateId: "tp1", variables: [] }] })]);
     expect(await scanScheduled(NOW)).toBe(1);
     expect(enqueue.mock.calls[0][1]).toEqual({ tenantId: "t1", ruleId: "r1", startedAt: NOW.toISOString(), cursor: null, processed: 0, fired: 0 });
+  });
+});
+
+describe("scheduled runs and opt-outs (owner default 1)", () => {
+  const trigger = { type: "scheduled", repeat: "daily", time: "10:00", days: [0, 1, 2, 3, 4, 5, 6], timezone: "UTC" };
+  const def = (actions: unknown[]) => {
+    const parsed = parseDefinition({ trigger, filters, actions });
+    if (!parsed.ok) throw new Error("bad rule");
+    return parsed.value;
+  };
+  const sends = def([{ type: "send_template", templateId: "tp1", variables: [] }]);
+
+  it("leaves opted-out people out of a rule that sends a marketing template", async () => {
+    db.template.findMany.mockResolvedValueOnce([{ category: "MARKETING" }]);
+    expect(await scheduledOptOutWhere("t1", sends)).toEqual({ optedOutAt: null });
+    expect(db.template.findMany.mock.calls[0][0]).toMatchObject({ where: { tenantId: "t1", id: { in: ["tp1"] } } });
+  });
+
+  it("walks opted-out people for a utility template, like an appointment reminder", async () => {
+    db.template.findMany.mockResolvedValueOnce([{ category: "UTILITY" }]);
+    expect(await scheduledOptOutWhere("t1", sends)).toEqual({});
+  });
+
+  it("counts a template whose category cannot be read as marketing", async () => {
+    db.template.findMany.mockRejectedValueOnce(new Error("db down"));
+    expect(await scheduledOptOutWhere("t1", sends)).toEqual({ optedOutAt: null });
+  });
+
+  it("does not read templates for a rule that sends none", async () => {
+    expect(await scheduledOptOutWhere("t1", def([{ type: "add_tag", tag: "x", scope: "contact" }]))).toEqual({});
+    expect(db.template.findMany).not.toHaveBeenCalled();
+  });
+
+  it("a scheduled marketing run asks the database for people who have not opted out", async () => {
+    db.automationRule.findFirst.mockResolvedValue(row(trigger, { actions: [{ type: "send_template", templateId: "tp1", variables: [] }] }));
+    db.template.findMany.mockResolvedValueOnce([{ category: "MARKETING" }]);
+    db.contact.findMany.mockResolvedValue([]);
+    await scheduledJobHandler({ tenantId: "t1", ruleId: "r1", startedAt: NOW.toISOString(), cursor: null, processed: 0 }, ctx);
+    expect(db.contact.findMany.mock.calls[0][0].where).toEqual({ AND: [{ tenantId: "t1", optedOutAt: null }, {}] });
+  });
+});
+
+describe("worker scans read everything, a page at a time (P5)", () => {
+  const noReply = (id: string) => row({ type: "no_customer_response", minutes: 60 }, { id });
+  const chatAt = (i: number) => ({ id: `cv${String(i).padStart(4, "0")}`, contactId: `c${i}`, lastInboundAt: null, lastMessageAt: new Date(Date.parse("2026-10-27T08:00:00Z") + i * 1000) });
+
+  it("filters rules by trigger type in SQL and pages through all of them by id", async () => {
+    const first = Array.from({ length: 500 }, (_, i) => noReply(`r${String(i).padStart(4, "0")}`));
+    db.automationRule.findMany.mockResolvedValueOnce(first).mockResolvedValueOnce([noReply("r9999")]);
+    db.conversation.findMany.mockResolvedValue([]);
+    await scanNoResponse(NOW);
+    expect(db.automationRule.findMany).toHaveBeenCalledTimes(2);
+    expect(db.automationRule.findMany.mock.calls[0][0]).toMatchObject({ where: { enabled: true, version: 2, trigger: { path: ["type"], equals: "no_customer_response" } }, orderBy: { id: "asc" }, take: 500 });
+    expect(db.automationRule.findMany.mock.calls[1][0]).toMatchObject({ cursor: { id: "r0499" }, skip: 1 });
+    // Every one of the 501 rules looked for chats.
+    expect(db.conversation.findMany).toHaveBeenCalledTimes(501);
+  });
+
+  it("asks SQL only for chats where we wrote last, and pages on (last message time, id) as read", async () => {
+    db.automationRule.findMany.mockResolvedValue([noReply("r1")]);
+    const page1 = Array.from({ length: 100 }, (_, i) => chatAt(i));
+    db.conversation.findMany.mockResolvedValueOnce(page1).mockResolvedValueOnce([chatAt(100)]);
+    expect(await scanNoResponse(NOW)).toBe(101);
+    const [first, second] = db.conversation.findMany.mock.calls.map((c) => c[0]);
+    expect(first.where.AND[0]).toEqual({ OR: [{ lastInboundAt: null }, { lastInboundAt: { lt: "ref:lastMessageAt" } }] });
+    expect(first.orderBy).toEqual([{ lastMessageAt: "asc" }, { id: "asc" }]);
+    expect(first.where.AND).toHaveLength(1);
+    // The next page starts after the last chat as it was read, so a follow-up that moved its time cannot cut the scan short.
+    expect(second.where.AND[1]).toEqual({ OR: [{ lastMessageAt: { gt: page1[99].lastMessageAt } }, { lastMessageAt: page1[99].lastMessageAt, id: { gt: "cv0099" } }] });
+  });
+
+  it("stops one rule's scan at MAX_CHATS_PER_RULE chats", async () => {
+    db.automationRule.findMany.mockResolvedValue([noReply("r1")]);
+    db.conversation.findMany.mockImplementation(async () => Array.from({ length: 100 }, (_, i) => chatAt(i)));
+    await scanNoResponse(NOW);
+    expect(db.conversation.findMany).toHaveBeenCalledTimes(MAX_CHATS_PER_RULE / 100);
   });
 });

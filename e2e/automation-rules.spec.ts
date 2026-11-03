@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type Request } from "@playwright/test";
 import { closeDb, db, ORIGIN, watchErrors } from "./helpers";
 import { axeProblems, enterApp, newMember, newOwner, overflowsX, toggleTheme } from "./automation-fixtures";
 
@@ -72,7 +72,7 @@ test.describe.serial("automation rules (owner)", () => {
     await expect(rulesRegion(page).getByRole("table")).toContainText("When a customer sends a message, send a text reply.");
   });
 
-  test("Cancel leaves the new rule form without saving anything, and the form opens by keyboard", async () => {
+  test("Cancel asks before throwing a filled-in rule away and saves nothing; the form opens by keyboard", async () => {
     const { page } = ctx;
     const opener = page.getByRole("link", { name: "New rule" }).first();
     await opener.focus();
@@ -80,8 +80,75 @@ test.describe.serial("automation rules (owner)", () => {
     await expect(page).toHaveURL(/\/app\/automation\/rules\/new$/);
     await ruleName(page).fill("Never saved");
     await page.getByRole("link", { name: "Cancel" }).click();
+    const ask = page.getByRole("alertdialog");
+    await expect(ask).toContainText("Leave without saving?");
+    await ask.getByRole("button", { name: "Keep editing" }).click();
+    await expect(page).toHaveURL(/\/app\/automation\/rules\/new$/);
+    await expect(ruleName(page)).toHaveValue("Never saved");
+    await page.getByRole("link", { name: "All rules" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Leave without saving" }).click();
     await expect(page).toHaveURL(/\/app\/automation$/);
     await expect(rulesRegion(page).getByRole("table")).not.toContainText("Never saved");
+    // an untouched form has nothing to lose, so Cancel just goes back
+    await openNewRule(page);
+    await page.getByRole("link", { name: "Cancel" }).click();
+    await expect(page).toHaveURL(/\/app\/automation$/);
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  });
+
+  test("Create material in the new-material dialog checks and saves only the material, never the rule behind it", async () => {
+    const { page } = ctx;
+    // every rule write the page makes (create, change, delete); the material's own save goes to /api/automation/materials
+    const ruleWrites: string[] = [];
+    const watch = (r: Request) => {
+      const { pathname } = new URL(r.url());
+      if (r.method() !== "GET" && (pathname === "/api/automation" || /^\/api\/automation\/(?!materials(\/|$))[^/]+$/.test(pathname))) ruleWrites.push(`${r.method()} ${pathname}`);
+    };
+    page.on("request", watch);
+    try {
+      await page.goto("/app/automation/rules/new");
+      await expect(page.getByRole("heading", { level: 1, name: "New rule" })).toBeVisible();
+      // a rule that would be valid as soon as a material is chosen
+      await ruleName(page).fill("Material rule");
+      await page.getByLabel("Step 1", { exact: true }).selectOption("send_material");
+      await page.getByRole("button", { name: "Add a new reply material" }).click();
+      const dialog = page.getByRole("dialog", { name: "New reply material" });
+      await dialog.getByRole("button", { name: "Create material" }).click();
+      // only the dialog checks its fields: the rule form behind it shows no problems
+      await expect(dialog.getByText(/Give the material a name/)).toBeVisible();
+      await expect(dialog.getByText("Write the message customers will receive.")).toBeVisible();
+      await expect(page.locator("#main-content [role=alert]")).toHaveCount(0);
+      await expect(page.locator('#main-content [aria-invalid="true"]')).toHaveCount(0);
+      // saving the material picks it in the step and leaves the rule unsaved
+      await dialog.getByLabel(/^Name/).fill("Opening hours");
+      await dialog.getByLabel(/^Message/).fill("We are open 9 to 5, Monday to Saturday.");
+      await dialog.getByRole("button", { name: "Create material" }).click();
+      await expect(dialog).toHaveCount(0);
+      await expect(page).toHaveURL(/\/app\/automation\/rules\/new$/);
+      const material = page.getByLabel(/^Reply material/);
+      await expect(material).not.toHaveValue("");
+      await expect(page.locator("#main-content [role=alert]")).toHaveCount(0);
+      expect(ruleWrites).toEqual([]);
+      // the rule is now complete: another new material (this time sent with Enter in its name) must still not save the rule
+      const first = await material.inputValue();
+      await page.getByRole("button", { name: "Add a new reply material" }).click();
+      await dialog.getByLabel(/^Message/).fill("Our price list is on the way.");
+      await dialog.getByLabel(/^Name/).fill("Price list");
+      await dialog.getByLabel(/^Name/).press("Enter");
+      await expect(dialog).toHaveCount(0);
+      await expect(material).not.toHaveValue(first);
+      await expect(page).toHaveURL(/\/app\/automation\/rules\/new$/);
+      await expect(page.getByRole("heading", { level: 1, name: "New rule" })).toBeVisible();
+      expect(ruleWrites).toEqual([]);
+      const saved = (await (await db()).query(`select count(*)::int c from "AutomationRule" where "tenantId"=$1 and name='Material rule'`, [ctx.user.tenantId])).rows[0].c;
+      expect(saved).toBe(0);
+      await page.getByRole("link", { name: "Cancel" }).click();
+      await page.getByRole("alertdialog").getByRole("button", { name: "Leave without saving" }).click();
+      await expect(page).toHaveURL(/\/app\/automation$/);
+      expect(ruleWrites).toEqual([]);
+    } finally {
+      page.off("request", watch);
+    }
   });
 
   test("keyword rule: needs a keyword, accepts words with Enter and comma, can remove a word", async () => {
@@ -177,7 +244,9 @@ test.describe.serial("automation rules (owner)", () => {
     await ruleName(page).fill("   ");
     await page.getByRole("button", { name: "Save changes" }).click();
     await expect(page.getByText(/Give the rule a name/)).toBeVisible();
+    await expect(ruleName(page)).toHaveAttribute("aria-invalid", "true");
     await page.getByRole("link", { name: "Cancel" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Leave without saving" }).click();
     await expect(page).toHaveURL(/\/app\/automation$/);
     await expect(rulesRegion(page).getByRole("table")).toContainText("Hello greeting");
   });
@@ -248,8 +317,15 @@ test.describe.serial("automation rules (owner)", () => {
       expect(JSON.stringify(await list.json())).not.toContain("Hello greeting");
       // the edit page of another workspace's rule does not show it either
       await other.page.goto(`/app/automation/rules/${id}`);
+      await expect(other.page.getByText("This rule no longer exists")).toBeVisible();
       await expect(other.page.getByText("Hello greeting")).toHaveCount(0);
       await expect(other.page.locator("input[value='Hello greeting']")).toHaveCount(0);
+      // a rule that does not exist says so and leads back, instead of blaming the connection
+      await other.page.goto("/app/automation/rules/qa-nonexistent-id");
+      await expect(other.page.getByText("This rule no longer exists")).toBeVisible();
+      await expect(other.page.getByText(/Check your connection/)).toHaveCount(0);
+      await other.page.getByRole("link", { name: "Back to rules" }).click();
+      await expect(other.page).toHaveURL(/\/app\/automation$/);
     } finally {
       await other.context.close();
     }

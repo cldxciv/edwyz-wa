@@ -7,6 +7,8 @@ import { DEFAULT_GAPS_MIN, LIFETIME_DAYS, REMINDERS, formatMinutes, friendlyErro
 import type { Options, Settings, Store } from "./types";
 
 type GapKey = "cartGapsMin" | "checkoutGapsMin";
+/** Approved templates a reminder cannot fill in come back as `hidden`, with the reason, so the merchant knows why one is missing. */
+type ReminderOptions = Options & { hidden?: { id: string; name: string; language: string; reason: string }[] };
 
 const ORDINALS = ["1st", "2nd", "3rd"];
 
@@ -44,7 +46,7 @@ function Schedule({ title, trigger, gaps, errors, disabled, onChange, onReset }:
       </ol>
       {late.length > 0 && (
         <Alert className="mt-3" tone="warn">
-          Carts expire after {LIFETIME_DAYS} days, so reminder {late.join(" and ")} may never be sent. Use shorter waits.
+          Carts expire after {LIFETIME_DAYS} days, so reminder {late.join(" and ")}{" "}may never be sent. Use shorter waits.
         </Alert>
       )}
       {!disabled && (
@@ -58,7 +60,7 @@ function Schedule({ title, trigger, gaps, errors, disabled, onChange, onReset }:
 
 export function ReminderSettings({ store, editable }: { store: Store; editable: boolean }) {
   const current = useApi<{ settings: Settings }>(`/api/commerce/stores/${store.id}/settings`);
-  const options = useApi<Options>("/api/commerce/options");
+  const options = useApi<ReminderOptions>("/api/commerce/options");
   const [draft, setDraft] = useState<Settings | null>(null);
   const [saved, setSaved] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
@@ -104,7 +106,8 @@ export function ReminderSettings({ store, editable }: { store: Store; editable: 
   const settings = draft;
   const dirty = JSON.stringify(settings) !== JSON.stringify(saved);
   const hasGapError = [...cartErrors, ...checkoutErrors].some(Boolean);
-  const noTemplates = options.data !== null && options.data.templates.length === 0;
+  const noTemplates = !!options.data && options.data.templates.length === 0;
+  const hidden = options.data?.hidden ?? [];
   const missing = settings.enabled && (!settings.templateId || !settings.phoneNumberId);
   const unverified = store.status !== "active" && store.status !== "disabled";
 
@@ -145,7 +148,7 @@ export function ReminderSettings({ store, editable }: { store: Store; editable: 
         <label htmlFor={`enabled-${store.id}`} className="text-sm">
           <span className="font-medium">Send WhatsApp reminders</span>
           <span id={`enabled-${store.id}-hint`} className="mt-0.5 block text-xs text-muted">
-            Only to customers who agreed to WhatsApp messages. A reminder is skipped when the customer buys, replies or sends STOP. Carts expire after {LIFETIME_DAYS} days.
+            Only to customers who agreed to WhatsApp messages. A reminder is skipped when the customer buys, replies or sends STOP. Carts expire after {LIFETIME_DAYS}{" "}days.
           </span>
         </label>
       </div>
@@ -156,8 +159,12 @@ export function ReminderSettings({ store, editable }: { store: Store; editable: 
       )}
 
       <div className="mt-5 grid gap-4 md:grid-cols-2">
-        <FormField label="Reminder message" required={settings.enabled} hint="Only approved templates are listed. Your template can use up to three blanks: {{1}} the customer's first name, {{2}} the cart total, {{3}} the checkout link.">
-          <Select disabled={!editable} value={settings.templateId ?? ""} onChange={(e) => setDraft({ ...settings, templateId: e.target.value || null })}>
+        <FormField
+          label="Reminder message"
+          required={settings.enabled}
+          hint="Only approved templates a reminder can fill in are listed. Your template can use up to three blanks: {{1}} the customer's first name, {{2}} the cart total, {{3}} the checkout link. A website button ending in {{1}} opens the checkout."
+        >
+          <Select disabled={!editable || !!options.error} value={settings.templateId ?? ""} onChange={(e) => setDraft({ ...settings, templateId: e.target.value || null })}>
             <option value="">Choose a template</option>
             {options.data?.templates.map((t) => (
               <option key={t.id} value={t.id}>
@@ -177,10 +184,41 @@ export function ReminderSettings({ store, editable }: { store: Store; editable: 
           </Select>
         </FormField>
       </div>
+      {options.error && (
+        <Alert
+          className="mt-3"
+          tone="bad"
+          title="We could not load your templates and numbers"
+          action={
+            <Button size="sm" variant="secondary" onClick={options.retry}>
+              Try again
+            </Button>
+          }
+        >
+          {friendlyError(new Error(options.error), "Check your connection and try again.")}
+        </Alert>
+      )}
       {noTemplates && (
-        <Alert className="mt-3" tone="info" title="No approved templates yet" action={<a className="font-semibold underline underline-offset-2" href="/app/templates">Go to templates</a>}>
+        <Alert className="mt-3" tone="info" title={hidden.length ? "None of your approved templates can be a reminder" : "No approved templates yet"} action={<a className="font-semibold underline underline-offset-2" href="/app/templates">Go to templates</a>}>
           Create a reminder template and wait for Meta to approve it, then come back to choose it.
         </Alert>
+      )}
+      {hidden.length > 0 && (
+        <details className="mt-3 rounded-control border border-border p-3 text-sm">
+          <summary className="min-h-8 cursor-pointer font-medium">
+            Why {hidden.length === 1 ? "1 approved template is" : `${hidden.length} approved templates are`} not listed
+          </summary>
+          <ul className="mt-2 space-y-1">
+            {hidden.map((t) => (
+              <li key={t.id}>
+                <span className="font-medium">
+                  {t.name} ({t.language})
+                </span>
+                : <span className="text-muted">{t.reason}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
       {missing && (
         <Alert className="mt-3" tone="warn">
@@ -190,7 +228,7 @@ export function ReminderSettings({ store, editable }: { store: Store; editable: 
 
       <h3 className="mb-1 mt-6 text-base font-semibold">When reminders go out</h3>
       <p className="mb-3 text-sm text-muted">
-        We send up to {REMINDERS} reminders per shopper. The first is timed from their last action in your store. Each next one is timed from the reminder before it. Times are in minutes (60 minutes is 1 hour, 1,440 is 1 day).
+        We send up to {REMINDERS}{" "}reminders per shopper. The first is timed from their last action in your store. Each next one is timed from the reminder before it. Times are in minutes (60 minutes is 1 hour, 1,440 is 1 day).
       </p>
       <div className="grid gap-4 xl:grid-cols-2">
         <Schedule

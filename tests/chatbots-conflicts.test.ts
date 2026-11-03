@@ -178,7 +178,8 @@ describe("opt-out stops running bots", () => {
   it("a delay that ends after the contact sent STOP sends nothing", async () => {
     addBot(flow([node("a", "send_text", { text: "First" }), node("d", "delay", { minutes: 1 }), node("b", "send_text", { text: "Second" })], [edge("a", "d"), edge("d", "b")]));
     await handleInboundForChatbots(inbound("hi"));
-    store.contacts[0].optedOutAt = new Date();
+    // STOP arrives after the session started (the processor normally ends it too; this is the engine's own check).
+    store.contacts[0].optedOutAt = new Date(session().startedAt.getTime() + 1);
     session().wakeAt = new Date(Date.now() - 1000);
     await resumeDelayedSessions();
     expect(sent()).toEqual(["First"]);
@@ -188,10 +189,18 @@ describe("opt-out stops running bots", () => {
   it("a waiting session of a contact who opted out is closed instead of answered", async () => {
     askBot();
     await handleInboundForChatbots(inbound("hi"));
-    store.contacts[0].optedOutAt = new Date();
+    store.contacts[0].optedOutAt = new Date(session().startedAt.getTime() + 1);
     expect(await handleInboundForChatbots(inbound("my printer is broken"))).toBe(false);
     expect(sent()).toEqual(["What is your issue?"]);
     expect(session().status).toBe("completed");
+  });
+
+  it("a contact who opted out before the bot started still gets its answers: an opt-out stops marketing only", async () => {
+    store.contacts[0].optedOutAt = new Date(0);
+    askBot();
+    expect(await handleInboundForChatbots(inbound("hi"))).toBe(true);
+    expect(sent()).toEqual(["What is your issue?"]);
+    expect(session().status).toBe("waiting");
   });
 });
 

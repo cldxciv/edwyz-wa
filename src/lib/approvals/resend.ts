@@ -1,3 +1,4 @@
+import { mayReceive, OPTED_OUT_OF_MARKETING, sendKindForCategory } from "@/lib/contacts/opt-out";
 import { normalizePhone } from "@/lib/contacts/phone";
 import { prisma } from "@/lib/db";
 import { sendTemplateMessage, sendText } from "@/lib/inbox/service";
@@ -33,7 +34,8 @@ export async function resendApproval(actor: Actor, approvalId: string, input: Re
     pickPhoneNumber(tenantId, input.phoneNumberId),
   ]);
   if (!contact) throw new HttpError(409, "This number is not one of your contacts yet. Add the contact first.");
-  if (contact.optedOutAt) throw new HttpError(409, "This contact has opted out of messages.");
+  // An opt-out stops marketing only (lib/contacts/opt-out.ts): a link in the open window, or a non-marketing template, still goes.
+  if (!mayReceive(contact, "service")) throw new HttpError(409, OPTED_OUT_OF_MARKETING);
 
   if (input.mode === "text") {
     const conversation = await prisma.conversation.findFirst({
@@ -49,8 +51,9 @@ export async function resendApproval(actor: Actor, approvalId: string, input: Re
   }
 
   if (!contact.optIn) throw new HttpError(409, "This contact has not opted in to template messages.");
-  const template = await prisma.template.findFirst({ where: { id: input.templateId, tenantId, status: "approved" }, select: { name: true, language: true } });
+  const template = await prisma.template.findFirst({ where: { id: input.templateId, tenantId, status: "approved" }, select: { name: true, language: true, category: true } });
   if (!template) throw new HttpError(404, "Approved template not found.");
+  if (!mayReceive(contact, sendKindForCategory(template.category))) throw new HttpError(409, OPTED_OUT_OF_MARKETING);
   const { url } = await reissueApproval(tenantId, approvalId, expiresInHours, actor.userId);
   await sendTemplateMessage({
     tenantId,

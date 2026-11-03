@@ -53,7 +53,7 @@ test("keyboard: j/k move, Enter opens, e solves, a assigns, p/o change status, ?
   const errors = watchErrors(page);
   await openInbox(page);
   await expect(convoButton(page, "Dan Davis")).toBeVisible({ timeout: 20_000 });
-  await page.locator("h1").click();
+  await page.getByRole("heading", { level: 1, name: "Inbox" }).click();
   await page.keyboard.press("j");
   const rows = page.locator("[data-conversation]");
   const ring = page.locator("li.ring-2");
@@ -98,13 +98,13 @@ test("keyboard: j/k move, Enter opens, e solves, a assigns, p/o change status, ?
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await search.fill("");
   // Enter on a highlighted row opens it, "/" jumps to the composer
-  await page.locator("h1").click();
+  await page.getByRole("heading", { level: 1, name: "Inbox" }).click();
   await dan.focus();
   await page.keyboard.press("Enter");
   await expect(log(page)).toBeVisible();
   await expect(composer(page)).toBeFocused();
   await composer(page).blur();
-  await page.locator("h1").click();
+  await page.getByRole("heading", { level: 1, name: "Inbox" }).click();
   await page.keyboard.press("/");
   await expect(composer(page)).toBeFocused();
   expect(errors, errors.join("\n")).toEqual([]);
@@ -150,7 +150,7 @@ test("bulk actions: select with x and the checkboxes, set status, assign, tag, a
   // The list reloads when a filter changes; wait for the rows to come back before using the keyboard on one.
   await expect(convoButton(page, "Carol Clark")).toBeVisible();
   // x toggles selection, Esc clears it
-  await page.locator("h1").click();
+  await page.getByRole("heading", { level: 1, name: "Inbox" }).click();
   await convoButton(page, "Carol Clark").focus();
   await page.keyboard.press("x");
   await expect(page.getByRole("checkbox", { name: "Select conversation with Carol Clark" })).toBeChecked();

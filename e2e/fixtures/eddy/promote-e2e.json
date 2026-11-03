@@ -1,0 +1,207 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "prm-boost-reel",
+      "match": "e2e-prm boost my last reel 5 days",
+      "rounds": [
+        {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_e2e_prm_draft",
+              "name": "create_promotion_draft",
+              "input": {
+                "goal": "whatsapp_chats",
+                "days": 5,
+                "source": {
+                  "app": "instagram",
+                  "kind": "reel",
+                  "postId": "17900000000000000"
+                }
+              }
+            }
+          ],
+          "stop_reason": "tool_use"
+        },
+        {
+          "content": [
+            {
+              "type": "text",
+              "text": "Your reel is saved as a draft for 5 days. Nothing was sent to Meta and nothing is spent. Say start when you want the start card."
+            }
+          ],
+          "stop_reason": "end_turn"
+        }
+      ]
+    },
+    {
+      "id": "prm-start-eddy-desktop-owner",
+      "match": "e2e-prm start e2e_prm_eddy_desktop_owner",
+      "rounds": [
+        {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_e2e_prm_start_eddy_desktop_owner",
+              "name": "start_promotion",
+              "input": {
+                "campaignId": "e2e_prm_eddy_desktop_owner"
+              }
+            }
+          ],
+          "stop_reason": "tool_use"
+        },
+        {
+          "content": [
+            {
+              "type": "text",
+              "text": "Check the card. Nothing starts until it is confirmed."
+            }
+          ],
+          "stop_reason": "end_turn"
+        }
+      ]
+    },
+    {
+      "id": "prm-start-eddy-mobile-owner",
+      "match": "e2e-prm start e2e_prm_eddy_mobile_owner",
+      "rounds": [
+        {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_e2e_prm_start_eddy_mobile_owner",
+              "name": "start_promotion",
+              "input": {
+                "campaignId": "e2e_prm_eddy_mobile_owner"
+              }
+            }
+          ],
+          "stop_reason": "tool_use"
+        },
+        {
+          "content": [
+            {
+              "type": "text",
+              "text": "Check the card. Nothing starts until it is confirmed."
+            }
+          ],
+          "stop_reason": "end_turn"
+        }
+      ]
+    },
+    {
+      "id": "prm-start-eddy-desktop-admin",
+      "match": "e2e-prm start e2e_prm_eddy_desktop_admin",
+      "rounds": [
+        {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_e2e_prm_start_eddy_desktop_admin",
+              "name": "start_promotion",
+              "input": {
+                "campaignId": "e2e_prm_eddy_desktop_admin"
+              }
+            }
+          ],
+          "stop_reason": "tool_use"
+        },
+        {
+          "content": [
+            {
+              "type": "text",
+              "text": "Check the card. Nothing starts until it is confirmed."
+            }
+          ],
+          "stop_reason": "end_turn"
+        }
+      ]
+    },
+    {
+      "id": "prm-start-eddy-mobile-admin",
+      "match": "e2e-prm start e2e_prm_eddy_mobile_admin",
+      "rounds": [
+        {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_e2e_prm_start_eddy_mobile_admin",
+              "name": "start_promotion",
+              "input": {
+                "campaignId": "e2e_prm_eddy_mobile_admin"
+              }
+            }
+          ],
+          "stop_reason": "tool_use"
+        },
+        {
+          "content": [
+            {
+              "type": "text",
+              "text": "Check the card. Nothing starts until it is confirmed."
+            }
+          ],
+          "stop_reason": "end_turn"
+        }
+      ]
+    },
+    {
+      "id": "prm-start-limits-desktop-admin",
+      "match": "e2e-prm start e2e_prm_limits_desktop_admin",
+      "rounds": [
+        {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_e2e_prm_start_limits_desktop_admin",
+              "name": "start_promotion",
+              "input": {
+                "campaignId": "e2e_prm_limits_desktop_admin"
+              }
+            }
+          ],
+          "stop_reason": "tool_use"
+        },
+        {
+          "content": [
+            {
+              "type": "text",
+              "text": "Check the card. Nothing starts until it is confirmed."
+            }
+          ],
+          "stop_reason": "end_turn"
+        }
+      ]
+    },
+    {
+      "id": "prm-start-limits-mobile-admin",
+      "match": "e2e-prm start e2e_prm_limits_mobile_admin",
+      "rounds": [
+        {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_e2e_prm_start_limits_mobile_admin",
+              "name": "start_promotion",
+              "input": {
+                "campaignId": "e2e_prm_limits_mobile_admin"
+              }
+            }
+          ],
+          "stop_reason": "tool_use"
+        },
+        {
+          "content": [
+            {
+              "type": "text",
+              "text": "Check the card. Nothing starts until it is confirmed."
+            }
+          ],
+          "stop_reason": "end_turn"
+        }
+      ]
+    }
+  ]
+}

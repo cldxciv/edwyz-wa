@@ -14,6 +14,16 @@ export function zoomAt(view: View, factor: number, cx: number, cy: number): View
   return { k, x: cx - (cx - view.x) * real, y: cy - (cy - view.y) * real };
 }
 
+/**
+ * How much one wheel event zooms the canvas, or null when it should scroll the page instead. Only Ctrl (or Cmd) with the
+ * wheel zooms, and a trackpad pinch, which browsers send as a wheel event with ctrlKey set; a plain wheel over the canvas
+ * used to zoom it and trap the page scroll on a laptop screen, where the canvas fills most of the window.
+ */
+export function wheelZoom(e: { deltaY: number; ctrlKey: boolean; metaKey: boolean }): number | null {
+  if (!e.ctrlKey && !e.metaKey) return null;
+  return Math.exp(-e.deltaY * 0.0015);
+}
+
 export const screenToCanvas = (view: View, sx: number, sy: number) => ({ x: (sx - view.x) / view.k, y: (sy - view.y) / view.k });
 
 export function fitView(flow: FlowDefinition, width: number, height: number, pad = 40): View {
@@ -21,4 +31,15 @@ export function fitView(flow: FlowDefinition, width: number, height: number, pad
   if (!b || width <= 0 || height <= 0) return { x: 0, y: 0, k: 1 };
   const k = clampZoom(Math.min((width - pad * 2) / b.w, (height - pad * 2) / b.h, 1));
   return { k, x: (width - b.w * k) / 2 - b.x * k, y: (height - b.h * k) / 2 - b.y * k };
+}
+
+/** Pans (never zooms) so a box in canvas units is fully on screen, keeping the view as it was when it already is. */
+export function reveal(view: View, box: { x: number; y: number; w: number; h: number }, width: number, height: number, pad = 24): View {
+  const left = box.x * view.k + view.x;
+  const top = box.y * view.k + view.y;
+  const right = left + box.w * view.k;
+  const bottom = top + box.h * view.k;
+  const dx = left < pad ? pad - left : right > width - pad ? Math.max(pad - left, width - pad - right) : 0;
+  const dy = top < pad ? pad - top : bottom > height - pad ? Math.max(pad - top, height - pad - bottom) : 0;
+  return dx || dy ? { ...view, x: view.x + dx, y: view.y + dy } : view;
 }

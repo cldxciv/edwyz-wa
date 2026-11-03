@@ -58,3 +58,16 @@ export function fatigueReasons(f: { frequency: number | null; qualityRanking: st
   if (f.reasons.includes("quality")) out.push(`Meta rates its quality ${qualityLabel(f.qualityRanking).toLowerCase()}`);
   return out;
 }
+
+/**
+ * The latest day the custom range offers: today in UTC (the clock the presets use) or in the browser's time zone, whichever
+ * is later, so a member ahead of UTC (India after midnight) can still pick their own today. Day keys compare as strings.
+ */
+export function latestDay(utcToday: string, localToday: string): string {
+  return localToday > utcToday ? localToday : utcToday;
+}
+
+/** Days after today have no numbers yet, so a custom range may not end after today. Null when it is fine. */
+export function futureRangeProblem(to: string, today: string): string | null {
+  return to > today ? "Choose an end date on or before today. Days that have not happened yet have no numbers." : null;
+}

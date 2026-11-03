@@ -42,7 +42,9 @@ const notFound = () => new HttpError(404, "Not found.");
 /** Allowlisted and email-verified admin, step-up not yet required. Used only by enrolment and the step-up endpoint. */
 export async function requireAdminIdentity(request: Request): Promise<AdminIdentity> {
   try {
-    const actor = await getActor(request);
+    // The admin's own workspace may be locked or suspended (trial over, no payment set up): that must not turn every admin write,
+    // the step-up included, into a 404. The admin rule below is the gate here, not the workspace's billing state.
+    const actor = await getActor(request, { skipWorkspaceState: true });
     const user = await prisma.user.findUnique({
       where: { id: actor.userId },
       select: { email: true, name: true, emailVerifiedAt: true, disabledAt: true, totpEnabledAt: true },

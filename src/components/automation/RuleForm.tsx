@@ -95,7 +95,7 @@ export function RuleForm({ initial, busy, error, onSubmit }: Props) {
       <p className="text-sm text-muted">{TYPE_HELP[type]}</p>
 
       <FormField label="Name" required hint="Only your team sees this." error={problems.name}>
-        <Input value={draft.name} maxLength={80} placeholder={NAME_EXAMPLE[type]} onChange={(e) => set("name", e.target.value)} data-autofocus="" />
+        <Input value={draft.name} maxLength={80} placeholder={`e.g. ${NAME_EXAMPLE[type]}`} onChange={(e) => set("name", e.target.value)} data-autofocus="" />
       </FormField>
 
       {type === "keyword" && (
@@ -208,7 +208,7 @@ export function RuleForm({ initial, busy, error, onSubmit }: Props) {
       )}
 
       <FormField label="Reply" required hint={`${counter(draft.replyText)} characters. Customers see this exactly as you write it.`} error={problems.replyText}>
-        <Textarea rows={4} value={draft.replyText} maxLength={MAX_REPLY} placeholder={REPLY_EXAMPLE[type]} onChange={(e) => set("replyText", e.target.value)} />
+        <Textarea rows={4} value={draft.replyText} maxLength={MAX_REPLY} placeholder={`e.g. ${REPLY_EXAMPLE[type]}`} onChange={(e) => set("replyText", e.target.value)} />
       </FormField>
 
       <div className="rounded-card bg-surface p-3" role="group" aria-label="Preview of the reply">

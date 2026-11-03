@@ -3,6 +3,7 @@
 import { memo, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { PageHeader } from "@/components/app/PageHeader";
 import { LinkButton } from "@/components/ads/LinkButton";
+import { isNotFoundError } from "@/components/ads/helpers";
 import { Alert, Badge, Button, Card, CopyButton, Dialog, EmptyState, ErrorState, FormField, Input, Skeleton, StatusPill, Textarea, apiFetch, confirm, toast } from "@/components/ui";
 import { COPY_LIMITS, PLACEMENTS } from "@/lib/creative/constants";
 import { ChoiceCard } from "./ChoiceCard";
@@ -101,6 +102,8 @@ export function BriefWorkspace({ briefId }: { briefId: string }) {
   // True once the server says AI is off: the AI buttons are then disabled and a notice explains, instead of a failing click.
   const [aiOff, setAiOff] = useState(false);
   const [loadError, setLoadError] = useState("");
+  // The server answered 404: the brief was deleted, is in another workspace, or the link is wrong. Try again cannot help.
+  const [missing, setMissing] = useState(false);
   const [busy, setBusy] = useState("");
   const [step, setStep] = useState<StepId | null>(null);
   const [placements, setPlacements] = useState<string[]>(["feed"]);
@@ -120,9 +123,13 @@ export function BriefWorkspace({ briefId }: { briefId: string }) {
         setAiOff(res.aiConfigured === false);
         setStep((cur) => cur ?? startStep(item));
         setLoadError("");
+        setMissing(false);
       } catch (e) {
         if (silent) toast.error("We could not refresh this page. Reload it to see the latest.");
-        else setLoadError(friendlyMessage(e, "Check your connection and try again."));
+        else {
+          setMissing(isNotFoundError(e instanceof Error ? e.message : null));
+          setLoadError(friendlyMessage(e, "Check your connection and try again."));
+        }
       }
     },
     [briefId],
@@ -220,8 +227,21 @@ export function BriefWorkspace({ briefId }: { briefId: string }) {
   const deleteOne = useCallback((a: Asset) => void removeAsset(a), [removeAsset]);
 
   if (!brief) {
+    if (missing) {
+      return (
+        <div>
+          <PageHeader title="Brief not found" breadcrumbs={[{ label: "Creative Studio", href: "/app/creative" }, { label: "Not found" }]} />
+          <EmptyState title="This brief does not exist" body="It may have been deleted, or the link is wrong." action={<LinkButton href="/app/creative">Back to Creative Studio</LinkButton>} />
+        </div>
+      );
+    }
     if (loadError) {
-      return <ErrorState title="We could not load this brief" message={loadError} action={<Button variant="secondary" onClick={() => void load()}>Try again</Button>} />;
+      return (
+        <div>
+          <PageHeader title="Creative brief" breadcrumbs={[{ label: "Creative Studio", href: "/app/creative" }, { label: "Not available" }]} />
+          <ErrorState title="We could not load this brief" message={loadError} action={<Button variant="secondary" onClick={() => void load()}>Try again</Button>} />
+        </div>
+      );
     }
     return (
       <div aria-busy="true">
@@ -438,11 +458,11 @@ export function BriefWorkspace({ briefId }: { briefId: string }) {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="font-semibold">
-                  {readyAssets.length} {readyAssets.length === 1 ? "ad" : "ads"} ready to send
+                  {readyAssets.length} {readyAssets.length === 1 ? "ad" : "ads"}{" "}ready to send
                 </p>
                 {blockedReady > 0 ? (
                   <p className="mt-0.5 text-sm text-bad-fg">
-                    {blockedReady} {blockedReady === 1 ? "ad has" : "ads have"} problems marked Must fix. Fix {blockedReady === 1 ? "it" : "them"} before sending.
+                    {blockedReady} {blockedReady === 1 ? "ad has" : "ads have"} problems marked Must fix. Fix {blockedReady === 1 ? "it" : "them"}{" "}before sending.
                   </p>
                 ) : (
                   <p className="mt-0.5 text-sm text-muted">To approve your goal and offer in one go, send one link. To show an ad itself, use Send for approval on that ad.</p>

@@ -100,7 +100,7 @@ const DEFAULTS: Record<string, () => Row> = {
   actionRecord: () => ({ contactIds: [], decidedAt: null, expiresAt: null }),
 };
 
-type Args = { where?: Row; select?: Row; orderBy?: Row | Row[]; take?: number; distinct?: string[]; data?: Row | Row[]; create?: Row; update?: Row; skipDuplicates?: boolean };
+type Args = { where?: Row; select?: Row; orderBy?: Row | Row[]; take?: number; distinct?: string[]; by?: string[]; data?: Row | Row[]; create?: Row; update?: Row; skipDuplicates?: boolean };
 
 export type FakeNoticesDb = ReturnType<typeof createFakeNoticesDb>;
 
@@ -192,6 +192,16 @@ export function createFakeNoticesDb(clock: () => Date = () => new Date()) {
     async count(a: Args = {}) {
       failIfAsked(model, "count");
       return t(model).filter((r) => matches(r, a.where)).length;
+    },
+    /** One row per distinct value of the `by` fields (no aggregates). */
+    async groupBy(a: Args = {}) {
+      failIfAsked(model, "groupBy");
+      const groups = new Map<string, Row>();
+      for (const r of t(model).filter((x) => matches(x, a.where))) {
+        const by = a.by ?? [];
+        groups.set(JSON.stringify(by.map((f) => r[f])), Object.fromEntries(by.map((f) => [f, r[f]])));
+      }
+      return [...groups.values()];
     },
     async create(a: Args) {
       failIfAsked(model, "create");

@@ -23,8 +23,27 @@ export function emailError(value: string): string | null {
   return null;
 }
 
-export function canRemoveMember(me: Person | null, target: Person): boolean {
+/** True when this person is the workspace's only owner. The server refuses to remove or demote them (lastOwnerGuard), so the page offers neither. */
+export function isOnlyOwner(members: readonly Person[] | null | undefined, userId: string): boolean {
+  const owners = (members ?? []).filter((m) => m.role === "owner");
+  return owners.length === 1 && owners[0].userId === userId;
+}
+
+export const ONLY_OWNER_NOTE = "You are the only owner, so you can't leave or change your own role. Make someone else the owner first.";
+export const NO_TRANSFER_CANDIDATE_NOTE = "Invite a teammate first. Once they join, you can make them the owner here.";
+export const ALL_OWNERS_NOTE = "Everyone else here is already an owner.";
+
+/** Why the hand-over picker is empty, or null when someone can take over. Pure. */
+export function noTransferNote(members: readonly Person[], myId: string): string | null {
+  const others = members.filter((m) => m.userId !== myId);
+  if (others.some((m) => m.role !== "owner")) return null;
+  return others.length === 0 ? NO_TRANSFER_CANDIDATE_NOTE : ALL_OWNERS_NOTE;
+}
+
+/** With `members`, the only owner can't be removed (not even by leaving), matching the server. */
+export function canRemoveMember(me: Person | null, target: Person, members?: readonly Person[]): boolean {
   if (!me || me.role === "agent") return false;
+  if (members && isOnlyOwner(members, target.userId)) return false;
   return me.role === "owner" || target.role === "agent" || target.userId === me.userId;
 }
 

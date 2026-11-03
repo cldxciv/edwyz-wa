@@ -140,3 +140,19 @@ export function publishFailure(error: unknown, name: string): { message: string;
   if (/problems|must be fixed|invalid/i.test(raw)) return { kind: "invalid", message: `We could not publish "${name}". Open it and check the Checks tab to see what needs fixing.` };
   return { kind: "other", message: humanError(error, `publish "${name}"`) };
 }
+
+/** The parts of a React submit event that ownSubmit uses, so it can be tested without a browser. */
+type SubmitLike = { target: unknown; currentTarget: unknown; preventDefault(): void; stopPropagation(): void };
+
+/**
+ * Claims a form's own submit and keeps it from going further. React passes events up the component tree, not the page,
+ * so the form of a dialog (drawn at the end of the page through a portal) still reaches the onSubmit of a form that holds
+ * the dialog in the tree, for example the reply-material dialog inside the rule form. Returns false for a submit that came
+ * from such an inner form: that one is not this form's to handle.
+ */
+export function ownSubmit(e: SubmitLike): boolean {
+  if (e.target !== e.currentTarget) return false;
+  e.preventDefault();
+  e.stopPropagation();
+  return true;
+}

@@ -6,7 +6,7 @@ import { errorResponse, requireRole } from "@/lib/tenancy";
 
 export const dynamic = "force-dynamic";
 
-/** GET -> { settings: { agentSignature, optOutReply, optInReply } } (any member) */
+/** GET -> { settings: { agentSignature, optOutReply, optInReply, stopWords } } (any member) */
 export async function GET(request: Request) {
   try {
     const actor = await getActor(request);
@@ -16,7 +16,10 @@ export async function GET(request: Request) {
   }
 }
 
-/** PUT { agentSignature?: boolean, optOutReply?: string, optInReply?: string } -> { settings } (admin). Empty reply text turns that confirmation off. */
+/**
+ * PUT { agentSignature?: boolean, optOutReply?: string, optInReply?: string, stopWords?: string[] } -> { settings } (owners and
+ * admins). Empty reply text turns that confirmation off. stopWords replaces the workspace's own STOP words (the defaults always apply).
+ */
 export async function PUT(request: Request) {
   try {
     assertSameOrigin(request);

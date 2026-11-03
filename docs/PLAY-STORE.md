@@ -8,7 +8,7 @@ The Android app opens wa.edwyz.com full screen in Chrome's engine, with no brows
 
 What the web app needs first (code, done by us):
 
-1. A web app manifest at `/manifest.webmanifest`: name "Edwyz WA", short name, `start_url` `/app?source=twa`, `display: standalone`, theme and background colours, and icons at 192 and 512 px plus maskable versions, made from `web/public/img/logo-edwyz-mini.png` (1992 px square).
+1. A web app manifest at `/manifest.webmanifest`: name "Edwyz WA", short name, `start_url` `/app?source=twa`, `display: standalone`, theme and background colours, and icons at 192 and 512 px plus maskable versions, drawn by `scripts/make-icons.mjs` from the green chat-bubble mark in the site header (the same mark as the favicon and every page).
 2. A small service worker with an offline page ("You are offline. Edwyz WA needs the internet to show your chats."), so Chrome treats the site as installable. It must never cache API responses or signed-in pages.
 3. `/.well-known/assetlinks.json` (Digital Asset Links) listing the Android package `com.edwyz.wa` and the SHA-256 fingerprints of BOTH the upload key and Google Play's app signing key. Without it Android shows a browser bar. Note that Play's signing key fingerprint only exists after the first upload to Play Console.
 4. Store-friendly public pages: the landing page, `/privacy`, `/terms` and `/data-deletion` exist; the listing links to them.

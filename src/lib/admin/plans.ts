@@ -1,6 +1,7 @@
 import type { Prisma } from "@/generated/prisma/client";
 import { audit } from "@/lib/auth/audit";
 import { syncPlanToRazorpay } from "@/lib/billing";
+import { AI_REPLIES_PER_HOUR_FEATURE, MAX_AI_REPLIES_PER_HOUR, withoutRepliesPerHour } from "@/lib/billing/ai-allowance";
 import { prisma } from "@/lib/db";
 import { clearCeiling, listCeilings, setCeiling, type CeilingRow } from "@/lib/spend/ceilings";
 import { CRD, currencyExponent, isCurrencyCode, minorToMajorString, parseMajorInput } from "@/lib/spend/money";
@@ -161,6 +162,19 @@ export type PlanInput = {
   sortOrder: number;
 };
 
+/**
+ * The plan form's "AI replies an hour" field (owner decision 3), stored as Plan.features.aiRepliesPerHour. Sent empty, the key is
+ * removed and the plan's code or name default applies (Starter 60, Growth 200, Agency 600, otherwise the platform value). Not sent
+ * at all (an older caller), the features stay as given. A whole number from 1 to 100,000: 0 would switch the AI agent off for the
+ * plan, and every module is on every plan (owner decision 6).
+ */
+export function applyRepliesPerHour(features: Prisma.InputJsonObject, body: Record<string, unknown>): Prisma.InputJsonObject {
+  if (!(AI_REPLIES_PER_HOUR_FEATURE in body)) return features;
+  const value = optInt(body, AI_REPLIES_PER_HOUR_FEATURE, "AI replies an hour", 1, MAX_AI_REPLIES_PER_HOUR);
+  const rest = withoutRepliesPerHour(features) as Prisma.InputJsonObject;
+  return value === null ? rest : { ...rest, [AI_REPLIES_PER_HOUR_FEATURE]: value };
+}
+
 export function parsePlanInput(body: Record<string, unknown>): PlanInput {
   const code = str(body, "code", "Code", 40).toLowerCase();
   if (!/^[a-z0-9][a-z0-9_-]{1,39}$/.test(code)) throw new HttpError(400, "Code may use lowercase letters, digits, dash and underscore.");
@@ -173,11 +187,12 @@ export function parsePlanInput(body: Record<string, unknown>): PlanInput {
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
       features = parsed;
     } catch {
-      throw new HttpError(400, "Features must be a JSON object, for example {\"api\": true}.");
+      throw new HttpError(400, "Features must be a JSON object, for example {\"automationTriggersMonthly\": 5000}.");
     }
   } else if (rawFeatures && typeof rawFeatures === "object" && !Array.isArray(rawFeatures)) {
     features = rawFeatures as Prisma.InputJsonObject;
   }
+  features = applyRepliesPerHour(features, body);
   return {
     code,
     name: str(body, "name", "Name", 80),

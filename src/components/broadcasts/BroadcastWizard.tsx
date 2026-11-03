@@ -1,5 +1,6 @@
 "use client";
 
+import { broadcastSupportReason } from "@/lib/broadcasts/components";
 import { displayName } from "@/lib/contacts/identity";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -11,6 +12,7 @@ import { FilterBuilder } from "@/components/segments/FilterBuilder";
 import { type Draft, draftProblems, draftToFilter, emptyDraft, summarizeFilter } from "@/components/segments/helpers";
 import { usePreview } from "@/components/segments/usePreview";
 import { SegmentPicker } from "./AudienceExtras";
+import { calendarHrefFor, monthOfDateParam } from "./CampaignCalendar";
 import { LinkButton } from "./LinkButton";
 import { VariableMapping } from "./VariableMapping";
 import { useKeyedApi } from "./useKeyedApi";
@@ -29,6 +31,7 @@ import {
   humanizeName,
   languageName,
   placeholderNote,
+  presetSchedule,
   qualityWarning,
   retrySummary,
   scheduleBounds,
@@ -39,6 +42,9 @@ import {
   validateSchedule,
   wizardHint,
 } from "./helpers";
+
+/** Why a template cannot be broadcast (named placeholders and coupon codes can; login codes, forms and carousels cannot), or null. */
+const templateBlocker = (components: unknown): string | null => broadcastSupportReason(components) ?? unsupportedTemplateReason(components);
 
 type Named = { id: string; name: string; description?: string };
 type Options = {
@@ -103,6 +109,8 @@ export function BroadcastWizard() {
   const [whenMode, setWhenMode] = useState<"now" | "later">("now");
   const [scheduledAt, setScheduledAt] = useState("");
   const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [backHref, setBackHref] = useState("/app/broadcasts");
+  const [fromCalendar, setFromCalendar] = useState(false);
   const [retryDays, setRetryDays] = useState(0);
   const [draft, setDraft] = useState<{ id: string; key: string } | null>(null);
   const [estimate, setEstimate] = useState<Estimate | null>(null);
@@ -133,15 +141,23 @@ export function BroadcastWizard() {
   const preview = useMemo(() => (template ? templatePreview(template.components) : null), [template]);
   const placeholders = template ? placeholderNote(template.components) : null;
   const slots = useMemo(() => (template ? templateSlots(template.components) : []), [template]);
-  const mappingProblem = slots.length ? firstMappingProblem(slots, variableMap, policy) : null;
+  const mappingProblem = slots.length ? firstMappingProblem(slots, variableMap, policy, { phoneNumberId: phoneId }) : null;
+  const blocked = useMemo(() => approved.map((t) => ({ t, reason: templateBlocker(t.components) })).filter((x): x is { t: Template; reason: string } => !!x.reason), [approved]);
   const effectiveName = name.trim() || defaultBroadcastName(template?.name);
   const bounds = useMemo(() => scheduleBounds(), []);
 
   useEffect(() => {
     const date = new URLSearchParams(window.location.search).get("date");
-    if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    // A day picked on the calendar starts as a time that can really be scheduled (not 9:00 on a day already past 9:00).
+    const at = date ? presetSchedule(date) : null;
+    if (at) {
       setWhenMode("later");
-      setScheduledAt(`${date}T09:00`);
+      setScheduledAt(at);
+    }
+    // Cancel goes back to the calendar on that day's month (CampaignCalendar reads ?date=); scheduling goes back too (send).
+    if (date && monthOfDateParam(date)) {
+      setBackHref(`/app/broadcasts?date=${date}`);
+      setFromCalendar(true);
     }
     const segment = new URLSearchParams(window.location.search).get("segment");
     if (segment && segment.length <= 100) {
@@ -177,12 +193,17 @@ export function BroadcastWizard() {
     else (Array.from(tagList.current?.querySelectorAll<HTMLButtonElement>("button[data-tag]") ?? []).find((b) => b.dataset.tag === target) ?? tagInput.current)?.focus();
   }, [tags]);
 
+  /** The draft made for the review step is deleted, so going back and changing a step leaves no canceled broadcast in the list. */
   async function discardDraft() {
     if (!draft) return;
     const id = draft.id;
     setDraft(null);
     setEstimate(null);
-    await apiFetch(`/api/broadcasts/${id}/cancel`, { method: "POST" }).catch(() => undefined);
+    const deleted = await apiFetch(`/api/broadcasts/${id}`, { method: "DELETE" }).then(
+      () => true,
+      () => false,
+    );
+    if (!deleted) await apiFetch(`/api/broadcasts/${id}/cancel`, { method: "POST" }).catch(() => undefined);
   }
 
   function goTo(target: number) {
@@ -194,12 +215,12 @@ export function BroadcastWizard() {
 
   async function leave() {
     if (!draft) {
-      router.push("/app/broadcasts");
+      router.push(backHref);
       return;
     }
     setBusy("leave");
     await discardDraft();
-    router.push("/app/broadcasts");
+    router.push(backHref);
   }
 
   async function prepareReview() {
@@ -249,8 +270,17 @@ export function BroadcastWizard() {
     setError("");
     try {
       await apiFetch(`/api/broadcasts/${draftId}/start`, { method: "POST" });
+      const detail = `/app/broadcasts/${draftId}`;
+      // Planned from a calendar day: back to the calendar on the day it goes out, so it is in view at once (even in another
+      // month). The toast opens the broadcast.
+      const calendar = whenMode === "later" && fromCalendar ? calendarHrefFor(scheduledAt) : null;
+      if (calendar) {
+        toast.success("Broadcast scheduled", { description: `It goes out on ${formatWhen(scheduledAt)}.`, action: { label: "Open broadcast", onAction: () => router.push(detail) } });
+        router.push(calendar);
+        return;
+      }
       toast.success(whenMode === "later" ? "Broadcast scheduled" : "Broadcast started");
-      router.push(`/app/broadcasts/${draftId}`);
+      router.push(detail);
     } catch (e) {
       setError(friendlyError((e as Error).message, "We could not start your broadcast. Check your connection and try again."));
       setBusy(null);
@@ -340,7 +370,7 @@ export function BroadcastWizard() {
   const audienceText = audienceMode === "segment" ? `Segment: ${chosenSegmentName ?? "chosen segment"}` : audienceMode === "filters" ? summarizeFilter(filterStack) : null;
   const quality = qualityWarning(phone?.qualityRating);
   const audienceReady = !!phoneId && !tagsMissing && segmentChosen && (audienceMode !== "filters" || rulesReady) && !counting && !countFailed && !pendingText.trim() && eligible > 0;
-  const unsupported = template ? unsupportedTemplateReason(template.components) : null;
+  const unsupported = template ? templateBlocker(template.components) : null;
   const messageReady = !!template && !unsupported && !mappingProblem;
   const cost = costSummary(estimate?.cost);
   const costLines = (estimate?.cost.lines ?? []).slice(0, 12);
@@ -453,7 +483,7 @@ export function BroadcastWizard() {
                 <SegmentPicker value={segmentId} onChange={setSegmentId} segments={options.data.segments} presets={options.data.presets} />
               </ChoiceCard>
               <ChoiceCard name="audience" value="filters" checked={audienceMode === "filters"} onChange={() => setAudienceMode("filters")} title="Contacts that match rules" description="Combine details like city, tags and when they last wrote to you.">
-                <FilterBuilder value={rules} onChange={setRules} attributeKeys={options.data.attributeKeys} tags={options.data.tags} showProblems idPrefix="wizard-rules" />
+                <FilterBuilder value={rules} onChange={setRules} attributeKeys={options.data.attributeKeys} tags={options.data.tags} idPrefix="wizard-rules" />
               </ChoiceCard>
             </fieldset>
 
@@ -499,14 +529,31 @@ export function BroadcastWizard() {
             <FormField label="Template" required hint="Only templates that Meta approved are listed. Need a new one? Create it under Templates.">
               <Select value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
                 <option value="">Choose a template</option>
-                {approved.map((t) => (
-                  <option key={t.id} value={t.id} disabled={!!unsupportedTemplateReason(t.components)}>
-                    {humanizeName(t.name)} ({languageName(t.language)}, {categoryLabel(t.category)})
-                    {unsupportedTemplateReason(t.components) ? " - not available for broadcasts" : ""}
-                  </option>
-                ))}
+                {approved.map((t) => {
+                  const off = blocked.some((x) => x.t.id === t.id);
+                  return (
+                    <option key={t.id} value={t.id} disabled={off}>
+                      {humanizeName(t.name)} ({languageName(t.language)}, {categoryLabel(t.category)})
+                      {off ? " - not available for broadcasts" : ""}
+                    </option>
+                  );
+                })}
               </Select>
             </FormField>
+            {blocked.length > 0 && (
+              <details className="rounded-control border border-border p-3 text-sm">
+                <summary className="min-h-8 cursor-pointer font-medium">
+                  Why {blocked.length === 1 ? "1 template is" : `${blocked.length} templates are`} not available
+                </summary>
+                <ul className="mt-2 space-y-1">
+                  {blocked.map(({ t, reason }) => (
+                    <li key={t.id}>
+                      <span className="font-medium">{humanizeName(t.name)}</span> ({languageName(t.language)}): <span className="text-muted">{reason}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
             {preview && <TemplateBubble preview={preview} />}
             {slots.length === 0 && placeholders && <Alert tone="info">{placeholders}</Alert>}
             {slots.length > 0 && (
@@ -517,6 +564,7 @@ export function BroadcastWizard() {
                 policy={policy}
                 onPolicyChange={(next) => (setMapTouched(true), setPolicy(next))}
                 attributeKeys={options.data.attributeKeys}
+                phoneNumberId={phoneId}
                 showProblems={mapTouched}
               />
             )}
@@ -651,7 +699,7 @@ export function BroadcastWizard() {
             </Button>
           ) : (
             <LinkButton
-              href="/app/broadcasts"
+              href={backHref}
               variant="ghost"
               className={navButton}
               onClick={(e) => {

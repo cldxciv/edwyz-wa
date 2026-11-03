@@ -6,7 +6,7 @@ import { Disclosure } from "@/components/automation/Disclosure";
 import { NODE_META, OPERATOR_TEXT, describeStep, handlesOf, savedVariables } from "./catalog";
 import { UNIT_MINUTES, durationProblem, fromDuration, toDuration, type DurationUnit } from "./duration";
 import { nextGapKey, nextId } from "./flow";
-import { isVariableName, validateNode } from "./validation";
+import { isVariableName, LONG_WAIT_MINUTES, validateNode } from "./validation";
 import { LIMITS, TEAM_QUEUE, type FlowDefinition, type FlowNode, type NodeDataMap } from "./types";
 
 export type TemplateOption = { id: string; name: string; status?: string; language?: string; category?: string; components?: unknown };
@@ -183,11 +183,25 @@ function RemoveButton({ label, onClick }: { label: string; onClick: () => void }
   );
 }
 
-function DelayFields({ minutes, set }: { minutes: number; set: Setter }) {
+/** What a customer's message does while the bot waits. Same values as the server (src/lib/chatbots/flow.ts DELAY_REPLY_MODES). */
+const ON_REPLY: { value: "" | "continue" | "pass"; label: string; hint: string }[] = [
+  { value: "", label: "Keep waiting. The bot keeps the message and nothing else answers it", hint: "Chat routing, rules and the AI agent leave the message alone until the bot finishes." },
+  { value: "continue", label: "Stop waiting and go on to the next step", hint: "What the customer wrote is saved as {{last_reply}}." },
+  {
+    value: "pass",
+    label: "Keep waiting, and let chat routing and rules see the message",
+    hint: "Chat routing can give the chat to a teammate, and rules can tag or assign it. Nothing answers the customer automatically while the bot waits: the AI agent and rule replies stay quiet.",
+  },
+];
+
+function DelayFields({ minutes, onReply, set }: { minutes: number; onReply?: NodeDataMap["delay"]["onReply"]; set: Setter }) {
   const initial = toDuration(minutes);
   const [amount, setAmount] = useState(String(initial.amount || ""));
   const [unit, setUnit] = useState<DurationUnit>(initial.unit);
   const unitId = useId();
+  const replyId = useId();
+  const hintId = useId();
+  const mode = ON_REPLY.find((o) => o.value === onReply) ?? ON_REPLY[0];
   // Undo, redo and "Undo" on the deleted-step message change the stored value without this box knowing. Always show what is stored.
   const stored = Number.isFinite(minutes) ? Math.max(0, Math.trunc(minutes)) : 0;
   if (fromDuration(Number(amount), unit) !== stored) {
@@ -220,7 +234,27 @@ function DelayFields({ minutes, set }: { minutes: number; set: Setter }) {
           </Select>
         </div>
       </div>
-      <p className="text-xs text-muted">You can wait from 1 minute to 7 days. The customer is not told the bot is waiting.</p>
+      <p className="text-xs text-muted">
+        You can wait from 1 minute to 7 days. The customer is not told the bot is waiting. WhatsApp only allows free messages for 24 hours after the customer last wrote, so after a wait of 23 hours or more the next message the bot sends must be Send template. Steps that send nothing, such as Add a tag, can come first.
+      </p>
+      {stored >= LONG_WAIT_MINUTES && (
+        <p className="text-xs font-medium text-warn-fg">This is a long wait. Make Send template the next message after it, or the chatbot cannot be published.</p>
+      )}
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor={replyId} className="text-sm font-medium">
+          If the customer writes during the wait
+        </label>
+        <Select id={replyId} value={mode.value} aria-describedby={hintId} onChange={(e) => set({ onReply: e.target.value || undefined }, true)}>
+          {ON_REPLY.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </Select>
+        <p id={hintId} className="text-xs text-muted">
+          {mode.hint}
+        </p>
+      </div>
     </fieldset>
   );
 }
@@ -451,15 +485,15 @@ function Body(p: Props & { set: Setter; focusLater: FocusLater }) {
     case "set_attribute":
       return (
         <>
-          <Line label="Contact detail" required value={node.data.attribute} max={60} placeholder="City" hint="The name of the detail to save on the contact." onChange={(attribute) => set({ attribute })} />
+          <Line label="Contact detail" required value={node.data.attribute} max={60} placeholder="e.g. City" hint="The name of the detail to save on the contact." onChange={(attribute) => set({ attribute })} />
           <Line label="Value" value={node.data.value} max={200} hint="You can use a saved answer, for example {{city}}." onChange={(value) => set({ value })} />
         </>
       );
     case "add_tag":
     case "remove_tag":
-      return <Line label="Tag" required value={node.data.tag} max={40} placeholder="New lead" hint="Tags help you find and group contacts later." onChange={(tag) => set({ tag })} />;
+      return <Line label="Tag" required value={node.data.tag} max={40} placeholder="e.g. New lead" hint="Tags help you find and group contacts later." onChange={(tag) => set({ tag })} />;
     case "delay":
-      return <DelayFields minutes={node.data.minutes} set={set} />;
+      return <DelayFields minutes={node.data.minutes} onReply={node.data.onReply} set={set} />;
     case "webhook": {
       const d = node.data;
       const urlProblem = d.url.trim() && !/^https:\/\/\S+$/i.test(d.url.trim()) ? "The address must start with https://" : null;

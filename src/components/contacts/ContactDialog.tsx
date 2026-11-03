@@ -1,10 +1,10 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { Alert, Button, Dialog, FormField, Input, apiFetch } from "@/components/ui";
 import { normalizePhone } from "@/lib/contacts/phone";
 import { ConsentHistory } from "./ConsentHistory";
-import { PHONE_ERROR, PHONE_HINT, friendlyError, parseTagInput } from "./helpers";
+import { OPTED_OUT_NOTE, OPT_OUT_WARNING, PHONE_ERROR, PHONE_HINT, friendlyError, parseTagInput } from "./helpers";
 import { OwnerStageFields, ownerStagePatch, useOwnerStageOptions } from "./OwnerStage";
 
 export type ContactRow = {
@@ -44,6 +44,8 @@ export function ContactDialog({ contact, canRecordConsent, onClose, onSaved }: P
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const phoneInput = useRef<HTMLInputElement>(null);
+  const sourceInput = useRef<HTMLInputElement>(null);
 
   const optedOut = !!contact?.optedOutAt;
   const newlyOptingIn = optIn && !contact?.optIn;
@@ -54,7 +56,11 @@ export function ContactDialog({ contact, canRecordConsent, onClose, onSaved }: P
     e.preventDefault();
     setTried(true);
     setError("");
-    if ((!editing && !normalizePhone(phone)) || (newlyOptingIn && !source.trim())) return;
+    const invalid = !editing && !normalizePhone(phone) ? phoneInput : newlyOptingIn && !source.trim() ? sourceInput : null;
+    if (invalid) {
+      invalid.current?.focus(); // keyboard and screen-reader users land on the field to fix; its error is announced and tied to it
+      return;
+    }
     setBusy(true);
     try {
       const body: Record<string, unknown> = { name: name.trim(), tags: parseTagInput(tags) };
@@ -93,7 +99,7 @@ export function ContactDialog({ contact, canRecordConsent, onClose, onSaved }: P
     >
       <form id={formId} onSubmit={submit} noValidate className="space-y-4">
         <FormField label="Phone number" required={!editing} hint={editing ? (contact?.phone ? "The phone number cannot be changed. Add a new contact instead." : "This person messages you through a WhatsApp username and has not shared a phone number.") : PHONE_HINT} error={phoneError}>
-          <Input type="tel" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} disabled={editing} autoComplete="off" data-autofocus={editing ? undefined : ""} placeholder="+91 98765 43210" />
+          <Input ref={phoneInput} type="tel" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} disabled={editing} autoComplete="off" data-autofocus={editing ? undefined : ""} placeholder="+91 98765 43210" />
         </FormField>
         {editing && (contact?.username || contact?.bsuid) && (
           <p className="break-all text-xs text-muted">
@@ -111,8 +117,8 @@ export function ContactDialog({ contact, canRecordConsent, onClose, onSaved }: P
         <OwnerStageFields owner={owner} stage={stage} onOwner={setOwner} onStage={setStage} people={options.people} stages={options.stages} />
 
         {optedOut ? (
-          <Alert tone="bad" title="This person opted out">
-            You can message them again only if they message you first. They cannot be opted in from here.
+          <Alert tone="bad" title="This person opted out of marketing">
+            {OPTED_OUT_NOTE}
           </Alert>
         ) : canRecordConsent ? (
           <fieldset className="space-y-3 rounded-lg border border-border p-3">
@@ -121,10 +127,10 @@ export function ContactDialog({ contact, canRecordConsent, onClose, onSaved }: P
               <input type="checkbox" className="mt-0.5 h-5 w-5 shrink-0 accent-(--accent)" checked={optIn} onChange={(e) => setOptIn(e.target.checked)} />
               <span>This person agreed to receive WhatsApp messages from my business.</span>
             </label>
-            {contact?.optIn && !optIn && <Alert tone="warn">Saving will mark this person as opted out. They will no longer receive broadcasts.</Alert>}
+            {contact?.optIn && !optIn && <Alert tone="warn">{OPT_OUT_WARNING}</Alert>}
             {optIn && (
               <FormField label="Where did they agree?" required={newlyOptingIn} error={sourceError} hint="For example: website form, in-store sign-up or order checkout. Keep proof of their consent.">
-                <Input value={source} onChange={(e) => setSource(e.target.value)} readOnly={!newlyOptingIn} />
+                <Input ref={sourceInput} value={source} onChange={(e) => setSource(e.target.value)} readOnly={!newlyOptingIn} />
               </FormField>
             )}
           </fieldset>

@@ -5,6 +5,7 @@ import { claimOnce, readState } from "@/lib/lifecycle/state";
 import { buyerStateCode, invoiceMetaKey, isValidGstin, issueInvoiceOnce, readInvoiceMeta } from "./invoice";
 import { sendPaymentReceived } from "./notify";
 import { markApplied } from "./ordering";
+import { MANUAL_PLAN_TEXT, confirmNextSubscription, dropPlannedDowngrade, scheduledChangeView, settleNextBeforeSubscribe, startNextSubscription } from "./plan-change";
 import {
   cancelSubscription,
   createSubscription,
@@ -34,12 +35,31 @@ export function listActivePlans() {
   });
 }
 
+/** The contact-support text for a plan assigned by hand (defined with the plan changes, which answer it too). */
+export { MANUAL_PLAN_TEXT };
+
+/**
+ * The subscription as the billing page shows it. `manual` marks a plan assigned by hand in the admin console: it cannot be
+ * cancelled or switched online. A hand-assigned plan past its paid-until date is shown as expired, as computeBillingStatus treats
+ * it, even before the billing worker has marked the row.
+ */
+export function overviewSubscription<T extends { status: string; currentPeriodEnd: Date | null; razorpaySubscriptionId: string | null }>(sub: T | null, now = new Date()) {
+  if (!sub) return null;
+  const { razorpaySubscriptionId, ...rest } = sub;
+  const manual = razorpaySubscriptionId === null;
+  const ended = manual && rest.status === "active" && rest.currentPeriodEnd !== null && rest.currentPeriodEnd.getTime() <= now.getTime();
+  return { ...rest, status: ended ? "expired" : rest.status, manual };
+}
+
 export async function billingOverview(actor: Actor) {
-  const [status, subscription, invoices, profile, plans, settings] = await Promise.all([
+  const [status, row, invoices, profile, plans, settings, scheduledChange] = await Promise.all([
     getBillingStatus(actor.tenantId),
     prisma.subscription.findUnique({
       where: { tenantId: actor.tenantId },
-      select: { status: true, currentPeriodEnd: true, cancelAtPeriodEnd: true, plan: { select: { name: true, pricePaise: true, currency: true, intervalMonths: true } } },
+      select: {
+        status: true, currentPeriodEnd: true, cancelAtPeriodEnd: true, razorpaySubscriptionId: true,
+        plan: { select: { id: true, name: true, pricePaise: true, currency: true, intervalMonths: true } },
+      },
     }),
     prisma.invoice.findMany({
       where: { tenantId: actor.tenantId },
@@ -50,8 +70,12 @@ export async function billingOverview(actor: Actor) {
     prisma.billingProfile.findUnique({ where: { tenantId: actor.tenantId } }),
     listActivePlans(),
     getSettings(),
+    scheduledChangeView(actor.tenantId),
   ]);
-  return { status, subscription, invoices, billingProfile: profile, plans, trialDays: settings.trialDays, paymentsConfigured: razorpayConfigured() };
+  // The Razorpay subscription id stays on the server; the page only needs to know whether the plan was assigned by hand.
+  const subscription = overviewSubscription(row);
+  // scheduledChange: "Changes to <plan> on <date>" (a downgrade at renewal, or a new subscription starting when this one ends).
+  return { status, subscription, invoices, billingProfile: profile, plans, trialDays: settings.trialDays, paymentsConfigured: razorpayConfigured(), scheduledChange };
 }
 
 export async function startSubscription(actor: Actor, planId: unknown) {
@@ -61,8 +85,16 @@ export async function startSubscription(actor: Actor, planId: unknown) {
   const existing = await prisma.subscription.findUnique({ where: { tenantId: actor.tenantId } });
   const now = new Date();
   if (existing?.status === "active" && existing.currentPeriodEnd && existing.currentPeriodEnd > now) {
-    throw new HttpError(409, "You already have an active subscription. Cancel it at the end of the period before choosing another plan.");
+    if (!existing.razorpaySubscriptionId) throw new HttpError(409, MANUAL_PLAN_TEXT);
+    // A plan set to end at the close of its period: the new plan is a new subscription that starts on that day (plan-change.ts).
+    if (existing.cancelAtPeriodEnd) {
+      return startNextSubscription(actor, plan, { ...existing, razorpaySubscriptionId: existing.razorpaySubscriptionId, currentPeriodEnd: existing.currentPeriodEnd }, now);
+    }
+    throw new HttpError(409, "You already have an active subscription. To move to another plan, use Change plan on the Billing page.");
   }
+  // The plan has ended, but a new plan set up to start that day may still be waiting for its first payment: a second
+  // subscription would charge beside it (409), and one never approved is cancelled at Razorpay first.
+  await settleNextBeforeSubscribe(actor, now);
 
   const { razorpayPlanId } = plan.razorpayPlanId ? { razorpayPlanId: plan.razorpayPlanId } : await syncPlanToRazorpay(plan.id);
   const created = await createSubscription({ razorpayPlanId, intervalMonths: plan.intervalMonths, notes: { tenantId: actor.tenantId, planCode: plan.code } });
@@ -92,7 +124,12 @@ export async function confirmCheckout(actor: Actor, body: Record<string, unknown
     throw new HttpError(400, "Missing payment details.");
   }
   const sub = await prisma.subscription.findUnique({ where: { tenantId: actor.tenantId }, include: { plan: true } });
-  if (!sub?.razorpaySubscriptionId || sub.razorpaySubscriptionId !== subscriptionId) throw new HttpError(400, "This payment does not match your subscription.");
+  if (!sub?.razorpaySubscriptionId || sub.razorpaySubscriptionId !== subscriptionId) {
+    // The new plan that starts when the current one ends has its own subscription id (plan-change.ts).
+    const next = await confirmNextSubscription(actor.tenantId, { paymentId: paymentId as string, subscriptionId: subscriptionId as string, signature: signature as string });
+    if (next) return next;
+    throw new HttpError(400, "This payment does not match your subscription.");
+  }
   if (!verifyCheckoutSignature(paymentId as string, sub.razorpaySubscriptionId, signature as string)) throw new HttpError(400, "Payment could not be verified.");
 
   const now = new Date();
@@ -145,10 +182,13 @@ async function issueCheckoutInvoice(tenantId: string, paymentId: string, plan: {
 
 export async function cancelAtPeriodEnd(actor: Actor) {
   const sub = await prisma.subscription.findUnique({ where: { tenantId: actor.tenantId } });
+  // A plan assigned by hand has no Razorpay subscription to cancel; say who can change it instead of "nothing to cancel".
+  if (sub?.status === "active" && !sub.razorpaySubscriptionId) throw new HttpError(409, MANUAL_PLAN_TEXT);
   if (!sub?.razorpaySubscriptionId || sub.status !== "active") throw new HttpError(409, "There is no active subscription to cancel.");
   if (sub.cancelAtPeriodEnd) return { ok: true, currentPeriodEnd: sub.currentPeriodEnd };
   await cancelSubscription(sub.razorpaySubscriptionId, true);
   await prisma.subscription.update({ where: { id: sub.id }, data: { cancelAtPeriodEnd: true } });
+  await dropPlannedDowngrade(actor.tenantId, actor.userId);
   return { ok: true, currentPeriodEnd: sub.currentPeriodEnd };
 }
 

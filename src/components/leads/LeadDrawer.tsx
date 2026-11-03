@@ -9,6 +9,30 @@ import type { Agent, LeadDetail } from "./types";
 
 type Patch = { status?: string; assignedToId?: string | null };
 
+/** The label of a lead that came from a chat started from a click-to-WhatsApp ad (source ctwa). */
+export const CTWA_LABEL = "From a WhatsApp ad";
+
+/** Where a lead came from, for the list and the drawer: a WhatsApp ad, its lead form's name, or "Lead form" when the form is unknown. */
+export function leadOrigin(lead: Pick<LeadDetail, "source" | "form">): string {
+  if (lead.source === "ctwa") return CTWA_LABEL;
+  return lead.form?.name ?? "Lead form";
+}
+
+/**
+ * The Permission to message note when no consent wording was saved with the lead (always so for a WhatsApp ad lead). It follows the
+ * contact's own opt-in (needsOptIn), like the badge above it: a contact who agreed elsewhere still gets marketing messages.
+ */
+export function consentNote(lead: Pick<LeadDetail, "source" | "needsOptIn">): string {
+  if (lead.source === "ctwa") {
+    return lead.needsOptIn
+      ? "Writing to you from an ad is not agreement to marketing messages, so only service messages will be sent until they agree."
+      : "They have already agreed to marketing messages. Writing to you from an ad did not change that.";
+  }
+  return lead.needsOptIn
+    ? "No proof that this lead agreed to marketing messages was saved, so only service messages will be sent. Set the consent wording for this form under Forms."
+    : "They have already agreed to marketing messages, so marketing messages can be sent. This form saved no consent wording. Set it under Forms to keep proof for new leads.";
+}
+
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="border-t border-border pt-4">
@@ -141,6 +165,7 @@ export function LeadDrawer({ id, admin, agents, onClose, onChanged }: { id: stri
               <StatusPill status={lead.status} label={leadStatusLabel(lead.status)} />
               <ConsentBadge needsOptIn={lead.needsOptIn} />
               <ResponseBadge lead={lead} now={now} />
+              {lead.source === "ctwa" && <Badge tone="info">{CTWA_LABEL}</Badge>}
             </div>
             {highlight?.attention && (
               <Alert className="mt-3" tone={highlight.tone === "bad" ? "bad" : "warn"} title="Waiting for a first reply">
@@ -225,7 +250,7 @@ export function LeadDrawer({ id, admin, agents, onClose, onChanged }: { id: stri
                 <p className="mt-2 text-muted">The lead saw this wording: {lead.consentText}</p>
               </>
             ) : (
-              <p className="text-muted">No proof that this lead agreed to marketing messages was saved, so only service messages will be sent. Set the consent wording for this form under Forms.</p>
+              <p className="text-muted">{consentNote(lead)}</p>
             )}
           </Section>
 
@@ -251,8 +276,8 @@ export function LeadDrawer({ id, admin, agents, onClose, onChanged }: { id: stri
           <details className="border-t border-border pt-4">
             <summary className="min-h-10 cursor-pointer text-sm font-semibold">Details</summary>
             <dl className="mt-2 grid gap-x-4 gap-y-2 sm:grid-cols-[10rem_1fr]">
-              <dt className="text-muted">Lead form</dt>
-              <dd className="break-words">{lead.form?.name ?? "Unknown"}</dd>
+              <dt className="text-muted">{lead.source === "ctwa" ? "Came from" : "Lead form"}</dt>
+              <dd className="break-words">{lead.source === "ctwa" ? CTWA_LABEL : (lead.form?.name ?? "Unknown")}</dd>
               <dt className="text-muted">Campaign ID</dt>
               <dd className="break-all">{lead.campaignMetaId ?? "Not linked to a campaign"}</dd>
               <dt className="text-muted">Ad ID</dt>

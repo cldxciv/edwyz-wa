@@ -29,10 +29,46 @@ function checkMediaSecrets(env, errors) {
   }
 }
 
+// Rate limits are shared through Postgres (src/lib/ratelimit), but replay guards, the live inbox connection count and the AI reply
+// guard still live in process memory (docs/ops.md section 2, last table).
 function checkInstanceCount(env, warnings) {
   const raw = env.WEB_INSTANCES ?? env.WEB_CONCURRENCY;
   if (raw !== undefined && Number(raw) > 1) {
-    warnings.push("More than one web instance is configured; rate limits and replay guards are kept in process memory, so run exactly one pm2 instance of the web app (see docs/ops.md)");
+    warnings.push("More than one web instance is configured; replay guards, the live inbox connection count and the AI reply guard are kept in process memory, so run exactly one pm2 instance of the web app (see docs/ops.md)");
+  }
+}
+
+// src/lib/ratelimit also knows `table`, but the RateLimitBucket table it writes to has no migration yet (docs/schema-requests.md):
+// that value would make every limiter fail its database write and count per process only, with a warning a minute.
+function checkRateLimitBackend(env, errors, warnings) {
+  if (!isSet(env, "RATELIMIT_BACKEND")) return;
+  const value = env.RATELIMIT_BACKEND.trim();
+  if (value !== "settings" && value !== "memory") {
+    return errors.push("RATELIMIT_BACKEND must be settings (the default) or memory; table needs the RateLimitBucket table, which has no migration yet");
+  }
+  if (value === "memory" && env.NODE_ENV === "production") {
+    warnings.push("RATELIMIT_BACKEND is memory; rate limits are kept per process and reset on every restart. Remove the line to share them through the database");
+  }
+}
+
+// The same rule as emailVerificationRequired() in src/lib/auth/verification.ts (tests/ops-env.test.ts keeps the two in step):
+// true or false forces the gate, anything else counts as unset, and unset means on only when SMTP_USER is set.
+const TRUE_VALUES = ["true", "1", "yes", "on"];
+const FALSE_VALUES = ["false", "0", "no", "off"];
+const UNVERIFIED_CAN = "an unconfirmed signup can send messages, run broadcasts, import contacts, create API keys and connect Meta";
+
+function checkEmailVerification(env, warnings) {
+  const forced = (env.EMAIL_VERIFICATION_REQUIRED ?? "").trim().toLowerCase();
+  if (forced && !TRUE_VALUES.includes(forced) && !FALSE_VALUES.includes(forced)) {
+    warnings.push("EMAIL_VERIFICATION_REQUIRED must be true or false; any other value counts as unset");
+  }
+  if (env.NODE_ENV !== "production") return;
+  const mail = Boolean(env.SMTP_USER);
+  if (FALSE_VALUES.includes(forced)) warnings.push(`EMAIL_VERIFICATION_REQUIRED is false, so email verification is not enforced: ${UNVERIFIED_CAN}`);
+  else if (TRUE_VALUES.includes(forced)) {
+    if (!mail) warnings.push("EMAIL_VERIFICATION_REQUIRED is true but SMTP_USER is not set, so no confirmation email can be sent and every new signup stays read-only");
+  } else if (!mail) {
+    warnings.push(`Email verification is not enforced because SMTP_USER is not set (EMAIL_VERIFICATION_REQUIRED is unset): ${UNVERIFIED_CAN}. Set the SMTP lines and it turns on by itself`);
   }
 }
 
@@ -75,7 +111,7 @@ function checkCspMode(env, errors, warnings) {
   const csp = env.CSP_MODE;
   if (isSet(env, "CSP_MODE") && csp !== "report-only" && csp !== "enforce") return errors.push("CSP_MODE must be report-only or enforce");
   if (env.NODE_ENV === "production" && csp !== "enforce") {
-    warnings.push("CSP_MODE is not enforce; the enforced policy still allows inline scripts. Set CSP_MODE=enforce once the report-only log shows no violations (docs/ops.md)");
+    warnings.push("CSP_MODE is not enforce; the enforced policy still allows inline scripts. Set CSP_MODE=enforce once the report-only log shows only the expected violations (docs/ops.md section 6)");
   }
 }
 
@@ -222,7 +258,171 @@ function checkEddy(env, errors, warnings) {
   const dedicated = isSet(env, "EDDY_ANTHROPIC_KEY_DEDICATED") && env.EDDY_ANTHROPIC_KEY_DEDICATED.trim().toLowerCase() === "true";
   if (enabled && !dedicated) {
     warnings.push("EDDY_ENABLED is true but EDDY_ANTHROPIC_KEY_DEDICATED is not; give wa its own Anthropic key with a monthly spend limit set in the Anthropic console, then set EDDY_ANTHROPIC_KEY_DEDICATED=true (docs/ops.md)");
+  } else if (!dedicated && isSet(env, "ANTHROPIC_API_KEY")) {
+    // With Eddy off the AI reply bot, inbox suggestions and creative copy still spend on this key, so the same advice applies.
+    warnings.push("ANTHROPIC_API_KEY is set but EDDY_ANTHROPIC_KEY_DEDICATED is not true; the AI reply bot, inbox suggestions and creative copy may run on a shared key with no spend limit of its own. Give wa its own Anthropic key with a monthly spend limit set in the Anthropic console, then set EDDY_ANTHROPIC_KEY_DEDICATED=true (docs/ops.md)");
   }
+}
+
+// Instagram and Facebook Page ads (docs/IG-PAGE-ADS-SPEC.md 1.4, 9.3, 9.7, 11.2 risk 24; PRM-00). src/lib/promote/flags.ts
+// falls back to the safe default on an unknown value, so a typo such as PROMOTE_ENABLED=yes would quietly keep the feature
+// dark; the startup check names it instead. Values are compared trimmed and lower-cased, as flags.ts reads them.
+
+/** The goal keys PROMOTE_GOALS may list (spec 4.4); keep equal to PROMOTE_GOAL_KEYS in src/lib/promote/flags.ts (a test checks). */
+export const PROMOTE_GOAL_KEYS = [
+  "whatsapp_chats", "lead_form", "website_visits", "instagram_dms", "messenger_chats", "website_sales", "profile_visits",
+  "engagement", "video_views", "awareness", "page_likes", "any_chat",
+];
+export const PROMOTE_PAGE_LANG_VALUES = ["en", "hi", "hinglish"];
+const SWITCH_VALUES = ["0", "1", "false", "true", "no", "yes", "off", "on"];
+
+/** The single-value promote flags and what each accepts. */
+export const PROMOTE_FLAG_VALUES = {
+  PROMOTE_ENABLED: ["off", "admins", "on"],
+  PROMOTE_PREVIEWS: ["meta", "local"],
+  PROMOTE_VIDEO: ["off", "file_url", "resumable"],
+  PROMOTE_AUDIENCES: ["off", "engagement", "all"],
+  LEGAL_DPDP_AUDIENCES_OK: SWITCH_VALUES,
+  PROMOTE_EXPERIMENTAL: SWITCH_VALUES,
+  META_LOGIN_POPUP: SWITCH_VALUES,
+};
+
+/** The comma-list promote flags and the items each may hold. */
+export const PROMOTE_LIST_VALUES = { PROMOTE_GOALS: PROMOTE_GOAL_KEYS, PROMOTE_PAGE_LANGS: PROMOTE_PAGE_LANG_VALUES };
+
+const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "[::1]"];
+
+/** True for an http or https address on 127.0.0.1, localhost or [::1], with no user, password, query or fragment. */
+export function isLoopbackGraphBaseUrl(raw) {
+  let url;
+  try {
+    url = new URL(String(raw ?? "").trim());
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  if (url.username || url.password || url.search || url.hash) return false;
+  return LOOPBACK_HOSTS.includes(url.hostname);
+}
+
+/**
+ * The fake Meta server's address for tests (spec 9.3), or null. GRAPH_BASE_URL counts only outside production and only on a
+ * loopback address, the same rule the startup check applies, so a misconfigured staging or live server still talks to Meta
+ * (risk 24). src/lib/graph/index.ts reads it through here (PRM-03).
+ */
+export function testGraphBaseUrl(env = process.env) {
+  if (!isSet(env, "GRAPH_BASE_URL") || (env.NODE_ENV ?? "").trim() === "production") return null;
+  const raw = env.GRAPH_BASE_URL.trim();
+  return isLoopbackGraphBaseUrl(raw) ? raw.replace(/\/+$/, "") : null;
+}
+
+function checkPromote(env, errors, warnings) {
+  for (const [name, allowed] of Object.entries(PROMOTE_FLAG_VALUES)) {
+    if (isSet(env, name) && !allowed.includes(env[name].trim().toLowerCase())) errors.push(`${name} must be one of ${allowed.join(", ")}`);
+  }
+  for (const [name, allowed] of Object.entries(PROMOTE_LIST_VALUES)) {
+    if (!isSet(env, name)) continue;
+    const items = env[name].split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
+    if (items.some((item) => !allowed.includes(item))) errors.push(`${name} must be a comma-separated list of ${allowed.join(", ")}`);
+  }
+  const graph = isSet(env, "GRAPH_BASE_URL");
+  if (env.NODE_ENV !== "production") {
+    if (graph && !isLoopbackGraphBaseUrl(env.GRAPH_BASE_URL)) {
+      errors.push("GRAPH_BASE_URL must be an http or https address on 127.0.0.1, localhost or [::1] (the fake Meta server for tests); remove it to call Meta");
+    }
+    return;
+  }
+  // The same rule as SPEND_DRY_RUN: a test-only override never reaches the live deployment.
+  if (graph) errors.push("GRAPH_BASE_URL must not be set in production (every Graph call would go to a test server instead of Meta)");
+  const value = (name) => (isSet(env, name) ? env[name].trim().toLowerCase() : "");
+  if (value("PROMOTE_AUDIENCES") === "all" && !ON_VALUES.includes(value("LEGAL_DPDP_AUDIENCES_OK"))) {
+    errors.push("PROMOTE_AUDIENCES=all needs LEGAL_DPDP_AUDIENCES_OK=1 in production (customer lists wait for the lawyer's review); use engagement until then");
+  }
+  if (value("PROMOTE_ENABLED") === "on" && (value("SPEND_ENFORCE") !== "enforce" || value("SPEND_TRIPWIRE") !== "enforce")) {
+    errors.push("PROMOTE_ENABLED=on needs SPEND_ENFORCE=enforce and SPEND_TRIPWIRE=enforce in production (train P3); use admins until both are on");
+  }
+  if (ON_VALUES.includes(value("PROMOTE_EXPERIMENTAL"))) {
+    warnings.push("PROMOTE_EXPERIMENTAL is on in production; ad options Meta has not been verified for show only in workspaces whose ad account is a Meta test account");
+  }
+}
+
+// Studio images, Canva and Meta's ads MCP (docs/specs/ADS-MCP-CANVA-CREATIVE-SPEC.md 5.8, D25; MCC-00). Every switch is off by
+// default, so nothing reaches customers before the owner turns it on. src/lib/studio/flags.ts and src/lib/meta-ads-mcp/flags.ts
+// fall back to off (or the default number) on an unknown value; the startup check names the typo instead. Values are compared
+// trimmed and lower-cased, as the readers do.
+
+/** The on|off switches of Studio, Canva and the ads MCP. Each is off unless set to on. */
+export const STUDIO_FLAG_VALUES = {
+  STUDIO_ENABLED: ["off", "on"],
+  CANVA_VIDEO: ["off", "on"],
+  META_ADS_MCP: ["off", "on"],
+  META_ADS_MCP_RULES: ["off", "on"],
+};
+/** Whole-number settings: [min, max, default]. */
+export const STUDIO_NUMBERS = {
+  STUDIO_DAILY_RENDERS: [10, 5000, 100],
+  META_ADS_MCP_DAILY_CALLS: [50, 10000, 600],
+};
+/** CREATIVE_IMAGE_PROVIDER values. `brand` (the Studio renderer) needs STUDIO_ENABLED=on. */
+export const CREATIVE_IMAGE_PROVIDERS = ["brand", "placeholder", "http"];
+/** Addresses of the fake Canva and ads MCP servers for tests: refused in production, loopback only elsewhere (5.8). */
+export const STUDIO_TEST_URLS = ["CANVA_API_BASE_URL", "CANVA_AUTH_BASE_URL", "META_ADS_MCP_URL"];
+
+/** A test-only URL when it may be used: outside production and on a loopback address (the GRAPH_BASE_URL rule); else null. */
+function testOnlyUrl(env, name) {
+  if (!isSet(env, name) || (env.NODE_ENV ?? "").trim() === "production") return null;
+  const raw = env[name].trim();
+  return isLoopbackGraphBaseUrl(raw) ? raw.replace(/\/+$/, "") : null;
+}
+
+/** The fake Canva server's API and sign-in addresses for tests, each null unless usable (outside production, loopback only). */
+export function testCanvaBaseUrls(env = process.env) {
+  return { api: testOnlyUrl(env, "CANVA_API_BASE_URL"), auth: testOnlyUrl(env, "CANVA_AUTH_BASE_URL") };
+}
+
+/** The fake ads MCP server's address for tests, or null (outside production, loopback only). */
+export function testMetaAdsMcpUrl(env = process.env) {
+  return testOnlyUrl(env, "META_ADS_MCP_URL");
+}
+
+function checkStudio(env, errors, warnings) {
+  for (const [name, allowed] of Object.entries(STUDIO_FLAG_VALUES)) {
+    if (isSet(env, name) && !allowed.includes(env[name].trim().toLowerCase())) errors.push(`${name} must be one of ${allowed.join(", ")}`);
+  }
+  for (const [name, [min, max]] of Object.entries(STUDIO_NUMBERS)) {
+    if (!isSet(env, name)) continue;
+    const raw = env[name].trim();
+    if (!/^\d{1,10}$/.test(raw) || Number(raw) < min || Number(raw) > max) errors.push(`${name} must be a whole number from ${min} to ${max}`);
+  }
+  const value = (name) => (isSet(env, name) ? env[name].trim().toLowerCase() : "");
+  const studioOn = value("STUDIO_ENABLED") === "on";
+  if (isSet(env, "CREATIVE_IMAGE_PROVIDER")) {
+    if (!CREATIVE_IMAGE_PROVIDERS.includes(env.CREATIVE_IMAGE_PROVIDER.trim())) errors.push(`CREATIVE_IMAGE_PROVIDER must be one of ${CREATIVE_IMAGE_PROVIDERS.join(", ")}`);
+    else if (env.CREATIVE_IMAGE_PROVIDER.trim() === "brand" && !studioOn) warnings.push("CREATIVE_IMAGE_PROVIDER is brand but STUDIO_ENABLED is not on; the brand images need Studio, so set STUDIO_ENABLED=on or use placeholder");
+  }
+  if (isSet(env, "DISABLE_SYSTEM_FONTS_LOAD") && env.DISABLE_SYSTEM_FONTS_LOAD.trim() !== "1") errors.push("DISABLE_SYSTEM_FONTS_LOAD must be 1 (images are drawn with the bundled fonts only) or unset");
+  else if (studioOn && !isSet(env, "DISABLE_SYSTEM_FONTS_LOAD")) warnings.push("STUDIO_ENABLED is on but DISABLE_SYSTEM_FONTS_LOAD is not 1; set it so images are drawn with the bundled fonts only");
+
+  const id = isSet(env, "CANVA_CLIENT_ID");
+  const secret = isSet(env, "CANVA_CLIENT_SECRET");
+  if (id && !secret) errors.push("CANVA_CLIENT_ID is set but CANVA_CLIENT_SECRET is not; set both from the Canva Developer Portal, or neither");
+  if (!id && secret) warnings.push("CANVA_CLIENT_SECRET is set but CANVA_CLIENT_ID is not, so Canva stays off");
+  if (secret && PLACEHOLDER.test(env.CANVA_CLIENT_SECRET.trim())) errors.push("CANVA_CLIENT_SECRET looks like a placeholder");
+  if (id && secret && !studioOn) warnings.push("CANVA_CLIENT_ID and CANVA_CLIENT_SECRET are set but STUDIO_ENABLED is not on, so Canva stays off; Canva works only with Studio on");
+
+  const production = env.NODE_ENV === "production";
+  for (const name of STUDIO_TEST_URLS) {
+    if (!isSet(env, name)) continue;
+    // The same rule as GRAPH_BASE_URL: a test-only override never reaches the live deployment.
+    if (production) errors.push(`${name} must not be set in production (it points the app at a test server instead of the real service)`);
+    else if (!isLoopbackGraphBaseUrl(env[name])) errors.push(`${name} must be an http or https address on 127.0.0.1, localhost or [::1] (a fake server for tests); remove it to use the real service`);
+  }
+}
+
+/** Studio features that are off because their configuration is missing (listed only while STUDIO_ENABLED is on). */
+function studioDisabled(env) {
+  if (!isSet(env, "STUDIO_ENABLED") || env.STUDIO_ENABLED.trim().toLowerCase() !== "on") return [];
+  return isSet(env, "CANVA_CLIENT_ID") && isSet(env, "CANVA_CLIENT_SECRET") ? [] : ["Canva designs in Creative Studio (CANVA_CLIENT_ID, CANVA_CLIENT_SECRET)"];
 }
 
 // Android app (docs/PLAY-STORE.md): /.well-known/assetlinks.json ties the Trusted Web Activity to this site. Both variables are
@@ -290,11 +490,15 @@ export function checkEnv(env = process.env) {
 
   checkCspMode(env, errors, warnings);
   if (isSet(env, "LOG_LEVEL") && !LOG_LEVELS.includes(env.LOG_LEVEL.toLowerCase())) warnings.push("LOG_LEVEL must be one of debug, info, warn, error");
+  checkRateLimitBackend(env, errors, warnings);
+  checkEmailVerification(env, warnings);
   checkSpendFlags(env, errors, warnings);
   checkLegacyBudgetCeiling(env, warnings);
   checkNotifySecret(env, errors);
   checkEddy(env, errors, warnings);
+  checkPromote(env, errors, warnings);
+  checkStudio(env, errors, warnings);
   checkAndroid(env, warnings);
 
-  return { errors, warnings, disabled: featureFlags(env, warnings) };
+  return { errors, warnings, disabled: [...featureFlags(env, warnings), ...studioDisabled(env)] };
 }

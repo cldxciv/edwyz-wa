@@ -10,7 +10,7 @@ import { formatDuration } from "@/lib/reports/stats";
 import type { Overview } from "@/lib/reports/metrics";
 import { BarChart, LineChart } from "./Charts";
 import { ReplyTimes } from "./ReplyTimes";
-import { PRESETS, failureTitle, formatPercent, presetLabel, presetRange, rangeProblem, rangeText, shareText, sum } from "./helpers";
+import { PRESETS, failureTitle, formatPercent, plural, presetLabel, presetRange, rangeProblem, rangeText, shareText, sum } from "./helpers";
 import { useBrowserTimeZone } from "./useBrowserTimeZone";
 
 type Loaded = { key: string; data: Overview } | { key: string; error: string };
@@ -43,6 +43,16 @@ function useOverview(path: string | null) {
   return { data: lastData, error, refreshing: path !== null && !settled, loading: path !== null && !settled && lastData === null, reload };
 }
 
+/** `value`, once it has stopped changing for `ms`: typing a date one digit at a time sends one request, not one per digit. */
+function useSettled<T>(value: T, ms: number): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setSettled(value), ms);
+    return () => clearTimeout(id);
+  }, [value, ms]);
+  return settled;
+}
+
 export function ReportsView() {
   const role = useRole();
   const manager = canManage(role);
@@ -54,7 +64,8 @@ export function ReportsView() {
   useEffect(() => {
     if (browserTz) setCustom(presetRange(30, browserTz));
   }, [browserTz]);
-  const range = preset === "custom" ? custom : presetRange(preset, tz);
+  const typedCustom = useSettled(custom, 600);
+  const range = preset === "custom" ? typedCustom : presetRange(preset, tz);
 
   const problem = rangeProblem(range.from, range.to);
   const path = problem || !browserTz ? null : `/api/reports/overview?from=${range.from}&to=${range.to}&tz=${encodeURIComponent(tz)}`;
@@ -118,9 +129,10 @@ export function ReportsView() {
       )}
 
       <div aria-busy={refreshing || undefined}>
-        {error ? (
+        {/* An impossible range shows nothing rather than the last good range's numbers under the wrong dates. */}
+        {problem ? null : error ? (
           <ErrorState title="We could not load your reports" message="Check your connection and try again. If it keeps happening, contact support." action={<Button variant="secondary" onClick={reload}>Try again</Button>} />
-        ) : loading || (!browserTz && !problem) ? (
+        ) : loading || !browserTz ? (
           <ReportSkeleton />
         ) : data ? (
           <div className={cn("transition-opacity duration-(--dur-base)", refreshing && "opacity-60")}>
@@ -129,8 +141,14 @@ export function ReportsView() {
         ) : null}
       </div>
       <p className="mt-6 text-xs text-muted" aria-live="polite">
-        {refreshing && data ? "Updating... " : ""}
-        Showing {rangeText(range.from, range.to)}, both days included. Days follow your time zone ({tz}).
+        {problem ? (
+          "Fix the dates above to see your report."
+        ) : (
+          <>
+            {refreshing && data ? "Updating... " : ""}
+            Showing {rangeText(range.from, range.to)}, both days included. Days follow your time zone ({tz}).
+          </>
+        )}
       </p>
     </div>
   );
@@ -183,15 +201,18 @@ function Body({ data }: { data: Overview }) {
 
   return (
     <div className="space-y-6">
-      <section aria-label="Summary" className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <section aria-label="Summary" className={cn("grid grid-cols-2 gap-3", data.responseTimes ? "md:grid-cols-3" : "md:grid-cols-4")}>
         <Stat label="Messages received" value={received.toLocaleString()} />
         <Stat label="Messages sent" value={sent.toLocaleString()} />
         <Stat label="Messages that failed" value={failed.toLocaleString()} hint={sent > 0 ? `${shareText(failed, sent)} of sent` : "None sent yet"} />
-        <Stat
-          label="Typical first reply time"
-          value={replyTime(fr.medianSeconds)}
-          hint={fr.conversations ? `9 in 10 replies within ${replyTime(fr.p90Seconds)}, across ${fr.conversations.toLocaleString()} conversations${fr.capped ? " (most recent)" : ""}` : "Appears after your first reply"}
-        />
+        {/* The reply times section below has its own "Typical first reply"; this card stands in only when that section is missing. */}
+        {!data.responseTimes && (
+          <Stat
+            label="Typical first reply time"
+            value={replyTime(fr.medianSeconds)}
+            hint={fr.conversations ? `9 in 10 replies within ${replyTime(fr.p90Seconds)}, across ${plural(fr.conversations, "conversation")}${fr.capped ? " (most recent)" : ""}` : "Appears after your first reply"}
+          />
+        )}
       </section>
       {data.messagesSource !== "live" && <p className="text-xs text-muted">Older days come from stored daily summaries.</p>}
       <ReplyTimes data={data.responseTimes} />

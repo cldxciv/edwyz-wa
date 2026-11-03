@@ -308,9 +308,10 @@ describe("send_text_reply confirm guard", () => {
     expect(inbox.sendText).not.toHaveBeenCalled();
   });
 
-  it("refuses opted-out contacts", async () => {
+  it("drafts a reply to a contact who opted out: a reply in the window is not marketing (owner default 1)", async () => {
     open({ conversation: { contact: contactRow({ optedOutAt: new Date() }) } });
-    expect((await call("send_text_reply", { conversationId: "cv1", text: "Hi", confirm: true })).result?.isError).toBe(true);
+    const r = payload(await call("send_text_reply", { conversationId: "cv1", text: "Hi" }));
+    expect(r.sent).toBe(false);
     expect(inbox.sendText).not.toHaveBeenCalled();
   });
 
@@ -365,6 +366,17 @@ describe("send_template_message confirm guard", () => {
   it("unapproved or unknown templates are refused", async () => {
     db.template.findFirst.mockResolvedValue(null);
     expect((await call("send_template_message", { ...args, confirm: true })).result?.isError).toBe(true);
+  });
+
+  it("refuses a marketing template to a contact who opted out, even with an old opt-in, and drafts a utility one", async () => {
+    db.contact.findFirst.mockResolvedValue(contactRow({ optIn: true, optedOutAt: new Date() }));
+    db.template.findFirst.mockResolvedValue({ id: "tp1", category: "MARKETING" });
+    const refused = await call("send_template_message", args);
+    expect(refused.result?.isError).toBe(true);
+    expect(JSON.stringify(refused.result)).toMatch(/opted out of marketing/);
+    db.template.findFirst.mockResolvedValue({ id: "tp1", category: "UTILITY" });
+    expect(payload(await call("send_template_message", args)).sent).toBe(false);
+    expect(v1.sendMessageV1).not.toHaveBeenCalled();
   });
 });
 

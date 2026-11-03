@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const db = vi.hoisted(() => {
   const model = () => ({ findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn(), create: vi.fn(), upsert: vi.fn(), groupBy: vi.fn() });
-  return { conversionEvent: model(), lead: model(), contact: model(), conversation: model(), platformSetting: model(), auditLog: { create: vi.fn() } };
+  return { conversionEvent: model(), lead: model(), contact: model(), conversation: model(), platformSetting: model(), ad: model(), auditLog: { create: vi.fn() } };
 });
 const graph = vi.hoisted(() => ({ graphFetchAs: vi.fn() }));
 const connect = vi.hoisted(() => ({ listAssets: vi.fn(), getAssetAccess: vi.fn() }));
@@ -22,10 +22,12 @@ vi.mock("@/lib/graph", async () => {
 vi.mock("@/lib/meta-connect", () => connect);
 vi.mock("@/lib/queue", () => queue);
 vi.mock("@/lib/auth", () => ({ getActor: async () => ({ userId: "u1", tenantId: auth.tenantId, role: auth.role }) }));
+const emitters = vi.hoisted(() => ({ emitLeadCreated: vi.fn() }));
+vi.mock("@/lib/integrations/emitters", () => emitters);
 
 import { GraphError } from "@/lib/graph";
-import { buildConversionPayload, conversionEventId, hashEmail, hashPhone } from "@/lib/conversions/payload";
-import { parseReferral, captureReferral, listConversationsByAdSource } from "@/lib/conversions/referral";
+import { buildConversionPayload, conversionEventId, hashEmail, hashPhone, metaEventName } from "@/lib/conversions/payload";
+import { parseReferral, captureReferral, listConversationsByAdSource, ctwaLeadgenId, recordCtwaLead, CTWA_LEAD_WINDOW_MS } from "@/lib/conversions/referral";
 import { queueConversion } from "@/lib/conversions";
 import { deliverConversion } from "@/lib/conversions/worker";
 import { POST as requeue } from "@/app/api/conversions/[id]/requeue/route";
@@ -84,6 +86,17 @@ describe("payload", () => {
     const p = buildConversionPayload({ tenantId: "t1", subjectId: "l1", eventName: "Lead", eventTime: new Date(), email: EMAIL });
     expect(p.data[0].action_source).toBe("system_generated");
     expect(p.data[0]).not.toHaveProperty("messaging_channel");
+    expect(p.data[0].event_name).toBe("Lead");
+  });
+  it("names a new lead from a WhatsApp ad chat LeadSubmitted, the business messaging lead event", () => {
+    const p = buildConversionPayload({ tenantId: "t1", subjectId: "l1", eventName: "Lead", eventTime: new Date(), ctwaClid: "clid-123" });
+    expect(p.data[0]).toMatchObject({ event_name: "LeadSubmitted", action_source: "business_messaging", messaging_channel: "whatsapp" });
+    // The id stays keyed on Edwyz's own stage name.
+    expect(p.data[0].event_id).toBe(conversionEventId("t1", "l1", "Lead"));
+    expect(metaEventName("Lead", true)).toBe("LeadSubmitted");
+    expect(metaEventName("Lead", false)).toBe("Lead");
+    expect(metaEventName("QualifiedLead", true)).toBe("QualifiedLead");
+    expect(metaEventName("Purchase", true)).toBe("Purchase");
   });
   it("derives a stable event id per subject and event, distinct across tenants", () => {
     expect(conversionEventId("t1", "l1", "Lead")).toBe(conversionEventId("t1", "l1", "Lead"));
@@ -240,5 +253,107 @@ describe("routes", () => {
     expect((await put({ enabled: true, datasetAssetId: "other-tenant-asset" })).status).toBe(400);
     expect((await put({ enabled: true, datasetAssetId: "a1" })).status).toBe(200);
     expect(db.platformSetting.upsert.mock.calls[0][0].where).toEqual({ key: "conversions:t1" });
+  });
+});
+
+describe("click-to-WhatsApp chats become leads (IG spec D14)", () => {
+  const NOW = new Date("2026-10-30T10:00:00Z");
+  const ref = { sourceType: "ad", sourceId: "ad-77", headline: "Free check-up", sourceUrl: "https://fb.me/ad", ctwaClid: "AR-click-1" };
+  const setup = () => {
+    db.conversation.findFirst.mockResolvedValue({ contactId: "c1", assignedToId: "u5" });
+    db.ad.findFirst.mockResolvedValue({ adSet: { campaign: { metaCampaignId: "mc-9" } } });
+    db.lead.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ id: "l9", status: "new", ...data }));
+    db.conversionEvent.findFirst.mockResolvedValue(null);
+    db.conversionEvent.create.mockResolvedValue({ id: "ev9" });
+    emitters.emitLeadCreated.mockResolvedValue(undefined);
+  };
+
+  it("creates one ctwa lead with the chat's owner and the campaign, and queues a Lead conversion", async () => {
+    setup();
+    // The 30-day check finds nothing; queueConversion then finds the new lead.
+    db.lead.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: "l9" });
+    expect(await recordCtwaLead("t1", "cv1", ref, NOW)).toBe("l9");
+    const data = db.lead.create.mock.calls[0][0].data;
+    expect(data).toMatchObject({ tenantId: "t1", leadgenId: "ctwa:AR-click-1", contactId: "c1", adMetaId: "ad-77", campaignMetaId: "mc-9", assignedToId: "u5", leadFormId: null });
+    expect(data.fields).toEqual({ source: "click_to_whatsapp", ad_headline: "Free check-up", ad_link: "https://fb.me/ad" });
+    const recent = db.lead.findFirst.mock.calls[0][0].where;
+    expect(recent).toMatchObject({ tenantId: "t1", contactId: "c1", adMetaId: "ad-77", leadgenId: { startsWith: "ctwa:" } });
+    expect(recent.createdAt.gte.getTime()).toBe(NOW.getTime() - CTWA_LEAD_WINDOW_MS);
+    expect(db.conversionEvent.create.mock.calls[0][0].data).toMatchObject({ tenantId: "t1", leadId: "l9", contactId: "c1", eventName: "Lead" });
+    expect(queue.enqueue).toHaveBeenCalledWith("conversions", { tenantId: "t1", conversionEventId: "ev9" }, expect.anything());
+    // Integrations hear of it as lead.created; the ctwa: leadgen id makes its source ctwa.
+    expect(emitters.emitLeadCreated).toHaveBeenCalledTimes(1);
+    expect(emitters.emitLeadCreated).toHaveBeenCalledWith(
+      "t1",
+      expect.objectContaining({ id: "l9", status: "new", leadgenId: "ctwa:AR-click-1", contactId: "c1", adMetaId: "ad-77", campaignMetaId: "mc-9", createdAt: NOW, fields: data.fields }),
+    );
+    expect(db.conversation.findFirst.mock.calls[0][0].where).toEqual({ id: "cv1", tenantId: "t1" });
+  });
+
+  it("at most one per contact per ad in 30 days, and the same click delivered twice adds nothing", async () => {
+    setup();
+    db.lead.findFirst.mockResolvedValueOnce({ id: "old" });
+    expect(await recordCtwaLead("t1", "cv1", ref, NOW)).toBeNull();
+    expect(db.lead.create).not.toHaveBeenCalled();
+    db.lead.findFirst.mockResolvedValue(null);
+    db.lead.create.mockRejectedValueOnce(Object.assign(new Error("unique"), { code: "P2002" }));
+    expect(await recordCtwaLead("t1", "cv1", ref, NOW)).toBeNull();
+    expect(db.conversionEvent.create).not.toHaveBeenCalled();
+    expect(emitters.emitLeadCreated).not.toHaveBeenCalled();
+  });
+
+  it("a webhook that cannot be queued never undoes the lead", async () => {
+    setup();
+    db.lead.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: "l9" });
+    emitters.emitLeadCreated.mockRejectedValueOnce(new Error("queue down"));
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect(await recordCtwaLead("t1", "cv1", ref, NOW)).toBe("l9");
+    expect(quiet).toHaveBeenCalledWith(expect.stringMatching(/lead.created/));
+    quiet.mockRestore();
+  });
+
+  it("needs an ad (or post) or a click id, and a contact on the chat", async () => {
+    setup();
+    expect(await recordCtwaLead("t1", "cv1", { sourceUrl: "https://fb.me/x" }, NOW)).toBeNull();
+    db.conversation.findFirst.mockResolvedValue(null);
+    expect(await recordCtwaLead("t1", "cv1", ref, NOW)).toBeNull();
+    expect(db.lead.create).not.toHaveBeenCalled();
+  });
+
+  it("keys a lead by the click id, else by ad, contact and 30-day window", () => {
+    expect(ctwaLeadgenId(ref, "c1", NOW)).toBe("ctwa:AR-click-1");
+    const a = ctwaLeadgenId({ sourceId: "ad-77" }, "c1", NOW);
+    expect(a).toMatch(/^ctwa:ad-77:c1:\d+$/);
+    expect(ctwaLeadgenId({ sourceId: "ad-77" }, "c1", new Date(NOW.getTime() + CTWA_LEAD_WINDOW_MS))).not.toBe(a);
+  });
+
+  it("captureReferral records the lead, and a lead failure never loses the stored referral", async () => {
+    setup();
+    db.conversation.updateMany.mockResolvedValue({ count: 1 });
+    db.lead.findFirst.mockRejectedValue(new Error("db down"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect(await captureReferral("t1", "cv1", { source_id: "ad-77", source_type: "ad", ctwa_clid: "AR-click-1" })).toBe(true);
+    expect(errors).toHaveBeenCalled();
+    errors.mockRestore();
+  });
+});
+
+describe("lead ids for Meta's conversion leads", () => {
+  it("adds user_data.lead_id and the CRM custom data for a lead-ad lead only", () => {
+    const withLead = buildConversionPayload({ tenantId: "t1", subjectId: "l1", eventName: "QualifiedLead", eventTime: new Date("2026-10-01T00:00:00Z"), leadgenId: "1234567890123" });
+    expect(withLead.data[0].user_data).toEqual({ lead_id: "1234567890123" });
+    expect(withLead.data[0]).toMatchObject({ action_source: "system_generated", custom_data: { event_source: "crm", lead_event_source: "Edwyz" } });
+    const ctwa = buildConversionPayload({ tenantId: "t1", subjectId: "l1", eventName: "Lead", eventTime: new Date(), ctwaClid: "clid", leadgenId: "ctwa:clid" });
+    expect(ctwa.data[0].user_data).not.toHaveProperty("lead_id");
+    expect(ctwa.data[0]).not.toHaveProperty("custom_data");
+  });
+
+  it("the worker sends the lead's Meta id", async () => {
+    setupDelivery({ ctwa: null });
+    db.lead.findFirst.mockResolvedValue({ id: "l1", contactId: "c1", leadgenId: "998877", fields: { email: EMAIL } });
+    await deliverConversion("t1", "e1", false);
+    const body = graph.graphFetchAs.mock.calls[0][1].body;
+    expect(body.data[0].user_data.lead_id).toBe("998877");
+    expect(body.data[0].custom_data).toEqual({ event_source: "crm", lead_event_source: "Edwyz" });
   });
 });

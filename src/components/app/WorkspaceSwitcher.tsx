@@ -1,13 +1,16 @@
 "use client";
 
 import { useState } from "react";
+import { projectMenuItems } from "@/components/projects/links";
 import { apiFetch } from "@/components/ui";
 import { Dropdown } from "./Dropdown";
 import { Icon } from "./Icon";
 
 type Me = { workspaces: { id: string; name: string; role: string }[]; workspace: { id: string } | null };
 
-/** Shows the workspace name; with two or more workspaces it becomes a menu that switches via /api/auth/switch-workspace. */
+/**
+ * Shows the workspace name and a menu that switches via /api/auth/switch-workspace, then links to All projects and New project.
+ */
 export function WorkspaceSwitcher({ currentName }: { currentName: string }) {
   const [me, setMe] = useState<Me | null>(null);
   const [error, setError] = useState("");
@@ -50,7 +53,11 @@ export function WorkspaceSwitcher({ currentName }: { currentName: string }) {
           </>
         }
         header={<p className="text-xs font-medium uppercase tracking-wide text-muted">Switch workspace</p>}
-        items={items.length > 0 ? items : [{ label: me ? "Only this workspace" : "Loading...", description: currentName, onSelect: () => undefined }]}
+        items={[
+          ...(items.length > 0 ? items : [{ label: me ? "Only this workspace" : "Loading...", description: currentName, onSelect: () => undefined }]),
+          // All projects and New project (one workspace per project or client).
+          ...projectMenuItems(),
+        ]}
       />
       {error && (
         <p role="alert" className="absolute left-0 top-full z-50 mt-1 w-64 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">

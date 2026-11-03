@@ -480,6 +480,28 @@ describe("the task and the admin list's cache", () => {
     expect(quiet).toMatchObject({ tenantId: "t2", noAdAccount: true, adsToday: null, metaLimit: { state: "no_ad_account", label: "No ad account" } });
   });
 
+  it("builds the other workspaces' rows a few at a time within the cache's own budget; the next run carries on after the last row it reached", async () => {
+    const quiet = ["q1", "q2", "q3", "q4", "q5", "q6"];
+    h.db.seed("tenant", quiet.map((id) => ({ id, name: id, slug: id, status: "active", billingExempt: false, deletedAt: null })));
+    // every row takes 3 s: the first four, built side by side, take the batch past its 10 s budget
+    const phones = h.db.model("phoneNumber") as unknown as { count: (...a: unknown[]) => Promise<number> };
+    const count = phones.count;
+    const slow = vi.spyOn(phones, "count").mockImplementation(async (...a: unknown[]) => {
+      vi.setSystemTime(new Date(Date.now() + 3_000));
+      return count.apply(phones, a);
+    });
+    const written = () => rows("platformSetting").filter((r) => String(r.key).startsWith("spend:summary:q")).map((r) => String(r.key).slice("spend:summary:".length));
+    try {
+      expect(await runAllBreakers({ deps, env: ENFORCE })).toMatchObject({ summaries: 4 });
+      expect(written()).toEqual(["q1", "q2", "q3", "q4"]);
+      expect(rows("platformSetting").find((r) => r.key === "spend:summary:cursor")?.value).toEqual({ after: "q4" });
+      await runAllBreakers({ deps, env: ENFORCE });
+      expect(written()).toEqual(quiet);
+    } finally {
+      slow.mockRestore();
+    }
+  });
+
   it("labels the demo workspace and leaves it out of the risk sort", async () => {
     seed();
     rows("metaAsset")[0].meta = { currency: "INR", timezone: "Asia/Kolkata", demo: true };

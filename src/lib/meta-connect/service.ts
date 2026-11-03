@@ -4,10 +4,11 @@ import { openSecret, sealSecret } from "@/lib/crypto/secrets";
 import { prisma } from "@/lib/db";
 import { appGraphFetch, graphFetchAs } from "@/lib/graph";
 import { describeError } from "@/lib/safe-error";
+import { metaLoginPopup } from "@/lib/promote/flags";
 import { formatMinor } from "@/lib/spend/money";
 import { HttpError, type Actor } from "@/lib/tenancy";
 import type { Prisma } from "@/generated/prisma/client";
-import { activeTenantIds, discoverAssets, pagesLiveElsewhere, runPool, SUBSCRIBE_CONCURRENCY, unsubscribePageFromApp } from "./discovery";
+import { activeTenantIds, discoverAssets, mergeBlocks, pagesLiveElsewhere, runPool, storePageBackedIdentity, SUBSCRIBE_CONCURRENCY, unsubscribePageFromApp } from "./discovery";
 import { missingScopes, scopeSummary, unusedScopes } from "./scopes";
 import { consumeState, issueState } from "./state";
 
@@ -35,11 +36,13 @@ export const redirectUri = () => `${siteUrl()}/api/meta-connect/callback`;
 export const POPUP_STATE_MARKER = ".popup";
 
 /**
- * What the popup's closing page and its opener agree on: the message `source`, the BroadcastChannel name and the meta tag
- * the opener reads when the page's script cannot run. src/components/meta-connect/useFacebookLoginPopup.ts holds the same
- * values (it is browser code and cannot import this file); tests/eddy-guides.test.ts pins both.
+ * What the popup's closing page and its opener agree on: the message `source`, the BroadcastChannel name, the meta tag the
+ * opener reads when the page's script cannot run, and the localStorage key the page writes so the opener's storage event
+ * hears the outcome even when the browser cut window.opener (docs/IG-PAGE-ADS-SPEC.md 3.2, D20). Only the outcome word and a
+ * time go there, never a code or a token. src/components/meta-connect/useFacebookLoginPopup.ts holds the same values (it is
+ * browser code and cannot import this file); tests/eddy-guides.test.ts pins both.
  */
-export const CONNECT_POPUP = { source: "edwyz-meta-connect", channel: "edwyz-meta-connect", meta: "edwyz-meta-connect" } as const;
+export const CONNECT_POPUP = { source: "edwyz-meta-connect", channel: "edwyz-meta-connect", meta: "edwyz-meta-connect", storage: "wa-meta-connect" } as const;
 export type ConnectPopupOutcome = "connected" | "cancelled" | "failed";
 
 /** The signed state and whether the attempt runs in a popup. */
@@ -49,11 +52,17 @@ export function splitConnectState(raw: string | null | undefined): { state: stri
   return { state: raw, popup: false };
 }
 
-export async function startConnect(actor: Actor, opts: { popup?: boolean } = {}): Promise<{ url: string }> {
+/**
+ * Starts a Facebook Login for Business attempt. `popup` in the answer says whether the attempt runs in the popup: false when it
+ * was not asked for, or when META_LOGIN_POPUP=off, so the browser closes the window it opened and moves the whole page there
+ * instead (today's redirect).
+ */
+export async function startConnect(actor: Actor, opts: { popup?: boolean; env?: Record<string, string | undefined> } = {}): Promise<{ url: string; popup: boolean }> {
   const { META_APP_ID: appId, META_LOGIN_CONFIG_ID: configId } = process.env;
   if (!appId || !configId) throw new HttpError(503, "Meta connection is not configured yet.");
+  const popup = opts.popup === true && metaLoginPopup(opts.env ?? process.env);
   const signed = await issueState(actor.tenantId, actor.userId);
-  const state = opts.popup ? `${signed}${POPUP_STATE_MARKER}` : signed;
+  const state = popup ? `${signed}${POPUP_STATE_MARKER}` : signed;
   const params = new URLSearchParams({
     client_id: appId,
     redirect_uri: redirectUri(),
@@ -63,7 +72,7 @@ export async function startConnect(actor: Actor, opts: { popup?: boolean } = {})
     override_default_response_type: "true",
   });
   await audit({ tenantId: actor.tenantId, userId: actor.userId, action: "meta_connect.started" });
-  return { url: `https://www.facebook.com/${GRAPH_API_VERSION}/dialog/oauth?${params.toString()}` };
+  return { url: `https://www.facebook.com/${GRAPH_API_VERSION}/dialog/oauth?${params.toString()}`, popup };
 }
 
 type TokenResponse = { access_token?: string; expires_in?: number };
@@ -104,7 +113,11 @@ export function healthStatus(info: Pick<DebugInfo, "valid" | "expiresAt">, now =
   return left <= 0 ? "expired" : left <= EXPIRING_SOON_MS ? "expiring" : "active";
 }
 
-/** Completes the login redirect: verifies state for this tenant and user, exchanges the code, stores the sealed token, and discovers assets. */
+/**
+ * Completes the login redirect: verifies state for this tenant and user, exchanges the code, stores the sealed token, and
+ * discovers assets. `lastCheckedAt` is written only once discovery has finished, so the popup's opener, which polls the
+ * connections list (D20), sees the change only when the assets are there.
+ */
 export async function completeConnect(actor: Actor, code: string, state: string | null): Promise<{ connectionId: string }> {
   await consumeState(actor.tenantId, actor.userId, splitConnectState(state).state);
   if (!code || code.length > 2048) throw new HttpError(400, "Missing authorization code.");
@@ -118,7 +131,6 @@ export async function completeConnect(actor: Actor, code: string, state: string 
     tokenExpiresAt: expiresAt,
     status: healthStatus({ valid: true, expiresAt }),
     connectedByUserId: actor.userId,
-    lastCheckedAt: new Date(),
   };
   const connection = await prisma.metaConnection.upsert({
     where: { tenantId_metaUserId: { tenantId: actor.tenantId, metaUserId: info.userId } },
@@ -126,7 +138,10 @@ export async function completeConnect(actor: Actor, code: string, state: string 
     update: data,
   });
   const found = await discoverAssets(actor.tenantId, connection.id, token, { subscribeBudgetMs: REQUEST_DISCOVERY_BUDGET_MS });
-  if (found.businessId) await prisma.metaConnection.updateMany({ where: { id: connection.id, tenantId: actor.tenantId }, data: { businessId: found.businessId } });
+  await prisma.metaConnection.updateMany({
+    where: { id: connection.id, tenantId: actor.tenantId },
+    data: { lastCheckedAt: new Date(), ...(found.businessId ? { businessId: found.businessId } : {}) },
+  });
   // Meta's spending limit (docs/SPEND-CONTROLS-SPEC.md 5.1): only the owner can turn it on. When an admin connected, the
   // owner gets the task; the owner sees the consent step on the Connections page. Best effort, never fails the connect.
   if (actor.role === "admin") {
@@ -165,6 +180,98 @@ export async function refreshConnection(actor: Actor, connectionId: string): Pro
   const found = await discoverAssets(actor.tenantId, connection.id, token, { subscribeBudgetMs: REQUEST_DISCOVERY_BUDGET_MS });
   await audit({ tenantId: actor.tenantId, userId: actor.userId, action: "meta_connect.refreshed", target: connection.id });
   return { counts: found.counts };
+}
+
+// =====================================================================================================================
+// "Run Instagram ads using your Page" (docs/IG-PAGE-ADS-SPEC.md 8.3, C3, C8)
+// =====================================================================================================================
+
+export type InstagramIdentityResult = {
+  /** The Page-backed (ads-only) Instagram identity's Meta id. */
+  instagramId: string;
+  /** False when the Page already had one: Meta allows one per Page, so it is reused. */
+  created: boolean;
+  /** Discovery ran again, so the rest of the Page's readiness is up to date too. */
+  refreshed: boolean;
+};
+
+export type InstagramIdentityDeps = {
+  /** C3 and C8 (promote/meta.ts). */
+  meta: Pick<import("@/lib/promote/meta").PromoteMeta, "listPageBackedInstagram" | "createPageBackedInstagram">;
+  /** Rediscovers the connection's assets afterwards. */
+  refresh: (actor: Actor, connectionId: string) => Promise<unknown>;
+  /** SPEND_DRY_RUN: Meta answers with a fake id and nothing is stored. */
+  dryRun?: boolean;
+};
+
+const identityInFlight = new Map<string, Promise<InstagramIdentityResult>>();
+
+export const INSTAGRAM_IDENTITY_COPY = {
+  notFound: "That Facebook Page isn't connected to this workspace. Refresh your connections and try again.",
+  inactive: "That Facebook Page is no longer available on your Meta account. Connect again to fix it.",
+  noAdvertise: "You need the Advertise permission for this Page first. Connect again as someone who manages ads for this Page.",
+} as const;
+
+/**
+ * Makes the Page's ads-only Instagram identity, once per Page. A stored `pageBackedIgId` is reused; without one, Meta is asked
+ * whether the Page already has one (C3) before anything is created (C8). The id is stored on the Page at once (with the time
+ * it was made, so a C3 that doesn't list a new identity yet can't clear it), so a second tap reuses it even if the refresh
+ * fails, and it is stored as an Instagram asset with `pageBacked` at once too, so readiness finds it whether or not the
+ * refresh's C3 reaches this Page. Then discovery runs again. Two taps at the same time share one request.
+ */
+export async function ensurePageBackedInstagram(actor: Actor, pageAssetId: unknown, deps?: Partial<InstagramIdentityDeps>): Promise<InstagramIdentityResult> {
+  if (typeof pageAssetId !== "string" || !pageAssetId || pageAssetId.length > 64) throw new HttpError(400, "Choose a Facebook Page first.");
+  const page = (await prisma.metaAsset.findFirst({
+    where: { id: pageAssetId, tenantId: actor.tenantId, type: "page" },
+    select: { id: true, type: true, externalId: true, name: true, status: true, meta: true, connectionId: true },
+  })) as { id: string; type: "page"; externalId: string; name?: string | null; status: string; meta: unknown; connectionId: string } | null;
+  if (!page) throw new HttpError(404, INSTAGRAM_IDENTITY_COPY.notFound);
+  if (page.status !== "active") throw new HttpError(409, INSTAGRAM_IDENTITY_COPY.inactive);
+  const meta = (page.meta && typeof page.meta === "object" ? page.meta : {}) as Record<string, unknown>;
+  if (meta.canAdvertise === false) throw new HttpError(409, INSTAGRAM_IDENTITY_COPY.noAdvertise);
+
+  const key = `${actor.tenantId}:${page.externalId}`;
+  const running = identityInFlight.get(key);
+  if (running) return running;
+  const run = (async (): Promise<InstagramIdentityResult> => {
+    const d: InstagramIdentityDeps = {
+      meta: deps?.meta ?? (await import("@/lib/promote/meta")).promoteMeta,
+      refresh: deps?.refresh ?? refreshConnection,
+      dryRun: deps?.dryRun ?? false,
+    };
+    const ctx = { tenantId: actor.tenantId, pageAssetId: page.id };
+    let instagramId = typeof meta.pageBackedIgId === "string" && meta.pageBackedIgId ? meta.pageBackedIgId : null;
+    let username: string | null = null;
+    if (!instagramId) {
+      const listed = (await d.meta.listPageBackedInstagram(ctx).catch(() => []))[0];
+      instagramId = listed?.id ?? null;
+      username = listed?.username ?? null;
+    }
+    const created = instagramId === null;
+    if (instagramId === null) {
+      instagramId = (await d.meta.createPageBackedInstagram(ctx)).id;
+      await audit({ tenantId: actor.tenantId, userId: actor.userId, action: "promote.instagram_identity_created", target: page.id, meta: { dryRun: d.dryRun === true } });
+    }
+    if (d.dryRun) return { instagramId, created, refreshed: false };
+    // Only these keys and their time are merged in, so the Page's other stored blocks (the lead-alert status) are left as they
+    // are. If this write fails, the refresh's C3 read stores the id anyway, and a second tap finds it there.
+    const now = new Date().toISOString();
+    await mergeBlocks(actor.tenantId, page.connectionId, { type: "page", externalId: page.externalId }, { pageBackedIgId: instagramId, ...(created ? { pageBackedCreatedAt: now } : {}) }, { pageBacked: now }).catch(
+      () => undefined,
+    );
+    await storePageBackedIdentity(actor.tenantId, { id: page.id, externalId: page.externalId, name: page.name ?? null }, instagramId, username).catch(() => false);
+    const refreshed = await d
+      .refresh(actor, page.connectionId)
+      .then(() => true)
+      .catch(() => false);
+    return { instagramId, created, refreshed };
+  })();
+  identityInFlight.set(key, run);
+  try {
+    return await run;
+  } finally {
+    identityInFlight.delete(key);
+  }
 }
 
 // =====================================================================================================================

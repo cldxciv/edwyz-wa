@@ -204,6 +204,14 @@ describe("expireIdleSessions", () => {
     expect(last.status).toBe("expired");
   });
 
+  it("still sends the reminder to a contact who opted out before the bot started: it is a reply in the window, not marketing", async () => {
+    const bot = addBot(ask({ timeoutMinutes: 5, timeoutMessage: "Bye" }));
+    waiting(bot.id, minutesAgo(6));
+    store.contacts[0].optedOutAt = minutesAgo(60);
+    expect(await expireIdleSessions()).toBe(1);
+    expect(inbox.sendText).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves bots on the standard 24 hours alone", async () => {
     const bot = addBot(ask({}));
     const row = waiting(bot.id, minutesAgo(600));
@@ -265,10 +273,12 @@ describe("subscribe and unsubscribe steps", () => {
     store.sessions = [];
     const bot = store.chatbots[0];
     bot.id = "bot-x";
-    // an opted-out contact never starts a bot, so exercise the node through a running session instead
-    store.contacts[0].optedOutAt = new Date();
-    expect(await handleInboundForChatbots(inbound("hi"))).toBe(false);
+    // An opted-out contact is still answered (an opt-out stops marketing only), but the subscribe step never opts them back in:
+    // only START does.
+    store.contacts[0].optedOutAt = new Date(0);
+    await handleInboundForChatbots(inbound("hi"));
     expect(store.contacts[0].optIn).toBe(false);
+    expect(store.audit.filter((a) => a.action === "contact.consent_recorded")).toHaveLength(1);
   });
 
   it("unsubscribe sends its confirmation, opts the contact out, ends the bot and sends nothing after", async () => {
@@ -294,11 +304,12 @@ describe("subscribe and unsubscribe steps", () => {
     expect(store.sessions[0].status).toBe("completed");
   });
 
-  it("a later flow step after an opt-out never sends", async () => {
-    await run([node("a", "unsubscribe", {})], []);
-    inbox.sendText.mockClear();
-    expect(await handleInboundForChatbots(inbound("hi"))).toBe(false);
-    expect(inbox.sendText).not.toHaveBeenCalled();
+  it("after the Stop messages step nothing more is sent in that session; the opt-out stops marketing only", async () => {
+    await run([node("a", "unsubscribe", { message: "Bye" })], []);
+    expect(sent()).toEqual(["Bye"]);
+    expect(store.sessions[0].status).toBe("completed");
+    expect(store.contacts[0]).toMatchObject({ optIn: false });
+    expect(store.contacts[0].optedOutAt).toBeInstanceOf(Date);
   });
 });
 

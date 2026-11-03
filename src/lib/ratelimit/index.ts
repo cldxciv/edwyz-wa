@@ -14,7 +14,9 @@ import { log } from "@/lib/log";
  *   (password, TOTP and approval-token guessing) and the route can already await.
  *
  * Backends (env RATELIMIT_BACKEND): `settings` is the default, one PlatformSetting row per key ("rl:<name>:<sha256(key)>",
- * value {count, exp}), no schema change. `table` uses the RateLimitBucket table requested in docs/schema-requests.md.
+ * value {count, exp}), no schema change. `table` uses the RateLimitBucket table requested in docs/schema-requests.md, which has
+ * no migration yet: scripts/check-env.mjs refuses the value, and if it is set anyway the first "table does not exist" answer moves
+ * every limiter to `settings` (one warning), instead of leaving them all on per-process counts.
  * `memory` stays in the process (so does a limiter created with { memoryOnly: true }, for public endpoints whose hits should not write rows); it is also the default under NODE_ENV=test. If the database fails the limiter degrades
  * to its local counts and logs one warning a minute. Keys are hashed, so emails and IPs never reach the database.
  */
@@ -39,11 +41,35 @@ const RETRY_AFTER_FAILURE_MS = 5000;
 
 let lastSweep = 0;
 let lastWarn = 0;
+/** Set once the RateLimitBucket table turned out not to exist; `table` then means `settings` for the life of the process. */
+let tableMissing = false;
 
 function backend(): Backend {
   const value = process.env.RATELIMIT_BACKEND;
-  if (value === "table" || value === "memory" || value === "settings") return value;
+  if (value === "table") return tableMissing ? "settings" : "table";
+  if (value === "memory" || value === "settings") return value;
   return process.env.NODE_ENV === "test" ? "memory" : "settings";
+}
+
+/** Postgres 42P01 (undefined_table) for RateLimitBucket, as the pg driver or Prisma reports it. */
+function isMissingBucketTable(error: unknown): boolean {
+  const text = [error, (error as { cause?: unknown } | null)?.cause]
+    .map((e) => (e && typeof e === "object" ? `${(e as { code?: unknown }).code ?? ""} ${(e as { message?: unknown }).message ?? ""}` : ""))
+    .join(" ");
+  return /RateLimitBucket/.test(text) && /42P01|does not exist/i.test(text);
+}
+
+/** Test hook: forget that the RateLimitBucket table was found missing. */
+export function resetRateLimitBackend() {
+  tableMissing = false;
+}
+
+/** True when the error means the RateLimitBucket table is missing; from then on `table` is served by the settings rows. */
+function switchToSettings(error: unknown): boolean {
+  if (!isMissingBucketTable(error)) return false;
+  if (!tableMissing) log.warn("ratelimit.table_missing", { fallback: "settings" });
+  tableMissing = true;
+  return true;
 }
 
 const safeName = (name: string) => name.replace(/[^A-Za-z0-9:_-]/g, "_").slice(0, 48);
@@ -144,9 +170,15 @@ export function createLimiter(max: number, windowMs: number, name = `w${windowMs
     entry.resetAt = now + Math.max(0, Number(row.ttlMs));
   };
 
-  const push = (key: string, delta: number): Promise<Row> => {
-    const add = backend() === "table" ? addTable : addSettings;
-    return add(rowKeyOf(key), delta, windowMs);
+  const push = async (key: string, delta: number): Promise<Row> => {
+    if (backend() !== "table") return addSettings(rowKeyOf(key), delta, windowMs);
+    try {
+      return await addTable(rowKeyOf(key), delta, windowMs);
+    } catch (error) {
+      // The same hit goes to the settings rows at once, so no count is lost and no 5 s pause starts.
+      if (switchToSettings(error)) return addSettings(rowKeyOf(key), delta, windowMs);
+      throw error;
+    }
   };
 
   const background = (key: string, entry: Entry, now: number) => {

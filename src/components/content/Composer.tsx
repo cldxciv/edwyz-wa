@@ -34,8 +34,9 @@ function SectionTitle({ id, n, title, help }: { id: string; n: number; title: st
 /**
  * onCancel is called for Cancel; the parent decides whether to ask "Discard this post?" using the dirty state reported
  * through onDirtyChange (true once the text, accounts, media or time differ from what the composer opened with).
+ * onDone gets the post's time (ISO) when it was saved with one, so the calendar can open on that day.
  */
-export function Composer({ post, defaultDate, onDone, onCancel, onDirtyChange }: { post?: Post; defaultDate?: string; onDone: () => void; onCancel: () => void; onDirtyChange?: (dirty: boolean) => void }) {
+export function Composer({ post, defaultDate, onDone, onCancel, onDirtyChange }: { post?: Post; defaultDate?: string; onDone: (scheduledAt?: string) => void; onCancel: () => void; onDirtyChange?: (dirty: boolean) => void }) {
   const targets = useApi<{ targets: AssetOption[] }>("/api/content/targets");
   const library = useApi<{ media: MediaItem[] }>("/api/content/media");
   const fileInput = useRef<HTMLInputElement>(null);
@@ -52,6 +53,7 @@ export function Composer({ post, defaultDate, onDone, onCancel, onDirtyChange }:
   const [previewId, setPreviewId] = useState<string>("");
   const [initial] = useState(() => ({ body, assetIds, mediaKey, when }));
   const approvalCard = useRef<HTMLDivElement>(null);
+  const savedAt = useRef<string | undefined>(undefined);
   const errorBox = useRef<HTMLDivElement>(null);
   const dirty = body !== initial.body || mediaKey !== initial.mediaKey || when !== initial.when || assetIds.length !== initial.assetIds.length || assetIds.some((id) => !initial.assetIds.includes(id));
   const finished = !!approvalLink;
@@ -124,13 +126,16 @@ export function Composer({ post, defaultDate, onDone, onCancel, onDirtyChange }:
       const payload = { body, mediaKeys: mediaKey ? [mediaKey] : [], assetIds, ...scheduledAtField(when, draft, timeProblem), draft, requireApproval: approval };
       const res = post
         ? await apiFetch<{ post: Post; approvalUrl?: string | null }>(`/api/content/posts/${post.id}`, { method: "PATCH", body: payload })
-        : await apiFetch<{ approvalUrl?: string | null }>("/api/content/posts", { method: "POST", body: payload });
+        : await apiFetch<{ post?: Post; approvalUrl?: string | null }>("/api/content/posts", { method: "POST", body: payload });
+      // The calendar opens on the post's day afterwards, so a post planned for next month is in view at once.
+      const at = res.post?.scheduledAt ?? payload.scheduledAt;
       if (res.approvalUrl) {
+        savedAt.current = at;
         setApprovalLink(res.approvalUrl);
         toast.success("Saved as a draft. Send the approval link to your client.");
       } else {
         toast.success(draft ? "Draft saved" : post ? "Changes saved" : `Post scheduled for ${whenText}`);
-        onDone();
+        onDone(at);
       }
     } catch (e) {
       const message = friendlyMessage(e, "We could not save this post. Check your connection and try again.");
@@ -150,7 +155,7 @@ export function Composer({ post, defaultDate, onDone, onCancel, onDirtyChange }:
           </FormField>
           <div className="mt-4 flex flex-wrap gap-2">
             <CopyButton value={approvalLink} label="Copy link" size="md" />
-            <Button variant="secondary" onClick={onDone}>
+            <Button variant="secondary" onClick={() => onDone(savedAt.current)}>
               Done
             </Button>
           </div>

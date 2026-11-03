@@ -79,9 +79,10 @@ describe("billing UI wording and states", () => {
   });
   it("decides which plan buttons work and why", () => {
     const active = { status: "active", cancelAtPeriodEnd: false, currentPeriodEnd: null, plan: { name: "Pro" } };
-    expect(planChoice({ name: "Pro" }, active, true)).toEqual({ disabled: true, current: true, reason: null });
-    expect(planChoice({ name: "Basic" }, active, true).reason).toMatch(/already have an active plan/);
-    expect(planChoice({ name: "Basic" }, null, true)).toEqual({ disabled: false, current: false, reason: null });
+    expect(planChoice({ name: "Pro" }, active, true)).toEqual({ disabled: true, current: true, reason: null, action: "none", label: "Current plan" });
+    // Another plan while one is active: switched online, at the renewal unless it costs more (owner decision 4).
+    expect(planChoice({ name: "Basic" }, active, true)).toMatchObject({ disabled: false, action: "downgrade", label: "Switch to Basic" });
+    expect(planChoice({ name: "Basic" }, null, true)).toEqual({ disabled: false, current: false, reason: null, action: "subscribe", label: "Subscribe to Basic" });
     expect(planChoice({ name: "Basic" }, { ...active, cancelAtPeriodEnd: true }, true).disabled).toBe(false);
     expect(planChoice({ name: "Basic" }, null, false)).toMatchObject({ disabled: true });
     expect(planChoice({ name: "Basic" }, null, false).reason).toMatch(/not set up/);

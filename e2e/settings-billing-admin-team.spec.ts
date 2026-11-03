@@ -184,24 +184,27 @@ test("a new teammate joins from the emailed link, then the owner changes their r
   await guest.close();
 });
 
-test("the last owner can neither leave nor demote themself, and the message says why", async ({ page }) => {
+test("the last owner can neither leave nor demote themself, and the page says why", async ({ page, context }) => {
   await page.goto(TEAM);
   const members = page.getByRole("table", { name: "People in this workspace" });
   const me = members.getByRole("row", { name: new RegExp(esc(owner.email)) });
-  await me.getByRole("button", { name: /Leave workspace/ }).click();
-  const dlg = page.getByRole("alertdialog", { name: "Leave this workspace?" });
-  await expect(dlg).toBeVisible();
-  await dlg.getByRole("button", { name: "Leave workspace" }).click();
-  await expect(page.getByText(/must keep at least one owner/)).toBeVisible();
-  await expect(page).toHaveURL(/\/app\/settings\/team/);
+  await expect(me).toBeVisible();
+  // Neither is offered: the server would refuse both (a workspace keeps one owner), so the page says what to do instead.
+  await expect(page.getByText("You are the only owner, so you can't leave or change your own role. Make someone else the owner first.")).toBeVisible();
+  await expect(me.getByRole("button", { name: /Leave workspace/ })).toHaveCount(0);
+  await expect(me.getByLabel(`Role for ${owner.name}`)).toHaveCount(0);
+  await expect(me.getByText("Owner", { exact: true })).toBeVisible();
+  // With nobody to hand over to, the hand-over section says what to do instead of an empty picker.
+  await expect(page.getByText("Invite a teammate first. Once they join, you can make them the owner here.")).toBeVisible();
+  await expect(page.getByLabel("New owner")).toHaveCount(0);
 
-  const select = me.getByLabel(`Role for ${owner.name}`);
-  await select.selectOption("agent");
-  await me.getByRole("button", { name: /Change role/ }).click();
-  const warn = page.getByRole("alertdialog", { name: /Change your own role to agent/ });
-  await expect(warn).toBeVisible();
-  await warn.getByRole("button", { name: /Change to agent/ }).click();
-  await expect(page.getByText(/must keep at least one owner/).first()).toBeVisible();
+  // The server still refuses, with the reason, for anyone calling the API directly.
+  const leave = await context.request.delete(`/api/workspace/members/${owner.userId}`, { headers: { origin: ORIGIN } });
+  expect(leave.status()).toBe(400);
+  expect((await leave.json()).error).toMatch(/must keep at least one owner/);
+  const demote = await context.request.patch(`/api/workspace/members/${owner.userId}`, { headers: { origin: ORIGIN }, data: { role: "agent" } });
+  expect(demote.status()).toBe(400);
+  expect((await demote.json()).error).toMatch(/must keep at least one owner/);
   const row = (await (await db()).query(`select role from "Membership" where "userId" = $1 and "tenantId" = $2`, [owner.userId, owner.tenantId])).rows[0];
   expect(row.role).toBe("owner");
 });
@@ -315,6 +318,21 @@ test("accessible in light and dark themes, tables have headers, keyboard can ope
   expect(await setDarkTheme(page)).toBe(true);
   expect(await isDark(page)).toBe(true);
   expect(await axeSerious(page), "dark").toEqual([]);
+});
+
+test("Add a team: an empty name puts the cursor back in the name field, so typing goes there", async ({ page }) => {
+  await page.goto("/app/settings/teams");
+  await page.getByRole("button", { name: "Add a team" }).click();
+  const dlg = page.getByRole("dialog", { name: "Add a team" });
+  await expect(dlg).toBeVisible();
+  await dlg.getByRole("button", { name: "Add team" }).click();
+  await expect(dlg.getByText("Give the team a name.")).toBeVisible();
+  const field = dlg.getByLabel(/Team name/);
+  await expect(field).toBeFocused();
+  await page.keyboard.type("Sales");
+  await expect(field).toHaveValue("Sales");
+  await dlg.getByRole("button", { name: "Cancel" }).click();
+  await expect(dlg).toBeHidden();
 });
 
 test("@mobile team page fits 360 px and the invite dialog is usable", async ({ page }) => {

@@ -15,6 +15,21 @@ type Conv = ConversationDetail["conversation"];
 
 const dateOf = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 
+/**
+ * Tags the platform keeps for itself, never shown as the team's own tags. "ai:stopped" is the AI agent's pause marker (STOP_TAG in
+ * src/lib/ai-agent); the chat header offers "Let the AI answer again" instead. Hidden tags are kept when the list is saved.
+ */
+const SYSTEM_TAGS = new Set(["ai:stopped"]);
+export const visibleTags = (tags: string[]) => tags.filter((t) => !SYSTEM_TAGS.has(t));
+
+/** The lead stages a teammate can set from the chat: qualified, unless it already is or was won, and a sale (won), unless it was. */
+export function leadQuickActions(status: string): { status: "qualified" | "won"; label: string }[] {
+  const out: { status: "qualified" | "won"; label: string }[] = [];
+  if (status !== "qualified" && status !== "won") out.push({ status: "qualified", label: "Mark as qualified" });
+  if (status !== "won") out.push({ status: "won", label: "Mark as sale" });
+  return out;
+}
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="border-t border-border pt-4">
@@ -33,7 +48,8 @@ function Skeleton() {
   );
 }
 
-export function SidePanel({ conversation, members, onClose, onChanged }: { conversation: Conv; members: Member[]; onClose: () => void; onChanged: () => void }) {
+/** canBlock: owners and admins may block a chat (the server refuses it for agents), so the menu offers Blocked to them, as the header does. */
+export function SidePanel({ conversation, members, canBlock = false, onClose, onChanged }: { conversation: Conv; members: Member[]; canBlock?: boolean; onClose: () => void; onChanged: () => void }) {
   const id = conversation.id;
   const c = conversation.contact;
   const teams = useTeams();
@@ -50,8 +66,11 @@ export function SidePanel({ conversation, members, onClose, onChanged }: { conve
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(c.name ?? "");
   const [error, setError] = useState<string | null>(null);
+  const [leadBusy, setLeadBusy] = useState<"qualified" | "won" | null>(null);
+  const [leadNote, setLeadNote] = useState("");
 
   useEffect(() => setTags(conversation.tags), [conversation.tags]);
+  useEffect(() => setLeadNote(""), [id]);
 
   // Shares the request with the chat timeline, which shows the same notes.
   const loadNotes = useCallback(
@@ -149,9 +168,27 @@ export function SidePanel({ conversation, members, onClose, onChanged }: { conve
     await patchContact({ attributes: next });
   }
 
+  /** Moves the contact's lead on from the chat; the leads API reports qualified and won (a sale) to Meta for the ads. */
+  async function markLead(next: "qualified" | "won") {
+    const leadId = context?.lead?.id;
+    if (!leadId) return;
+    setError(null);
+    setLeadNote("");
+    setLeadBusy(next);
+    try {
+      await apiFetch(`/api/leads/${leadId}`, { method: "PATCH", body: { status: next } });
+      setLeadNote(next === "won" ? "Lead marked as a sale." : "Lead marked as qualified.");
+      await loadContext();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not update the lead.");
+    } finally {
+      setLeadBusy(null);
+    }
+  }
+
   const author = (uid: string) => (members.find((m) => m.userId === uid)?.name ?? "Teammate");
   const ad = parseReferral(conversation.referral);
-  const optStatus = c.optedOutAt ? <Badge tone="bad">Opted out</Badge> : c.optIn ? <Badge tone="good">Opted in</Badge> : <Badge tone="warn">No opt-in recorded</Badge>;
+  const optStatus = c.optedOutAt ? <Badge tone="bad">Opted out of marketing</Badge> : c.optIn ? <Badge tone="good">Opted in</Badge> : <Badge tone="warn">No opt-in recorded</Badge>;
   const lead = context?.lead ?? null;
 
   return (
@@ -198,7 +235,7 @@ export function SidePanel({ conversation, members, onClose, onChanged }: { conve
               <option value="open">Open</option>
               <option value="pending">Pending</option>
               <option value="solved">Solved</option>
-              {conversation.status === "blocked" && <option value="blocked">Blocked</option>}
+              {(canBlock || conversation.status === "blocked") && <option value="blocked">Blocked</option>}
             </Select>
           </Field>
           <TeamAssign conversationId={id} teamId={conversationTeamId} assignedToId={conversation.assignedToId} members={members} onChanged={onChanged} />
@@ -232,6 +269,19 @@ export function SidePanel({ conversation, members, onClose, onChanged }: { conve
                 </dl>
               )}
               {lead.consentAt && <p className="text-muted">Consent recorded {dateOf(lead.consentAt)}</p>}
+              {leadQuickActions(lead.status).length > 0 && (
+                <div className="space-y-1.5 border-t border-border pt-2">
+                  <div className="flex flex-wrap gap-2">
+                    {leadQuickActions(lead.status).map((a) => (
+                      <Button key={a.status} type="button" size="sm" variant="secondary" className="max-sm:min-h-10" loading={leadBusy === a.status} disabled={leadBusy !== null} onClick={() => void markLead(a.status)}>
+                        {a.label}
+                      </Button>
+                    ))}
+                  </div>
+                  <p className="text-muted">This may report the result back to Meta, which helps your ads find similar people.</p>
+                </div>
+              )}
+              <p role="status" aria-live="polite" className="text-muted">{leadNote}</p>
               <a href="/app/leads" className="inline-block font-semibold text-accent underline">Open in Leads</a>
             </div>
           </Section>
@@ -239,8 +289,8 @@ export function SidePanel({ conversation, members, onClose, onChanged }: { conve
 
         <Section title="Tags">
           <div className="mb-2 flex flex-wrap gap-1.5">
-            {tags.length === 0 && <span className="text-xs text-muted">No tags yet. Tags help you find and group conversations.</span>}
-            {tags.map((t) => (
+            {visibleTags(tags).length === 0 && <span className="text-xs text-muted">No tags yet. Tags help you find and group conversations.</span>}
+            {visibleTags(tags).map((t) => (
               <span key={t} className="inline-flex items-center gap-1 rounded-full border border-border bg-surface px-2.5 py-0.5 text-xs">
                 {t}
                 <button type="button" aria-label={`Remove tag ${t}`} className="text-muted hover:text-foreground" onClick={() => void saveTags(tags.filter((x) => x !== t))}>
@@ -251,7 +301,7 @@ export function SidePanel({ conversation, members, onClose, onChanged }: { conve
           </div>
           <form onSubmit={addTag} className="flex gap-2">
             <Input aria-label="New tag" placeholder="Add a tag" maxLength={40} value={tagInput} onChange={(e) => setTagInput(e.target.value)} />
-            <Button type="submit" variant="secondary" size="sm">Add</Button>
+            <Button type="submit" variant="secondary" size="sm" disabled={!tagInput.trim()}>Add</Button>
           </form>
         </Section>
 

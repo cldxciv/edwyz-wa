@@ -14,6 +14,22 @@ export type HealthReport = {
 };
 export type ReadyReport = { status: "ready" | "not_ready"; checks: { database: boolean; schema: boolean; migrations: boolean } };
 
+/**
+ * Something only a given migration creates: a table, a column (`object` is the table, `detail` the column) or an enum value
+ * (`object` is the enum type, `detail` the value). Names are as Prisma writes them (case matters).
+ */
+export type MigrationMarker = { name: string; kind: "table" | "column" | "enum"; object: string; detail?: string };
+
+/**
+ * The newest folder in prisma/migrations and what it leaves behind. Migrations on the VPS are applied by hand with psql, so there
+ * is no _prisma_migrations ledger to read; this marker is how /health/ready notices a release whose newest migration was skipped
+ * (routes using the new column or table would answer 500). Update it in the same change as every new migration:
+ * tests/ops-health.test.ts fails while it names an older folder or a marker its migration.sql does not create.
+ * An index-only follow-up (CREATE INDEX CONCURRENTLY and VALIDATE CONSTRAINT only, such as 0013_ig_page_ads_indexes) is applied
+ * off-peak after the restart and the code works without it, so the marker names the newest migration before it.
+ */
+export const LATEST_MIGRATION: MigrationMarker = { name: "0015_studio_canva", kind: "table", object: "StudioItem" };
+
 function withTimeout<T>(work: Promise<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("timeout")), TIMEOUT_MS);
@@ -57,19 +73,29 @@ export function resetReadyCache() {
   cached = null;
 }
 
-async function readyChecks(): Promise<ReadyReport["checks"]> {
+async function readyChecks(marker: MigrationMarker): Promise<ReadyReport["checks"]> {
   const checks = { database: false, schema: false, migrations: false };
+  const detail = marker.detail ?? "";
   try {
     const rows = await withTimeout(
-      prisma.$queryRaw<{ tracked: boolean; core: boolean }[]>`
+      prisma.$queryRaw<{ tracked: boolean; core: boolean; latest: boolean }[]>`
         SELECT to_regclass('"_prisma_migrations"') IS NOT NULL AS tracked,
-               (to_regclass('"Tenant"') IS NOT NULL AND to_regclass('"Job"') IS NOT NULL AND to_regclass('"PlatformSetting"') IS NOT NULL) AS core`,
+               (to_regclass('"Tenant"') IS NOT NULL AND to_regclass('"Job"') IS NOT NULL AND to_regclass('"PlatformSetting"') IS NOT NULL) AS core,
+               CASE ${marker.kind}::text
+                 WHEN 'table' THEN EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ${marker.object}::text)
+                 WHEN 'column' THEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ${marker.object}::text AND column_name = ${detail}::text)
+                 WHEN 'enum' THEN EXISTS (SELECT 1 FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid JOIN pg_namespace n ON n.oid = t.typnamespace
+                                          WHERE n.nspname = current_schema() AND t.typname = ${marker.object}::text AND e.enumlabel = ${detail}::text)
+                 ELSE false
+               END AS latest`,
     );
     checks.database = true;
     checks.schema = Boolean(rows[0]?.core);
+    const latest = Boolean(rows[0]?.latest);
     if (!rows[0]?.tracked) {
-      // Migrations applied by hand with psql leave no _prisma_migrations table; the schema check above is the signal then.
-      checks.migrations = checks.schema;
+      // Migrations applied by hand with psql leave no _prisma_migrations table: the schema check and the newest migration's marker
+      // are the signal then.
+      checks.migrations = checks.schema && latest;
       return checks;
     }
     const state = await withTimeout(
@@ -78,7 +104,7 @@ async function readyChecks(): Promise<ReadyReport["checks"]> {
                count(*) FILTER (WHERE finished_at IS NULL AND rolled_back_at IS NULL) AS pending
         FROM "_prisma_migrations"`,
     );
-    checks.migrations = Number(state[0]?.applied ?? 0) > 0 && Number(state[0]?.pending ?? 0) === 0;
+    checks.migrations = Number(state[0]?.applied ?? 0) > 0 && Number(state[0]?.pending ?? 0) === 0 && latest;
   } catch {
     // reported as false below; the response never carries the error
   }
@@ -90,7 +116,7 @@ export async function readyReport(now = Date.now()): Promise<ReadyReport> {
     const ttl = cached.report.status === "ready" ? READY_OK_CACHE_MS : READY_FAIL_CACHE_MS;
     if (now - cached.at < ttl) return cached.report;
   }
-  const checks = await readyChecks();
+  const checks = await readyChecks(LATEST_MIGRATION);
   const report: ReadyReport = { status: checks.database && checks.schema && checks.migrations ? "ready" : "not_ready", checks };
   cached = { at: now, report };
   return report;

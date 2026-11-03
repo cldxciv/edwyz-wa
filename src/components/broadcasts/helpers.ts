@@ -4,7 +4,7 @@ import { statusTone, type Tone } from "@/components/ui/status";
 export type Counts = Record<string, number>;
 
 const IN_FLIGHT = new Set(["pending", "queued"]);
-const MAX_SCHEDULE_DAYS = 90;
+export const MAX_SCHEDULE_DAYS = 90;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MIN_LEAD_MS = 60 * 1000;
 
@@ -226,6 +226,25 @@ export function validateSchedule(value: string, now = new Date()): string | null
   if (at.getTime() < now.getTime() + MIN_LEAD_MS) return "Pick a time in the future.";
   if (at.getTime() > now.getTime() + MAX_SCHEDULE_DAYS * DAY_MS) return `Pick a time within the next ${MAX_SCHEDULE_DAYS} days.`;
   return null;
+}
+
+/**
+ * The time a day picked on the calendar starts with: 9:00, or for today the next full hour at least 30 minutes away, and on
+ * the last day of the window the latest allowed time. Null when nothing on that day can be scheduled any more.
+ */
+export function presetSchedule(day: string, now = new Date()): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const [y, m, d] = day.split("-").map(Number);
+  const earliest = now.getTime() + MIN_LEAD_MS;
+  const latest = now.getTime() + MAX_SCHEDULE_DAYS * DAY_MS;
+  const fits = (at: Date) => localInputValue(at).startsWith(day) && at.getTime() >= earliest && at.getTime() <= latest;
+  const nine = new Date(y, m - 1, d, 9, 0, 0, 0);
+  const soon = new Date(now.getTime() + 30 * 60_000);
+  const nextHour = new Date(soon.getFullYear(), soon.getMonth(), soon.getDate(), soon.getHours() + (soon.getMinutes() || soon.getSeconds() ? 1 : 0), 0, 0, 0);
+  const last = new Date(latest);
+  last.setMinutes(last.getMinutes() - (last.getMinutes() % 15), 0, 0);
+  const at = [nine, nextHour, last].find(fits);
+  return at ? localInputValue(at) : null;
 }
 
 export const scheduleBounds = (now = new Date()) => ({ min: localInputValue(now), max: localInputValue(new Date(now.getTime() + MAX_SCHEDULE_DAYS * DAY_MS)) });

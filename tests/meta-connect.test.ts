@@ -1,14 +1,20 @@
 import { createHmac, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const db = vi.hoisted(() => ({
   metaConnection: { findFirst: vi.fn(), findMany: vi.fn(), upsert: vi.fn(), updateMany: vi.fn(), count: vi.fn() },
   metaAsset: { findFirst: vi.fn(), findMany: vi.fn(), upsert: vi.fn(), updateMany: vi.fn() },
   metaSpendLimit: { findMany: vi.fn(), findFirst: vi.fn() },
+  // The workspace's spending ad account goes first in the readiness reads (discovery.ts orderForEnrich).
+  spendControl: { findUnique: vi.fn() },
   tenant: { findMany: vi.fn() },
   $queryRaw: vi.fn(),
   $executeRaw: vi.fn(),
-  platformSetting: { create: vi.fn(), deleteMany: vi.fn() },
+  // findUnique and upsert: the promote/meta client's capability cache and throttle rows (PRM-07 readiness reads).
+  platformSetting: { create: vi.fn(), deleteMany: vi.fn(), findUnique: vi.fn(), upsert: vi.fn() },
+  phoneNumber: { findMany: vi.fn() },
   auditLog: { create: vi.fn() },
   $transaction: vi.fn(),
 }));
@@ -35,8 +41,10 @@ import { GraphError } from "@/lib/graph";
 import { sealSecret, openSecret } from "@/lib/crypto/secrets";
 import { getAssetAccess, listAssets } from "@/lib/meta-connect";
 import { checkPageSubscription, discoverAssets, fetchAll, MAX_ITEMS, MAX_LEADGEN_SUBSCRIBES, orderForSubscribe, PAGE_SIZE, runPool, SUBSCRIBE_BUDGET_MS, SUBSCRIBE_CONCURRENCY, verificationDue, verifyLeadSubscriptions } from "@/lib/meta-connect/discovery";
+import { carriedBlocks, justCreatedIdentity, MAX_ENRICH_AD_ACCOUNTS, MAX_ENRICH_PAGES, META_BLOCKS, minDailyFrom, orderForEnrich, PAGE_BACKED_LISTING_GRACE_MS, PAGE_FIELDS, pictureUrl, READINESS_TRIED_KEY, readinessAge, whatsappLinkState } from "@/lib/meta-connect/discovery";
+import { AD_ACCOUNT_HEALTH_FIELDS } from "@/lib/promote/meta";
 import { createState, verifyState } from "@/lib/oauth-state";
-import { completeConnect, disconnect, finishPendingDisconnects, healthStatus, listConnections, PENDING_DISCONNECT_GRACE_MS, refreshConnection, REQUEST_DISCOVERY_BUDGET_MS, startConnect } from "@/lib/meta-connect/service";
+import { completeConnect, disconnect, ensurePageBackedInstagram, finishPendingDisconnects, healthStatus, listConnections, PENDING_DISCONNECT_GRACE_MS, refreshConnection, REQUEST_DISCOVERY_BUDGET_MS, startConnect } from "@/lib/meta-connect/service";
 import { issueState, consumeState } from "@/lib/meta-connect/state";
 import { checkTokenHealth } from "@/lib/meta-connect/worker";
 import { META_CONNECT_SCOPES, SCOPE_PURPOSES, scopeSummary, unusedScopes } from "@/lib/meta-connect/scopes";
@@ -1218,4 +1226,311 @@ describe("the Connections page: consent step and disconnect copy", () => {
     expect(adminHtml).not.toContain('type="checkbox"');
     expect(renderToStaticMarkup(createElement(MetaLimitStep, { payload: { metaLimit: { ...metaLimit, canTurnOn: false }, consent: null, offboard: [] }, role: "agent", onChanged: () => undefined, onConnectAgain: null }))).toBe("");
   });
+});
+
+// =====================================================================================================================
+// Discovery extensions (docs/IG-PAGE-ADS-SPEC.md 4.2 C1 to C6, 5.4 MetaAsset.meta; PRM-07 acceptance 4)
+// =====================================================================================================================
+
+describe("discovery readiness blocks (C1 to C6, 5.4)", () => {
+  /** The payment-method response key, taken from promote/meta.ts's field list (it is never written in discovery). */
+  const FUNDING = AD_ACCOUNT_HEALTH_FIELDS.slice(AD_ACCOUNT_HEALTH_FIELDS.lastIndexOf(",") + 1).replace(/\{.*$/, "");
+  type Merge = { values: Record<string, unknown>; times: Record<string, string>; tenantId: string; connectionId: string; type: string; externalId: string };
+  const merges = (): Merge[] =>
+    db.$executeRaw.mock.calls
+      .filter((c) => Array.isArray(c[0]) && (c[0] as string[]).join("?").includes('UPDATE "MetaAsset"'))
+      .map((c) => ({ values: JSON.parse(c[1] as string), times: JSON.parse(c[2] as string), tenantId: c[3] as string, connectionId: c[4] as string, type: c[5] as string, externalId: c[6] as string }));
+  const mergeOf = (externalId: string) => merges().filter((m) => m.externalId === externalId);
+  const upsertOf = (type: string, externalId: string) => db.metaAsset.upsert.mock.calls.map((c) => c[0]).find((u) => u.create.type === type && u.create.externalId === externalId);
+
+  type Req = { path: string; query?: Record<string, string> };
+  const meta = (over: Record<string, (req: Req) => unknown> = {}) =>
+    graph.graphFetchAs.mockImplementation(async (_t: string, req: Req) => {
+      if (over[req.path]) return over[req.path](req);
+      switch (req.path) {
+        case "me/accounts":
+          return {
+            data: [
+              {
+                id: "p1",
+                name: "Shop",
+                access_token: "PAGETOK",
+                tasks: ["ADVERTISE", "CREATE_CONTENT", "MANAGE"],
+                picture: { data: { url: "https://cdn.example/p1.jpg" } },
+                instagram_business_account: { id: "ig1", username: "shop", name: "Shop IG", profile_picture_url: "https://cdn.example/ig1.jpg" },
+              },
+              { id: "p2", name: "Other", access_token: "PAGETOK2", tasks: ["ANALYZE"], picture: { data: { url: "javascript:alert(1)" } } },
+            ],
+          };
+        case "me/adaccounts":
+          return { data: [{ id: "act_111", name: "Shop ads", currency: "INR", account_status: 1, timezone_name: "Asia/Kolkata" }] };
+        case "p1":
+          return { leadgen_tos_accepted: true, whatsapp_number: "+91 98100 00000" };
+        case "p2":
+          return { leadgen_tos_accepted: false, whatsapp_number: "+1 555 0100" };
+        case "p1/page_backed_instagram_accounts":
+          return { data: [{ id: "pbig1", username: "shop_ads" }] };
+        case "act_111":
+          return { account_status: 1, disable_reason: 0, currency: "INR", timezone_name: "Asia/Kolkata", business: { id: "biz1" }, tos_accepted: { custom_audience_tos: 1 }, user_tos_accepted: {}, [FUNDING]: { type: 1, display_string: "Visa 1234" } };
+        case "act_111/minimum_budgets":
+          return { data: [{ currency: "INR", min_daily_budget_imp: 8900, min_daily_budget_video_views: 10000 }] };
+        case "act_111/connected_instagram_accounts":
+          return { data: [{ id: "ig1", username: "shop" }] };
+        default:
+          return req.path.endsWith("/subscribed_apps") ? { success: true } : { data: [] };
+      }
+    });
+
+  beforeEach(() => {
+    db.phoneNumber.findMany.mockResolvedValue([{ displayPhone: "+91 98100 00000" }]);
+  });
+
+  it("C1 asks for the Page picture and the Instagram picture and name, and stores canAdvertise and canCreateContent", async () => {
+    meta();
+    await discoverAssets("t1", "c1", "USERTOK");
+    const fields = graph.graphFetchAs.mock.calls.find((c) => c[1].path === "me/accounts")![1].query.fields;
+    expect(fields).toBe(PAGE_FIELDS);
+    for (const f of ["tasks", "picture{url}", "profile_picture_url", "instagram_business_account{id,username,name,profile_picture_url}"]) expect(fields).toContain(f);
+    const p1 = upsertOf("page", "p1").create.meta;
+    expect(p1).toMatchObject({ tasks: ["ADVERTISE", "CREATE_CONTENT", "MANAGE"], pictureUrl: "https://cdn.example/p1.jpg", canAdvertise: true, canCreateContent: true });
+    expect(typeof p1.checkedAt.listing).toBe("string");
+    expect(upsertOf("page", "p2").create.meta).toMatchObject({ canAdvertise: false, canCreateContent: false, pictureUrl: null });
+    expect(upsertOf("instagram", "ig1").create.meta).toMatchObject({ pageId: "p1", username: "shop", displayName: "Shop IG", profilePictureUrl: "https://cdn.example/ig1.jpg", pageBacked: false });
+    expect(pictureUrl("http://cdn.example/x.jpg")).toBeNull();
+  });
+
+  it("stores every 5.4 key, each block with its own checkedAt, through promote/meta.ts and only fundingPresent of the payment method", async () => {
+    meta();
+    await discoverAssets("t1", "c1", "USERTOK");
+    const [p1] = mergeOf("p1");
+    expect(p1.values).toEqual({ leadgenTosAccepted: true, whatsappNumber: "919810000000", whatsappLinkState: "ok", pageBackedIgId: "pbig1", readinessTriedAt: expect.any(String) });
+    expect(Object.keys(p1.times).sort()).toEqual(["leadgen", "pageBacked"]);
+    expect(p1).toMatchObject({ tenantId: "t1", connectionId: "c1", type: "page" });
+    expect(mergeOf("p2")[0].values).toMatchObject({ leadgenTosAccepted: false, whatsappLinkState: "missing", pageBackedIgId: null });
+    const [act] = mergeOf("act_111");
+    expect(act.values).toEqual({ accountStatus: 1, disableReason: 0, businessId: "biz1", customAudienceTos: true, userTosAccepted: false, fundingPresent: true, minDailyBudgetMinor: 8900, readinessTriedAt: expect.any(String) });
+    expect(Object.keys(act.times).sort()).toEqual(["health", "minBudget"]);
+    expect(JSON.stringify(merges())).not.toContain("Visa");
+    expect(mergeOf("ig1")[0]).toMatchObject({ values: { authorizedAdAccountIds: ["act_111"] }, type: "instagram" });
+    expect(Object.keys(mergeOf("ig1")[0].times)).toEqual(["authorized"]);
+    // Every key of 5.4 is covered by a block.
+    expect(META_BLOCKS.page).toEqual({ leadgen: ["leadgenTosAccepted", "whatsappNumber", "whatsappLinkState"], pageBacked: ["pageBackedIgId", "pageBackedCreatedAt"] });
+    expect(META_BLOCKS.ad_account.health).toEqual(["accountStatus", "disableReason", "businessId", "customAudienceTos", "userTosAccepted", "fundingPresent"]);
+    // C2 to C6 go through promote/meta.ts: page edges with the Page token, ad account edges with the user token.
+    const call = (p: string) => graph.graphFetchAs.mock.calls.find((c) => c[1].path === p)!;
+    expect(call("p1")[0]).toBe("PAGETOK");
+    expect(call("p1")[1].query.fields).toContain("whatsapp_number");
+    expect(call("act_111")[0]).toBe("USERTOK");
+    expect(call("act_111")[1].query.fields).toBe(AD_ACCOUNT_HEALTH_FIELDS);
+    const source = readFileSync(path.resolve(__dirname, "../src/lib/meta-connect/discovery.ts"), "utf8");
+    expect(source).not.toContain(FUNDING);
+    expect(source).not.toContain("adsClient(");
+  });
+
+  it("C3's ads-only identity becomes an Instagram asset with pageBacked, and later runs keep it active", async () => {
+    meta();
+    await discoverAssets("t1", "c1", "USERTOK");
+    const backed = upsertOf("instagram", "pbig1");
+    expect(backed.create).toMatchObject({ type: "instagram", connectionId: "c1", name: "shop_ads", status: "active", meta: { pageId: "p1", username: "shop_ads", pageBacked: true } });
+    expect(openSecret("t1", backed.create.tokenEnc)).toBe("PAGETOK");
+    expect(mergeOf("pbig1")[0].values).toEqual({ authorizedAdAccountIds: [] });
+
+    vi.clearAllMocks();
+    db.metaAsset.findMany.mockResolvedValueOnce([{ externalId: "p1", type: "page", meta: { pageBackedIgId: "pbig1", checkedAt: { pageBacked: "2026-10-01T00:00:00.000Z" } } }]).mockResolvedValue([]);
+    meta({ "p1/page_backed_instagram_accounts": () => Promise.reject(new GraphError("down", 500)) });
+    await discoverAssets("t1", "c1", "USERTOK");
+    const sweep = db.metaAsset.updateMany.mock.calls.map((c) => c[0]).find((c) => c.where.type === "instagram" && c.data.status === "inactive");
+    expect(sweep.where.externalId.notIn).toEqual(expect.arrayContaining(["ig1", "pbig1"]));
+    // The failed C3 kept the stored id and its time.
+    expect(upsertOf("page", "p1").create.meta).toMatchObject({ pageBackedIgId: "pbig1", checkedAt: { pageBacked: "2026-10-01T00:00:00.000Z" } });
+  });
+
+  it("a read that fails keeps what the previous run stored, with its own older checkedAt", async () => {
+    db.metaAsset.findMany.mockResolvedValueOnce([
+      { externalId: "act_111", type: "ad_account", meta: { fundingPresent: false, customAudienceTos: true, accountStatus: 2, checkedAt: { health: "2026-10-01T00:00:00.000Z", minBudget: "2026-10-02T00:00:00.000Z" }, minDailyBudgetMinor: 5000 } },
+    ]);
+    meta({ act_111: () => Promise.reject(new GraphError("down", 500)) });
+    await discoverAssets("t1", "c1", "USERTOK");
+    const stored = upsertOf("ad_account", "act_111").create.meta;
+    // The listing's own accountStatus wins; the health block's other keys are carried with their time.
+    expect(stored).toMatchObject({ accountStatus: 1, fundingPresent: false, customAudienceTos: true, minDailyBudgetMinor: 5000, checkedAt: { health: "2026-10-01T00:00:00.000Z" } });
+    const [act] = mergeOf("act_111");
+    expect(act.values).toEqual({ minDailyBudgetMinor: 8900, readinessTriedAt: expect.any(String) });
+    expect(Object.keys(act.times)).toEqual(["minBudget"]);
+    expect(carriedBlocks("ad_account", { fundingPresent: true })).toEqual({});
+    expect(carriedBlocks("dataset", { fundingPresent: true, checkedAt: { health: "x" } })).toEqual({});
+  });
+
+  it("stays inside the discovery budget under a slow Meta and writes nothing late", async () => {
+    const slow = () => new Promise((r) => setTimeout(() => r({ data: [] }), 400));
+    meta({ p1: slow, p2: slow, "p1/page_backed_instagram_accounts": slow, act_111: slow, "act_111/minimum_budgets": slow, "act_111/connected_instagram_accounts": slow });
+    const started = Date.now();
+    const result = await discoverAssets("t1", "c1", "USERTOK", { subscribeBudgetMs: 150, subscribeCallTimeoutMs: 50 });
+    expect(Date.now() - started).toBeLessThan(1500);
+    expect(result.counts).toMatchObject({ page: 2, instagram: 1, ad_account: 1 });
+    await new Promise((r) => setTimeout(r, 500));
+    expect(merges()).toEqual([]);
+    // The OAuth callback and a refresh run discovery with the 45 second budget.
+    expect(REQUEST_DISCOVERY_BUDGET_MS).toBe(45_000);
+  });
+
+  it("does not read the extra blocks for a connection that was disconnected meanwhile", async () => {
+    db.metaConnection.findFirst.mockResolvedValue({ id: "c1" });
+    meta();
+    await discoverAssets("t1", "c1", "USERTOK");
+    expect(graph.graphFetchAs.mock.calls.map((c) => c[1].path)).not.toContain("act_111/minimum_budgets");
+    expect(merges()).toEqual([]);
+  });
+
+  it("whatsappLinkState and minDailyFrom: unknown when either side can't be read; the impressions minimum only", () => {
+    expect(whatsappLinkState({ number: "919810000000", checked: true }, ["919810000000"])).toBe("ok");
+    expect(whatsappLinkState({ number: "9810000000", checked: true }, ["919810000000"])).toBe("ok");
+    expect(whatsappLinkState({ number: "15550100", checked: true }, ["919810000000"])).toBe("missing");
+    // A short tail is not the same number.
+    expect(whatsappLinkState({ number: "00000", checked: true }, ["919810000000"])).toBe("missing");
+    expect(whatsappLinkState({ number: null, checked: true }, ["919810000000"])).toBe("missing");
+    expect(whatsappLinkState({ number: null, checked: false }, ["919810000000"])).toBe("unknown");
+    expect(whatsappLinkState({ number: "919810000000", checked: true }, null)).toBe("unknown");
+    expect(minDailyFrom({ min_daily_budget_imp: 8900, min_daily_budget_video_views: 100 })).toBe(8900);
+    expect(minDailyFrom({ min_daily_budget_video_views: 100 })).toBeNull();
+  });
+
+  it("completeConnect writes lastCheckedAt only after discovery, so the popup's polling sees a finished connection", async () => {
+    const state = await issueState("t1", "u1");
+    graph.appGraphFetch.mockResolvedValueOnce({ access_token: "S" }).mockResolvedValueOnce({ access_token: "L" });
+    meta({ debug_token: () => ({ data: { is_valid: true, user_id: "9", scopes: [], expires_at: 0 } }) });
+    db.metaConnection.upsert.mockResolvedValue({ id: "c1" });
+    await completeConnect(actor, "code", state);
+    const up = db.metaConnection.upsert.mock.calls[0][0];
+    expect(up.create.lastCheckedAt).toBeUndefined();
+    expect(up.update.lastCheckedAt).toBeUndefined();
+    const calls = db.metaConnection.updateMany.mock.calls;
+    const index = calls.findIndex((c) => c[0].data.lastCheckedAt instanceof Date);
+    expect(index).toBeGreaterThanOrEqual(0);
+    expect(calls[index][0].where).toEqual({ id: "c1", tenantId: "t1" });
+    const doneOrder = db.metaConnection.updateMany.mock.invocationCallOrder[index];
+    for (const order of db.metaAsset.upsert.mock.invocationCallOrder) expect(order).toBeLessThan(doneOrder);
+  }, 20_000);
+
+  it("orders the readiness reads: the spending ad account, then never read, then the longest ago; the attempt time is carried", () => {
+    const prev = new Map<string, Record<string, unknown>>([
+      ["a", { [READINESS_TRIED_KEY]: "2026-10-30T00:00:00.000Z" }],
+      ["b", { checkedAt: { leadgen: "2026-10-29T00:00:00.000Z", pageBacked: "2026-10-28T00:00:00.000Z" } }],
+      ["c", { checkedAt: { leadgen: "2026-10-31T00:00:00.000Z" } }], // C3 never read
+    ]);
+    const items = ["a", "b", "c", "d"].map((externalId) => ({ externalId }));
+    expect(orderForEnrich("page", items, prev).map((i) => i.externalId)).toEqual(["c", "d", "b", "a"]);
+    expect(orderForEnrich("ad_account", items, prev, "a")[0].externalId).toBe("a");
+    expect(readinessAge("page", prev.get("b"))).toBe(Date.parse("2026-10-28T00:00:00.000Z"));
+    expect(readinessAge("page", undefined)).toBe(0);
+    expect(carriedBlocks("page", { [READINESS_TRIED_KEY]: "t" })).toEqual({ [READINESS_TRIED_KEY]: "t" });
+    expect(carriedBlocks("ad_account", { [READINESS_TRIED_KEY]: "t" })).toEqual({ [READINESS_TRIED_KEY]: "t" });
+    expect(carriedBlocks("instagram", { [READINESS_TRIED_KEY]: "t" })).toEqual({});
+  });
+
+  it("rotates the caps: Pages past the 50th and ad accounts past the 25th are read on later runs; the spending account goes first and the two kinds take turns", async () => {
+    const PAGES = Array.from({ length: MAX_ENRICH_PAGES + 10 }, (_, i) => ({ id: `p${i + 1}`, name: `Page ${i + 1}`, access_token: `PT${i + 1}`, tasks: ["ADVERTISE"] }));
+    const ACTS = Array.from({ length: MAX_ENRICH_AD_ACCOUNTS + 5 }, (_, i) => ({ id: `act_${i + 1}`, name: `Ads ${i + 1}`, currency: "INR", account_status: 1 }));
+    const listing = { "me/accounts": () => ({ data: PAGES }), "me/adaccounts": () => ({ data: ACTS }) };
+    const paths = () => graph.graphFetchAs.mock.calls.map((c) => c[1].path as string);
+    const c2 = () => paths().filter((p) => /^p\d+$/.test(p));
+    const c4 = () => paths().filter((p) => /^act_\d+$/.test(p));
+    db.spendControl.findUnique.mockResolvedValue({ spendingAdAccountAssetId: "asset_act_30" });
+    db.metaAsset.findFirst.mockImplementation(async (a: { where: { id?: string } }) => (a.where.id === "asset_act_30" ? { externalId: "act_30" } : null));
+
+    meta(listing);
+    await discoverAssets("t1", "c1", "USERTOK");
+    expect(c2()).toHaveLength(MAX_ENRICH_PAGES);
+    expect(c2()).not.toContain(`p${MAX_ENRICH_PAGES + 1}`);
+    expect(c4()).toHaveLength(MAX_ENRICH_AD_ACCOUNTS);
+    expect(c4()[0]).toBe("act_30");
+    expect(c4()).not.toContain("act_25");
+    // Ad accounts and Pages take turns, so neither kind waits for all of the other: the first reads are a mix of both.
+    const first = paths()
+      .filter((p) => /^(p|act_)[0-9]+$/.test(p))
+      .slice(0, 10);
+    expect(first.filter((p) => p.startsWith("act_")).length).toBeGreaterThanOrEqual(3);
+    expect(first.filter((p) => !p.startsWith("act_")).length).toBeGreaterThanOrEqual(3);
+    // Every attempt is recorded, whatever Meta answered.
+    const tried = merges().filter((m) => typeof m.values[READINESS_TRIED_KEY] === "string");
+    expect(tried).toHaveLength(MAX_ENRICH_PAGES + MAX_ENRICH_AD_ACCOUNTS);
+
+    // The next run starts with what this one did not reach.
+    const stored = tried.map((m) => ({ externalId: m.externalId, type: m.type, meta: { [READINESS_TRIED_KEY]: m.values[READINESS_TRIED_KEY] } }));
+    vi.clearAllMocks();
+    db.metaAsset.findMany.mockImplementation(async (a: { where: { externalId?: { in?: string[] } } }) => stored.filter((r) => a.where.externalId?.in?.includes(r.externalId)));
+    meta(listing);
+    await discoverAssets("t1", "c1", "USERTOK");
+    for (let i = MAX_ENRICH_PAGES + 1; i <= MAX_ENRICH_PAGES + 10; i++) expect(c2()).toContain(`p${i}`);
+    expect(c4()[0]).toBe("act_30");
+    for (let i = 25; i <= 29; i++) expect(c4()).toContain(`act_${i}`);
+    // The page tried longest ago comes back before the ones tried most recently.
+    expect(c2()).toContain("p1");
+    expect(c2()).not.toContain(`p${MAX_ENRICH_PAGES}`);
+  }, 20_000);
+
+  it("an identity Edwyz just made that C3 doesn't list yet keeps its id, stays an active asset and still gets C6; after the grace period an empty C3 clears it", async () => {
+    const recent = new Date(Date.now() - 60_000).toISOString();
+    const old = new Date(Date.now() - PAGE_BACKED_LISTING_GRACE_MS - 60_000).toISOString();
+    const pageRow = (createdAt: string) => ({ externalId: "p1", type: "page", meta: { pageBackedIgId: "pbig_new", pageBackedCreatedAt: createdAt, checkedAt: { pageBacked: createdAt } } });
+    const igRow = { externalId: "pbig_new", type: "instagram", meta: { pageId: "p1", pageBacked: true, authorizedAdAccountIds: ["act_old"], checkedAt: { listing: recent, authorized: recent } } };
+    const stored = (createdAt: string) => async (a: { where: { externalId?: { in?: string[] } } }) => [pageRow(createdAt), igRow].filter((r) => a.where.externalId?.in?.includes(r.externalId));
+    const igUpdates = () => db.metaAsset.updateMany.mock.calls.map((c) => c[0]).filter((c) => c.where.externalId === "pbig_new");
+
+    db.metaAsset.findMany.mockImplementation(stored(recent));
+    meta({ "p1/page_backed_instagram_accounts": () => ({ data: [] }), "act_111/connected_instagram_accounts": () => ({ data: [{ id: "pbig_new" }] }) });
+    await discoverAssets("t1", "c1", "USERTOK");
+    expect(mergeOf("p1")[0].values).not.toHaveProperty("pageBackedIgId");
+    expect(upsertOf("page", "p1").create.meta).toMatchObject({ pageBackedIgId: "pbig_new", pageBackedCreatedAt: recent });
+    const sweep = db.metaAsset.updateMany.mock.calls.map((c) => c[0]).find((c) => c.where.type === "instagram" && c.data.status === "inactive" && c.where.externalId?.notIn);
+    expect(sweep.where.externalId.notIn).toContain("pbig_new");
+    expect(igUpdates()).toEqual([]);
+    // C6 still reaches it, keeping the answer of an account not read this time.
+    expect(mergeOf("pbig_new")[0].values).toEqual({ authorizedAdAccountIds: ["act_111", "act_old"] });
+
+    // Past the grace period Meta's empty answer wins: the id is cleared and the asset set inactive.
+    vi.clearAllMocks();
+    db.metaAsset.findMany.mockImplementation(stored(old));
+    meta({ "p1/page_backed_instagram_accounts": () => ({ data: [] }) });
+    await discoverAssets("t1", "c1", "USERTOK");
+    expect(mergeOf("p1")[0].values).toMatchObject({ pageBackedIgId: null });
+    expect(igUpdates()).toEqual([expect.objectContaining({ data: { status: "inactive" } })]);
+    expect(justCreatedIdentity({ pageBackedIgId: "x", pageBackedCreatedAt: recent })).toBe("x");
+    expect(justCreatedIdentity({ pageBackedIgId: "x", pageBackedCreatedAt: old })).toBeNull();
+    expect(justCreatedIdentity({ pageBackedIgId: "x" })).toBeNull();
+  });
+
+  it("C3's identities keep the C6 answer stored on them when this run's C6 read fails", async () => {
+    db.metaAsset.findMany.mockImplementation(async (a: { where: { externalId?: { in?: string[] } } }) =>
+      a.where.externalId?.in?.includes("pbig1") ? [{ externalId: "pbig1", type: "instagram", meta: { pageBacked: true, authorizedAdAccountIds: ["act_111"], checkedAt: { authorized: "2026-10-01T00:00:00.000Z" } } }] : [],
+    );
+    meta({ "act_111/connected_instagram_accounts": () => Promise.reject(new GraphError("down", 500)) });
+    await discoverAssets("t1", "c1", "USERTOK");
+    expect(upsertOf("instagram", "pbig1").create.meta).toMatchObject({ pageBacked: true, authorizedAdAccountIds: ["act_111"], checkedAt: { authorized: "2026-10-01T00:00:00.000Z" } });
+  });
+
+  it("Run Instagram ads using your Page with more than 50 Pages: the identity becomes an Instagram asset at once, though the refresh never reads that Page", async () => {
+    const PAGES = Array.from({ length: 60 }, (_, i) => ({ id: `p${i + 1}`, name: `Page ${i + 1}`, access_token: `PT${i + 1}`, tasks: ["ADVERTISE"] }));
+    meta({ "me/accounts": () => ({ data: PAGES }) });
+    db.metaAsset.findFirst.mockResolvedValue({ id: "pg55", type: "page", externalId: "p55", name: "Page 55", status: "active", meta: { canAdvertise: true }, connectionId: "c1" });
+    db.$executeRaw.mockResolvedValue(1);
+    const deps = {
+      meta: { listPageBackedInstagram: vi.fn(async () => []), createPageBackedInstagram: vi.fn(async () => ({ id: "pbig55" })) },
+      refresh: (_a: unknown, connectionId: string) => discoverAssets("t1", connectionId, "USERTOK"),
+    };
+    expect(await ensurePageBackedInstagram(actor, "pg55", deps)).toEqual({ instagramId: "pbig55", created: true, refreshed: true });
+    const insertAt = db.$executeRaw.mock.calls.findIndex((c) => (c[0] as string[]).join("?").includes('INSERT INTO "MetaAsset"'));
+    expect(insertAt).toBeGreaterThanOrEqual(0);
+    const [strings, ...params] = db.$executeRaw.mock.calls[insertAt] as [string[], ...unknown[]];
+    const sql = strings.join("?");
+    // Guarded like the other stored blocks: an active Page under a connection that is not revoked; the Page's sealed token.
+    for (const part of [`p."status" = 'active'`, `c."status" <> 'revoked'`, `p."type" = 'page'`, `p."tokenEnc"`, "'instagram'", 'ON CONFLICT ("tenantId", "type", "externalId")']) expect(sql).toContain(part);
+    expect(params).toEqual(expect.arrayContaining(["pbig55", "pg55", "t1", "p55"]));
+    expect(JSON.parse(params.find((v) => typeof v === "string" && v.includes('"checkedAt"')) as string)).toMatchObject({ pageId: "p55", pageBacked: true });
+    // Stored before the refresh started, and the refresh's readiness reads never reached Page 55.
+    expect(db.$executeRaw.mock.invocationCallOrder[insertAt]).toBeLessThan(graph.graphFetchAs.mock.invocationCallOrder[0]);
+    expect(graph.graphFetchAs.mock.calls.map((c) => c[1].path)).not.toContain("p55/page_backed_instagram_accounts");
+    // The Page carries the id and when it was made, so a C3 that doesn't list it yet can't clear it.
+    expect(mergeOf("p55")).toEqual([expect.objectContaining({ values: { pageBackedIgId: "pbig55", pageBackedCreatedAt: expect.any(String) } })]);
+  }, 20_000);
 });

@@ -1,5 +1,8 @@
+import { findPhoneColumn, KNOWN_COLUMNS, MISSING_PHONE_COLUMN, readPhoneCell } from "@/lib/contacts/columns";
 import { parseCsv } from "@/lib/contacts/csv";
-import { normalizePhone } from "@/lib/contacts/phone";
+import type { ExistingContacts } from "@/lib/contacts/import";
+import { OPT_OUT_EFFECT, OPTED_OUT_LABEL } from "@/lib/contacts/opt-out";
+import { AMBIGUOUS_STOP_WORDS, checkStopWord, isStopMessage, MAX_WORKSPACE_STOP_WORDS } from "@/lib/webhooks/payload";
 
 export const SAMPLE_CSV_HEADERS = ["phone", "name", "tags", "opt_in", "opt_in_source"] as const;
 
@@ -18,12 +21,35 @@ export type OptInView = { label: string; tone: "good" | "neutral" | "bad"; detai
 
 export function optInView(c: { optIn: boolean; optInSource: string | null; optInAt: string | null; optedOutAt: string | null }): OptInView {
   const date = (iso: string) => new Date(iso).toLocaleDateString();
-  if (c.optedOutAt) return { label: "Opted out", tone: "bad", detail: date(c.optedOutAt), status: "opted_out" };
+  if (c.optedOutAt) return { label: OPTED_OUT_LABEL, tone: "bad", detail: date(c.optedOutAt), status: "opted_out" };
   if (c.optIn) {
     const parts = [c.optInSource, c.optInAt ? date(c.optInAt) : null].filter(Boolean);
     return { label: "Opted in", tone: "good", detail: parts.length ? parts.join(", ") : null, status: "active" };
   }
   return { label: "Not opted in", tone: "neutral", detail: null, status: "inactive" };
+}
+
+/**
+ * An opt-out stops marketing only (lib/contacts/opt-out.ts): order and delivery updates and replies to their own messages still
+ * go, and only the customer can undo it by sending START. Both notices say so, in the words of OPT_OUT_EFFECT.
+ */
+export const OPT_OUT_WARNING = `Saving will mark this person as opted out of marketing. ${OPT_OUT_EFFECT} You cannot opt them in again from here.`;
+export const OPTED_OUT_NOTE = `${OPT_OUT_EFFECT} You can still send utility templates, like order or delivery updates, and reply when they write to you. They cannot be opted in from here.`;
+
+const buttonWords = AMBIGUOUS_STOP_WORDS.map((w) => w.charAt(0).toUpperCase() + w.slice(1));
+
+/** Under the STOP words: what does not opt a customer out (lib/webhooks/payload.ts stopSourceOf and mightBeOptOutRequest). */
+export const STOP_WORDS_EXCEPTIONS = `A tap on a template button labelled ${buttonWords.slice(0, -1).join(", ")} or ${buttonWords.at(-1)} is not a STOP, so booking and order templates can offer those buttons. A message like "stop please" does not opt them out either, but the chat gets a note so your team can check and record the opt-out.`;
+
+export type AddStopWordResult = { ok: true; word: string; words: string[] } | { ok: false; reason: string };
+
+/** Adds one word typed in the STOP words editor to the workspace's own words, or says why it cannot be added. */
+export function addStopWord(words: readonly string[], input: string): AddStopWordResult {
+  const checked = checkStopWord(input);
+  if (!checked.ok) return checked;
+  if (isStopMessage(checked.word, words)) return { ok: false, reason: `"${checked.word}" is already a STOP word.` };
+  if (words.length >= MAX_WORKSPACE_STOP_WORDS) return { ok: false, reason: `You can add up to ${MAX_WORKSPACE_STOP_WORDS} STOP words. Remove one first.` };
+  return { ok: true, word: checked.word, words: [...words, checked.word] };
 }
 
 export function parseTagInput(input: string): string[] {
@@ -47,7 +73,6 @@ export const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
 export const MAX_IMPORT_ROWS = 10_000;
 export const IMPORT_CHUNK = 500;
 
-const KNOWN_COLUMNS = new Set(["phone", "name", "tags", "opt_in", "opt_in_source"]);
 const TRUE_VALUES = new Set(["yes", "true", "1", "y"]);
 
 export type ImportRowStatus = "ready" | "invalid" | "duplicate";
@@ -66,10 +91,12 @@ export type ImportAnalysis =
       duplicates: number;
       optInYes: number;
       extraColumns: string[];
+      /** The header of the column the numbers were read from, as written in the file (for example "Phone Number"). */
+      phoneColumn: string;
       preview: { row: number; phone: string; name: string; tags: string; optIn: boolean }[];
     };
 
-/** Dry run of the server import in the browser: same CSV parser and phone rules, so the summary matches what will happen. */
+/** Dry run of the server import in the browser: same CSV parser, phone column names and phone rules, so the summary matches what will happen. */
 export function analyzeImport(text: string, defaultCountryCode = "91"): ImportAnalysis {
   if (!text.trim()) return { ok: false, problem: "The file is empty. Choose a CSV file with a header row and at least one contact." };
   const table = parseCsv(text);
@@ -78,8 +105,8 @@ export function analyzeImport(text: string, defaultCountryCode = "91"): ImportAn
     return { ok: false, problem: `This file has ${(table.length - 1).toLocaleString()} rows. You can import up to ${MAX_IMPORT_ROWS.toLocaleString()} at a time, so split it into smaller files.` };
   }
   const header = table[0].map((h) => h.trim().toLowerCase());
-  const phoneCol = header.indexOf("phone");
-  if (phoneCol < 0) return { ok: false, problem: "We could not find a column named phone. Rename the phone number column to phone in the first row and try again." };
+  const phoneCol = findPhoneColumn(header);
+  if (!phoneCol) return { ok: false, problem: MISSING_PHONE_COLUMN };
 
   const col = (name: string) => header.indexOf(name);
   const cell = (cells: string[], name: string) => {
@@ -90,8 +117,8 @@ export function analyzeImport(text: string, defaultCountryCode = "91"): ImportAn
   const seen = new Set<string>();
   const rows: ImportRow[] = table.slice(1).map((cells, index) => {
     const row = index + 2;
-    const raw = (cells[phoneCol] ?? "").trim();
-    const phone = normalizePhone(raw, defaultCountryCode);
+    const raw = (cells[phoneCol.index] ?? "").trim();
+    const phone = readPhoneCell(raw, phoneCol, defaultCountryCode);
     if (!phone) return { row, cells, phone: null, status: "invalid", reason: raw ? "Not a valid phone number" : "Phone number is empty" };
     if (seen.has(phone)) return { row, cells, phone, status: "duplicate", reason: "Same number appears earlier in the file" };
     seen.add(phone);
@@ -108,7 +135,8 @@ export function analyzeImport(text: string, defaultCountryCode = "91"): ImportAn
     invalid: rows.filter((r) => r.status === "invalid").length,
     duplicates: rows.filter((r) => r.status === "duplicate").length,
     optInYes: ready.filter((r) => TRUE_VALUES.has(cell(r.cells, "opt_in").toLowerCase())).length,
-    extraColumns: header.filter((h) => h && !KNOWN_COLUMNS.has(h)),
+    extraColumns: header.filter((h, i) => h && i !== phoneCol.index && !KNOWN_COLUMNS.includes(h)),
+    phoneColumn: table[0][phoneCol.index].trim(),
     preview: ready.slice(0, 5).map((r) => ({
       row: r.row,
       phone: r.phone ?? "",
@@ -162,8 +190,41 @@ export function importProgress(done: number, total: number): number {
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
 
-/** One sentence for the result toast. */
-export function importSummary(report: ImportReport): string {
-  const parts = [report.created > 0 && `${plural(report.created, "new contact")} added`, report.updated > 0 && `${plural(report.updated, "contact")} updated`].filter(Boolean);
+/** One sentence for the result toast. unchanged counts people already saved that the import left alone (the "skip" choice). */
+export function importSummary(report: ImportReport, unchanged = 0): string {
+  const parts = [
+    report.created > 0 && `${plural(report.created, "new contact")} added`,
+    report.updated > 0 && `${plural(report.updated, "contact")} updated`,
+    unchanged > 0 && `${plural(unchanged, "saved contact")} left unchanged`,
+  ].filter(Boolean);
   return parts.length ? `${parts.join(", ")}.` : "No contacts were added or changed.";
+}
+
+/** What an import does with people already in the contacts (matched by phone number). The server's default is update. */
+export const EXISTING_CHOICES: { value: ExistingContacts; label: string; description: string }[] = [
+  { value: "update", label: "Update them", description: "Add the file's tags and details to them, and use the name in the file when there is one." },
+  { value: "skip", label: "Leave them as they are", description: "Only people who are not in your contacts yet are added." },
+];
+
+/**
+ * The query each import batch is posted with; the route reads the choice from ?existing (lib/contacts/import.ts
+ * parseExistingContacts). Only the query is built here so the dialog's fetch keeps a literal same-origin path, which
+ * the spend-bypass scan (B12) requires of files outside its fetch list.
+ */
+export function importQuery(existing: ExistingContacts): string {
+  return existing === "skip" ? "?existing=skip" : "";
+}
+
+/**
+ * The four figures on the result screen. With "skip" the server counts people already saved as skipped, so `kept` (the
+ * batches' skipped total) is shown on its own and only the rest count as duplicates in the file.
+ */
+export function importResultStats(report: ImportReport, existing: ExistingContacts, kept: number): { label: string; value: number }[] {
+  const unchanged = existing === "skip" ? kept : 0;
+  return [
+    { label: "Added", value: report.created },
+    existing === "skip" ? { label: "Left unchanged", value: unchanged } : { label: "Updated", value: report.updated },
+    { label: "Duplicates skipped", value: Math.max(0, report.skipped - unchanged) },
+    { label: "Left out", value: report.errors.length },
+  ];
 }

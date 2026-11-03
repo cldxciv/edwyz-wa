@@ -6,7 +6,8 @@ export type Agent = {
   instructions: string;
   tone: string | null;
   language: string;
-  activation: "always" | "outside_hours" | "no_human_reply_minutes";
+  /** Same values as the server (src/lib/ai-agent/agents.ts ACTIVATIONS); when_started answers only when an automation rule starts it. */
+  activation: "always" | "outside_hours" | "no_human_reply_minutes" | "when_started";
   noHumanReplyMinutes: number;
   handoffKeywords: string[];
   maxRepliesPerConversation: number;

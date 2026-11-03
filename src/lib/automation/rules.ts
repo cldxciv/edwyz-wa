@@ -120,6 +120,10 @@ export async function createRule(tenantId: string, raw: unknown) {
 
 export async function updateRule(tenantId: string, id: string, raw: unknown) {
   if (isV2Body(raw)) return updateRuleV2(tenantId, id, raw);
+  // A body with only the fields both formats share ({ phoneNumberId }, { name }, { enabled }) carries no v2 key. On a v2 rule
+  // it still takes the v2 path, so a new number is checked against the WhatsApp account of the templates the rule sends.
+  const existing = await prisma.automationRule.findFirst({ where: { id, tenantId }, select: { version: true } });
+  if (existing?.version === 2) return updateRuleV2(tenantId, id, raw);
   const patch = validateRule(raw, true);
   await assertPhoneOwned(tenantId, patch.phoneNumberId);
   const { schedule, ...rest } = patch;

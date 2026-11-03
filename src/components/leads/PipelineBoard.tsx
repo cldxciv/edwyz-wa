@@ -2,6 +2,7 @@
 
 import { memo, useEffect, useId, useMemo, useState } from "react";
 import { Button, Select, StatusPill, cn } from "@/components/ui";
+import { leadOrigin } from "./LeadDrawer";
 import { ConsentBadge, ResponseBadge } from "./LeadParts";
 import { STATUSES, groupByStatus, isLeadStatus, leadDisplayName, leadStatusLabel, leadStatusMeaning, responseHighlight, type LeadStatus } from "./helpers";
 import type { LeadItem } from "./types";
@@ -28,7 +29,7 @@ const LeadCard = memo(function LeadCard({ lead, now, assignee, busy, onOpen, onM
       <button type="button" data-lead-open={lead.id} onClick={() => onOpen(lead.id)} className="-m-1 block min-h-10 w-[calc(100%+0.5rem)] rounded-control p-1 text-left hover:bg-surface-2">
         <span className="block truncate font-medium">{name}</span>
         <span className="block truncate text-xs text-muted">
-          {lead.form?.name ?? "Lead form"} · {new Date(lead.createdAt).toLocaleDateString()}
+          {leadOrigin(lead)} · {new Date(lead.createdAt).toLocaleDateString()}
         </span>
       </button>
       <div className="mt-2 flex flex-wrap gap-1.5">

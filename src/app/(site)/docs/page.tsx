@@ -35,13 +35,14 @@ export default function DocsHome() {
       <Code>{`curl "${siteUrl()}${COMPAT_BASE_PATH}/contacts?page_size=5" \\
   -H "Authorization: Bearer wak_your_token"`}</Code>
       <p>
-        The API offers {ENDPOINTS.length} endpoints. The <a href="/docs/endpoints">reference</a> is generated from the same table the server uses to register them.
+        The API offers {ENDPOINTS.length} endpoints. The <a href="/docs/endpoints">reference</a>{" "}is generated from the same table the server uses to register them.
         For code generators and API clients, download the <a href="/docs/openapi.json">OpenAPI 3.1 document</a>; it also describes the webhook events.
       </p>
       <h2>Messaging rules still apply</h2>
       <p>
         Free-form messages need an open 24-hour customer service window; outside it send an approved template. You are responsible for having the recipient&apos;s consent
-        before sending marketing templates, and people who opted out cannot be messaged. A contact is addressed by phone number, or by the
+        before sending marketing templates. People who opted out get no marketing messages; order updates and replies to their own messages can still
+        go, and they can send START to get offers again. A contact is addressed by phone number, or by the
         WhatsApp user id (bsuid) when they have messaged you through a username and no phone number is known. A contact with neither cannot be messaged.
         A send is accepted when we have queued it; delivery and read receipts follow as message.status events.
       </p>

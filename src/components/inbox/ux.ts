@@ -129,14 +129,16 @@ export function highlightParts(text: string, query: string): Part[] {
 
 type PreviewSource = { direction: string; type: string; body: string | null };
 
-const TYPE_LABEL: Record<string, string> = { image: "Photo", video: "Video", audio: "Voice message", document: "Document", sticker: "Sticker", location: "Location", contacts: "Contact card" };
+const TYPE_LABEL: Record<string, string> = { image: "Photo", video: "Video", audio: "Voice message", document: "Document", sticker: "Sticker", location: "Location", contacts: "Contact card", order: "Order" };
+/** The "[image]", "[document: name]", "[contacts]" or "[order]" label the webhook stores in front of the text; the preview names the type itself. */
+const STORED_LABEL = /^\[[a-z_]+(?:: [^\]\r\n]*)?\]\s*/;
 
 export function previewText(m: PreviewSource | undefined): string {
   if (!m) return "No messages yet";
   const prefix = m.direction === "outbound" ? "You: " : "";
   if (m.type === "template") return `${prefix}${truncatePreview(m.body?.replace(/^\[template\]\s*/, "") || "Template message")}`;
   const label = TYPE_LABEL[m.type];
-  const body = truncatePreview(m.body);
+  const body = truncatePreview(label ? m.body?.replace(STORED_LABEL, "") : m.body);
   if (label) return `${prefix}${label}${body ? `: ${body}` : ""}`;
   return `${prefix}${body || `[${m.type}]`}`;
 }
@@ -201,8 +203,10 @@ const MESSAGE_ID = /^[A-Za-z0-9_-]{1,64}$/;
 export const inboundMediaSrc = (messageId: string) => `/api/inbox/media/${encodeURIComponent(messageId)}`;
 
 /**
- * Where an authenticated viewer can load a message's media. Our own uploads use the tenant-checked route (the signed link
- * expires); https links load directly; Meta media ids load through the inbox media proxy, which needs the message id.
+ * Where an authenticated viewer can load a message's media. Files sent from the media library (and inbox photos and videos
+ * sent before attachments went straight to WhatsApp) use the tenant-checked library route, since the signed link expires;
+ * https links load directly; Meta media ids, which every inbox attachment now is, load through the inbox media proxy, which
+ * needs the message id.
  */
 export function mediaPreview(m: Pick<InboxMessage, "type" | "mediaUrl" | "mediaMime"> & { id?: string }): MediaPreview | null {
   const kind = m.type === "sticker" ? "image" : m.type;
@@ -272,8 +276,29 @@ export async function loadMediaBlob(src: string, fetchImpl: typeof fetch = fetch
 /** What the file picker offers: every type WhatsApp accepts (see lib/inbox/attachments.ts for the limits). */
 export const ALLOWED_UPLOADS = ACCEPTED_ATTACHMENT_TYPES;
 
-/** An uploaded file ready to send: a media-library key (JPEG, PNG, MP4) or a WhatsApp media id (everything else). */
-export type SentAttachment = { kind: AttachmentKind; key?: string; mediaId?: string; filename?: string; mime?: string };
+/** An uploaded file ready to send: the WhatsApp media id POST ../attachments returned, whatever the file type. */
+export type SentAttachment = { kind: AttachmentKind; mediaId: string; filename?: string; mime?: string };
+
+/* ---------- templates a chat can send ---------- */
+
+/** The WhatsApp Business Account an API row (a business number, a template) belongs to, when the row says. */
+export function wabaOf(row: unknown): string | null {
+  const id = row && typeof row === "object" ? (row as { wabaRefId?: unknown }).wabaRefId : null;
+  return typeof id === "string" && id ? id : null;
+}
+
+/**
+ * The templates a number can send: those of its own WhatsApp Business Account, since WhatsApp refuses a template that exists
+ * only under another account (error 132001). While the number's account is not known nothing is hidden; the server refuses a
+ * mismatch either way (lib/inbox/template-send.ts).
+ */
+export function templatesForWaba<T>(templates: T[] | null, wabaRefId: string | null): T[] | null {
+  if (!templates || !wabaRefId) return templates;
+  return templates.filter((t) => {
+    const own = wabaOf(t);
+    return own === null || own === wabaRefId;
+  });
+}
 
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -306,7 +331,7 @@ const FAILURE_HINTS: Record<string, string> = {
   bsuid_auth_template: "Login code templates need a phone number. This contact uses a WhatsApp username and has not shared theirs.",
   // Codes the app itself sets while a message waits in the queue.
   tenant_blocked: "This workspace was suspended or read-only while the message waited, so it was never sent.",
-  opted_out: "This contact sent STOP, so templates are not sent to them.",
+  opted_out: "This contact sent STOP or was marked opted out, so marketing templates are not sent to them. Order updates and replies to their own messages still go.",
   // More WhatsApp codes (same wording as the broadcast report where it already had one).
   "131050": "This person chose to stop receiving marketing messages.",
   "130429": "Sending was too fast, so WhatsApp refused this message.",

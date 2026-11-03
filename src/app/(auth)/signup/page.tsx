@@ -13,10 +13,8 @@ export const metadata = pageMetadata({
 
 export default async function SignupPage() {
   const user = await signedInUser();
-  return (
+  const form = (
     <>
-      <AuthTitle title="Start your free trial" intro="Create a workspace for your business. No card needed. You can invite your team afterwards." />
-      {user && <SignedInNotice email={user.email} hint="To create another workspace with a different email, sign out first." />}
       <div className="mt-8">
         <AuthForm
           url="/api/auth/signup"
@@ -50,6 +48,23 @@ export default async function SignupPage() {
           Sign in
         </Link>
       </p>
+    </>
+  );
+  return (
+    <>
+      <AuthTitle title="Start your free trial" intro="Create a workspace for your business. No card needed. You can invite your team afterwards." />
+      {/* Signed in already: only the notice, and the form (with its autofocus) appears after the person asks for it. */}
+      {user ? (
+        <SignedInNotice
+          email={user.email}
+          switchLabel="Sign up with a different email"
+          switchNote="Creating a workspace below signs this browser in to the new account."
+        >
+          {form}
+        </SignedInNotice>
+      ) : (
+        form
+      )}
     </>
   );
 }

@@ -632,6 +632,9 @@ const createContactDef = define<CreateArgs, { contactId: string; phone: string |
       const prisma = await db();
       const tenantId = actorOf(ctx).tenantId;
       if ((await prisma.conversation.count({ where: { tenantId, contactId: un.target } })) > 0) throw new HttpError(409, "Someone changed it since, so it was not undone.");
+      // Out of any customer-list audience on Meta first (docs/IG-PAGE-ADS-SPEC.md 5.5, promote/forget.ts).
+      const { forgetContact } = await import("@/lib/promote/forget");
+      await forgetContact(tenantId, un.target);
       await prisma.contact.deleteMany({ where: { id: un.target, tenantId } });
     },
   },
@@ -653,7 +656,8 @@ const recordOptOut = define<{ contactId: string }, { contactId: string; optedOut
   area: "contacts",
   surfaces: ["eddy"],
   titleKey: "status.record_opt_out",
-  description: "Records that a contact opted out of marketing messages (for example they asked you to stop). Marketing templates are not sent to them after this, and it cannot be undone through Eddy. Shows a preview card first.",
+  description:
+    "Records that a contact opted out of marketing (for example they asked you to stop). After this they get no marketing messages; order updates and replies to their own messages can still go to them. Only they can undo it, by sending START to get offers again; Eddy cannot. Shows a preview card first.",
   inputSchema: obj({ contactId: id("The contact id.") }, ["contactId"]),
   minRole: "agent",
   route: { method: "PATCH", path: "/api/contacts/[id]" },
@@ -664,7 +668,7 @@ const recordOptOut = define<{ contactId: string }, { contactId: string; optedOut
   },
   async preview(ctx, a) {
     const row = await loadContact(actorOf(ctx), a.contactId);
-    if (row.optedOutAt) throw new HttpError(409, "This contact has already opted out.");
+    if (row.optedOutAt) throw new HttpError(409, "This contact has already opted out of marketing messages.");
     return preview({
       titleKey: "card.record_opt_out.title",
       confirmLabelKey: "card.record_opt_out.confirm",
@@ -689,7 +693,7 @@ const recordOptIn = define<{ contactId: string; source: string; evidence: string
   surfaces: ["eddy"],
   titleKey: "status.record_opt_in",
   description:
-    "Records a contact's marketing opt-in with where it came from (source) and the proof (evidence, for example 'ticked the box on the order form on 3 Oct'). Owners and admins only. It changes who can get marketing templates and the consent record is permanent, so it shows a preview card. A contact who opted out can only opt in again by messaging you.",
+    "Records a contact's marketing opt-in with where it came from (source) and the proof (evidence, for example 'ticked the box on the order form on 3 Oct'). Owners and admins only. It changes who can get marketing templates and the consent record is permanent, so it shows a preview card. A contact who opted out can only opt in again by sending START to your WhatsApp number.",
   inputSchema: obj({ contactId: id("The contact id."), source: str("Where they agreed, for example website form.", 60, 2), evidence: str("The proof of consent.", 200, 2) }, ["contactId", "source", "evidence"]),
   minRole: "admin",
   route: { method: "PATCH", path: "/api/contacts/[id]" },
@@ -701,7 +705,7 @@ const recordOptIn = define<{ contactId: string; source: string; evidence: string
   },
   async preview(ctx, a) {
     const row = await loadContact(actorOf(ctx), a.contactId);
-    if (row.optedOutAt) throw new HttpError(409, "This contact opted out and can only opt in again by messaging you.");
+    if (row.optedOutAt) throw new HttpError(409, "This contact opted out of marketing messages and can only opt in again by sending START to your WhatsApp number.");
     if (row.optIn) throw new HttpError(409, "This contact has already opted in.");
     return preview({
       titleKey: "card.record_opt_in.title",

@@ -128,7 +128,8 @@ describe("inbox list route", () => {
     await listRoute(get("/api/inbox/conversations?team=sales"));
     const where = db.conversation.findMany.mock.calls[0][0].where;
     expect(where.tenantId).toBe("t1");
-    expect(where.AND).toEqual([{ AND: [{ assignedToId: "me" }, { teamId: "sales" }] }]);
+    // Blocked chats show only in the Blocked tab (inbox/list.ts NOT_BLOCKED).
+    expect(where.AND).toEqual([{ AND: [{ assignedToId: "me" }, { teamId: "sales" }] }, { status: { not: "blocked" } }]);
     expect(db.team.findFirst.mock.calls[0][0].where).toEqual({ id: "sales", tenantId: "t1" });
   });
 
@@ -136,18 +137,18 @@ describe("inbox list route", () => {
     auth.role = "admin";
     db.team.findFirst.mockResolvedValue({ id: "def", isDefault: true });
     await listRoute(get("/api/inbox/conversations?team=def"));
-    expect(db.conversation.findMany.mock.calls[0][0].where.AND).toEqual([{ AND: [{ OR: [{ teamId: "def" }, { teamId: null }] }] }]);
+    expect(db.conversation.findMany.mock.calls[0][0].where.AND).toEqual([{ AND: [{ OR: [{ teamId: "def" }, { teamId: null }] }] }, { status: { not: "blocked" } }]);
     db.team.findFirst.mockResolvedValue(null);
     expect((await listRoute(get("/api/inbox/conversations?team=nope"))).status).toBe(400);
     db.conversation.findMany.mockClear();
     await listRoute(get("/api/inbox/conversations?team=none"));
-    expect(db.conversation.findMany.mock.calls[0][0].where.AND).toEqual([{ AND: [{ teamId: null }] }]);
+    expect(db.conversation.findMany.mock.calls[0][0].where.AND).toEqual([{ AND: [{ teamId: null }] }, { status: { not: "blocked" } }]);
   });
 
-  it("adds no extra conditions for admins without a team filter", async () => {
+  it("adds no visibility conditions for admins without a team filter", async () => {
     auth.role = "admin";
     await listRoute(get("/api/inbox/conversations"));
-    expect(db.conversation.findMany.mock.calls[0][0].where.AND).toBeUndefined();
+    expect(db.conversation.findMany.mock.calls[0][0].where.AND).toEqual([{ status: { not: "blocked" } }]);
   });
 
   it("masks phone numbers for a masked agent and refuses long number searches", async () => {

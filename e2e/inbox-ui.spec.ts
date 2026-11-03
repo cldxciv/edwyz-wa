@@ -74,7 +74,7 @@ test("accessibility (axe): list, chat, side panel and dialogs have no serious or
   await page.getByRole("button", { name: "Quick replies" }).click();
   found.push(...(await axeSerious(page, "quick-replies-dialog")));
   await page.keyboard.press("Escape");
-  await page.locator("h1").click();
+  await page.getByRole("heading", { level: 1, name: "Inbox" }).click();
   await page.keyboard.press("?");
   found.push(...(await axeSerious(page, "shortcuts-dialog")));
   await page.keyboard.press("Escape");
